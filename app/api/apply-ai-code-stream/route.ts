@@ -10,6 +10,7 @@ declare global {
   var activeSandboxProvider: any;
   var existingFiles: Set<string>;
   var sandboxState: SandboxState;
+  var installedPackagesCache: Map<string, Set<string>>; // sandboxId -> Set<packageName>
 }
 
 interface ParsedResponse {
@@ -424,23 +425,34 @@ export async function POST(request: NextRequest) {
           }
         }
         
-        // Step 1: Install packages
+        // Step 1: Install packages (with caching optimization)
         const packagesArray = Array.isArray(packages) ? packages : [];
         const parsedPackages = Array.isArray(parsed.packages) ? parsed.packages : [];
+
+        // Initialize package cache if not exists
+        if (!global.installedPackagesCache) {
+          global.installedPackagesCache = new Map();
+        }
+        
+        const currentSandboxId = sandboxId || providerInstance.getSandboxInfo()?.sandboxId || 'default';
+        if (!global.installedPackagesCache.has(currentSandboxId)) {
+          global.installedPackagesCache.set(currentSandboxId, new Set(['react', 'react-dom'])); // Pre-installed
+        }
+        const installedInSandbox = global.installedPackagesCache.get(currentSandboxId)!;
 
         // Combine and deduplicate packages
         const allPackages = [...packagesArray.filter(pkg => pkg && typeof pkg === 'string'), ...parsedPackages];
 
-        // Use Set to remove duplicates, then filter out pre-installed packages
+        // OPTIMIZATION: Filter out already installed packages from cache
         const uniquePackages = [...new Set(allPackages)]
-          .filter(pkg => pkg && typeof pkg === 'string' && pkg.trim() !== '') // Remove empty strings
-          .filter(pkg => pkg !== 'react' && pkg !== 'react-dom'); // Filter pre-installed
+          .filter(pkg => pkg && typeof pkg === 'string' && pkg.trim() !== '')
+          .filter(pkg => !installedInSandbox.has(pkg)); // Skip already installed
 
-        // Log if we found duplicates
-        if (allPackages.length !== uniquePackages.length) {
-          console.log(`[apply-ai-code-stream] Removed ${allPackages.length - uniquePackages.length} duplicate packages`);
-          console.log(`[apply-ai-code-stream] Original packages:`, allPackages);
-          console.log(`[apply-ai-code-stream] Deduplicated packages:`, uniquePackages);
+        // Log cache hits
+        const cachedCount = allPackages.filter(pkg => installedInSandbox.has(pkg)).length;
+        if (cachedCount > 0) {
+          console.log(`[apply-ai-code-stream] OPTIMIZATION: Skipped ${cachedCount} already-installed packages`);
+          results.packagesAlreadyInstalled = allPackages.filter(pkg => installedInSandbox.has(pkg));
         }
 
         if (uniquePackages.length > 0) {
@@ -490,9 +502,13 @@ export async function POST(request: NextRequest) {
                         ...data
                       });
 
-                      // Track results
+                      // Track results and update cache
                       if (data.type === 'success' && data.installedPackages) {
                         results.packagesInstalled = data.installedPackages;
+                        // Update the installed packages cache
+                        for (const pkg of data.installedPackages) {
+                          installedInSandbox.add(pkg);
+                        }
                       }
                     } catch (parseError) {
                       console.debug('Error parsing terminal output:', parseError);

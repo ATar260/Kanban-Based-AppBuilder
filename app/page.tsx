@@ -51,6 +51,8 @@ export default function HomePage() {
   const [showInstructionsForIndex, setShowInstructionsForIndex] = useState<number | null>(null);
   const [additionalInstructions, setAdditionalInstructions] = useState<string>('');
   const [extendBrandStyles, setExtendBrandStyles] = useState<boolean>(false);
+  const [generationMode, setGenerationMode] = useState<'clone' | 'prompt'>('clone');
+  const [buildPrompt, setBuildPrompt] = useState<string>('');
   const router = useRouter();
   
   // Simple URL validation
@@ -84,6 +86,23 @@ export default function HomePage() {
   }));
 
   const handleSubmit = async (selectedResult?: SearchResult) => {
+    // Handle "Build from Prompt" mode
+    if (generationMode === 'prompt') {
+      if (!buildPrompt.trim()) {
+        toast.error("Please describe what you want to build");
+        return;
+      }
+      
+      sessionStorage.setItem('buildFromPrompt', 'true');
+      sessionStorage.setItem('buildPrompt', buildPrompt);
+      sessionStorage.setItem('selectedStyle', selectedStyle);
+      sessionStorage.setItem('selectedModel', selectedModel);
+      sessionStorage.setItem('autoStart', 'true');
+      router.push('/generation');
+      return;
+    }
+    
+    // Clone mode logic
     const inputValue = url.trim();
 
     if (!inputValue) {
@@ -295,7 +314,111 @@ export default function HomePage() {
                   }}
                 >
 
-                <div className="p-[28px] flex gap-12 items-center w-full relative bg-white rounded-20">
+                {/* Mode Toggle */}
+                <div className="flex border-b border-gray-100">
+                  <button
+                    onClick={() => setGenerationMode('clone')}
+                    className={`flex-1 py-3 text-sm font-medium transition-all ${
+                      generationMode === 'clone'
+                        ? 'text-orange-600 border-b-2 border-orange-500 bg-orange-50/50'
+                        : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+                    }`}
+                  >
+                    <span className="flex items-center justify-center gap-2">
+                      <svg width="16" height="16" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <rect x="3" y="3" width="14" height="14" rx="2" stroke="currentColor" strokeWidth="1.5"/>
+                        <path d="M7 10L9 12L13 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                      Clone Website
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => setGenerationMode('prompt')}
+                    className={`flex-1 py-3 text-sm font-medium transition-all ${
+                      generationMode === 'prompt'
+                        ? 'text-orange-600 border-b-2 border-orange-500 bg-orange-50/50'
+                        : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+                    }`}
+                  >
+                    <span className="flex items-center justify-center gap-2">
+                      <svg width="16" height="16" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M4 5H16M4 10H12M4 15H8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                      </svg>
+                      Build from Prompt
+                    </span>
+                  </button>
+                </div>
+
+                <div className="p-[28px] flex gap-12 items-start w-full relative bg-white rounded-b-20">
+                  {/* PROMPT MODE UI */}
+                  {generationMode === 'prompt' ? (
+                    <>
+                      <svg 
+                        width="20" 
+                        height="20" 
+                        viewBox="0 0 20 20" 
+                        fill="none" 
+                        xmlns="http://www.w3.org/2000/svg"
+                        className="opacity-40 flex-shrink-0 mt-1"
+                      >
+                        <path d="M4 5H16M4 10H12M4 15H8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                      </svg>
+                      <div className="flex-1 flex flex-col gap-3">
+                        <textarea
+                          className="w-full bg-transparent text-body-input text-accent-black placeholder:text-black-alpha-48 focus:outline-none focus:ring-0 focus:border-transparent resize-none min-h-[80px]"
+                          placeholder="Describe what you want to build...
+
+Examples:
+• A landing page for a fitness app with pricing
+• A dashboard with charts and user analytics
+• An e-commerce product page with reviews"
+                          value={buildPrompt}
+                          onChange={(e) => setBuildPrompt(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && e.metaKey) {
+                              e.preventDefault();
+                              handleSubmit();
+                            }
+                          }}
+                        />
+                        {/* Example prompt chips */}
+                        {!buildPrompt && (
+                          <div className="flex flex-wrap gap-2 mt-2">
+                            {[
+                              'SaaS landing page',
+                              'Dashboard with charts',
+                              'E-commerce product page',
+                              'Portfolio website'
+                            ].map((example) => (
+                              <button
+                                key={example}
+                                onClick={() => setBuildPrompt(`Create a modern ${example.toLowerCase()} with clean design and smooth animations`)}
+                                className="px-3 py-1.5 text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-full transition-all"
+                              >
+                                {example}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        <div className="flex justify-end mt-3">
+                          <div
+                            onClick={(e) => {
+                              e.preventDefault();
+                              handleSubmit();
+                            }}
+                          >
+                            <HeroInputSubmitButton 
+                              dirty={buildPrompt.length > 0} 
+                              buttonText="Build App"
+                              disabled={false}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                  /* CLONE MODE UI */
+                  <>
                   {/* Show different UI when search results are displayed */}
                   {hasSearched && searchResults.length > 0 && !isFadingOut ? (
                     <>
@@ -422,11 +545,13 @@ export default function HomePage() {
                       </div>
                     </>
                   )}
+                  </>
+                  )}
                 </div>
 
-                {/* Options Section - Only show when valid URL */}
+                {/* Options Section - Only show when valid URL and in clone mode */}
                 <div className={`overflow-hidden transition-all duration-500 ease-in-out ${
-                  isValidUrl ? (extendBrandStyles ? 'max-h-[400px]' : 'max-h-[300px]') + ' opacity-100' : 'max-h-0 opacity-0'
+                  generationMode === 'clone' && isValidUrl ? (extendBrandStyles ? 'max-h-[400px]' : 'max-h-[300px]') + ' opacity-100' : 'max-h-0 opacity-0'
                 }`}>
                   <div className="px-[28px] pt-0 pb-[28px]">
                     <div className="border-t border-gray-100 bg-white">

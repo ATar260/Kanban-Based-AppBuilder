@@ -107,6 +107,12 @@ function AISandboxPage() {
   const [isStartingNewGeneration, setIsStartingNewGeneration] = useState(false);
   const [sandboxFiles, setSandboxFiles] = useState<Record<string, string>>({});
   const [hasInitialSubmission, setHasInitialSubmission] = useState<boolean>(false);
+  
+  // UI/UX improvements state
+  const [previewDevice, setPreviewDevice] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
+  const [isFullscreenPreview, setIsFullscreenPreview] = useState(false);
+  const [sandboxRetryCount, setSandboxRetryCount] = useState(0);
+  const [showCopiedToast, setShowCopiedToast] = useState(false);
   const [fileStructure, setFileStructure] = useState<string>('');
   
   const [conversationContext, setConversationContext] = useState<{
@@ -174,13 +180,42 @@ function AISandboxPage() {
       const templateParam = searchParams.get('template');
       const detailsParam = searchParams.get('details');
       
+      // Check for "Build from Prompt" mode
+      const buildFromPrompt = sessionStorage.getItem('buildFromPrompt') === 'true';
+      const buildPromptText = sessionStorage.getItem('buildPrompt');
+      
       // Then check session storage as fallback
       const storedUrl = urlParam || sessionStorage.getItem('targetUrl');
       const storedStyle = templateParam || sessionStorage.getItem('selectedStyle');
       const storedModel = sessionStorage.getItem('selectedModel');
       const storedInstructions = sessionStorage.getItem('additionalInstructions');
       
-      if (storedUrl) {
+      // Handle "Build from Prompt" mode
+      if (buildFromPrompt && buildPromptText) {
+        setHasInitialSubmission(true);
+        
+        // Clear sessionStorage
+        sessionStorage.removeItem('buildFromPrompt');
+        sessionStorage.removeItem('buildPrompt');
+        sessionStorage.removeItem('selectedStyle');
+        sessionStorage.removeItem('selectedModel');
+        
+        // Store the prompt for later use
+        sessionStorage.setItem('pendingBuildPrompt', buildPromptText);
+        
+        if (storedModel) {
+          setAiModel(storedModel);
+        }
+        
+        // Skip home screen
+        setShowHomeScreen(false);
+        setHomeScreenFading(false);
+        
+        // Set flag to auto-trigger prompt generation
+        setShouldAutoGenerate(true);
+        sessionStorage.setItem('autoStart', 'true');
+        sessionStorage.setItem('promptMode', 'true');
+      } else if (storedUrl) {
         // Mark that we have an initial submission since we're loading with a URL
         setHasInitialSubmission(true);
         
@@ -306,8 +341,9 @@ function AISandboxPage() {
   }, []); // Run only on mount
   
   useEffect(() => {
-    // Handle Escape key for home screen
+    // Handle keyboard shortcuts
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Escape key for home screen
       if (e.key === 'Escape' && showHomeScreen) {
         setHomeScreenFading(true);
         setTimeout(() => {
@@ -315,11 +351,33 @@ function AISandboxPage() {
           setHomeScreenFading(false);
         }, 500);
       }
+      
+      // Escape to exit fullscreen preview
+      if (e.key === 'Escape' && isFullscreenPreview) {
+        setIsFullscreenPreview(false);
+      }
+      
+      // Cmd/Ctrl + K to focus chat input
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        const chatInput = document.querySelector('textarea[placeholder*="Describe"]') as HTMLTextAreaElement;
+        if (chatInput) {
+          chatInput.focus();
+        }
+      }
+      
+      // Cmd/Ctrl + Shift + F for fullscreen preview
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'f') {
+        e.preventDefault();
+        if (sandboxData?.url) {
+          setIsFullscreenPreview(!isFullscreenPreview);
+        }
+      }
     };
     
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showHomeScreen]);
+  }, [showHomeScreen, isFullscreenPreview, sandboxData?.url]);
   
   // Start capturing screenshot if URL is provided on mount (from home screen)
   useEffect(() => {
@@ -335,13 +393,27 @@ function AISandboxPage() {
   // Auto-start generation if flagged
   useEffect(() => {
     const autoStart = sessionStorage.getItem('autoStart');
-    if (autoStart === 'true' && !showHomeScreen && homeUrlInput) {
-      sessionStorage.removeItem('autoStart');
-      // Small delay to ensure everything is ready
-      setTimeout(() => {
-        console.log('[generation] Auto-starting generation for URL:', homeUrlInput);
-        startGeneration();
-      }, 1000);
+    const promptMode = sessionStorage.getItem('promptMode') === 'true';
+    const pendingPrompt = sessionStorage.getItem('pendingBuildPrompt');
+    
+    if (autoStart === 'true' && !showHomeScreen) {
+      // Handle prompt mode
+      if (promptMode && pendingPrompt) {
+        sessionStorage.removeItem('autoStart');
+        sessionStorage.removeItem('promptMode');
+        sessionStorage.removeItem('pendingBuildPrompt');
+        setTimeout(() => {
+          console.log('[generation] Auto-starting generation from prompt');
+          startPromptGeneration(pendingPrompt);
+        }, 1000);
+      } else if (homeUrlInput) {
+        // Handle clone mode
+        sessionStorage.removeItem('autoStart');
+        setTimeout(() => {
+          console.log('[generation] Auto-starting generation for URL:', homeUrlInput);
+          startGeneration();
+        }, 1000);
+      }
     }
   }, [showHomeScreen, homeUrlInput]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -363,14 +435,24 @@ function AISandboxPage() {
 
   // Auto-trigger generation when flag is set (from home page navigation)
   useEffect(() => {
-    if (shouldAutoGenerate && homeUrlInput && !showHomeScreen) {
+    const promptMode = sessionStorage.getItem('promptMode') === 'true';
+    const pendingPrompt = sessionStorage.getItem('pendingBuildPrompt');
+    
+    if (shouldAutoGenerate && !showHomeScreen) {
       // Reset the flag
       setShouldAutoGenerate(false);
       
       // Trigger generation after a short delay to ensure everything is set up
       const timer = setTimeout(() => {
-        console.log('[generation] Auto-triggering generation from URL params');
-        startGeneration();
+        if (promptMode && pendingPrompt) {
+          console.log('[generation] Auto-triggering generation from prompt');
+          sessionStorage.removeItem('promptMode');
+          sessionStorage.removeItem('pendingBuildPrompt');
+          startPromptGeneration(pendingPrompt);
+        } else if (homeUrlInput) {
+          console.log('[generation] Auto-triggering generation from URL params');
+          startGeneration();
+        }
       }, 1000);
       
       return () => clearTimeout(timer);
@@ -529,7 +611,9 @@ function AISandboxPage() {
 
   const sandboxCreationRef = useRef<boolean>(false);
   
-  const createSandbox = async (fromHomeScreen = false) => {
+  const createSandbox = async (fromHomeScreen = false, retryCount = 0) => {
+    const MAX_RETRIES = 3;
+    
     // Prevent duplicate sandbox creation
     if (sandboxCreationRef.current) {
       console.log('[createSandbox] Sandbox creation already in progress, skipping...');
@@ -540,9 +624,10 @@ function AISandboxPage() {
     console.log('[createSandbox] Starting sandbox creation...');
     setLoading(true);
     setShowLoadingBackground(true);
-    updateStatus('Creating sandbox...', false);
+    updateStatus(retryCount > 0 ? `Retrying sandbox creation (${retryCount}/${MAX_RETRIES})...` : 'Creating sandbox...', false);
     setResponseArea([]);
     setScreenshotError(null);
+    setSandboxRetryCount(retryCount);
     
     try {
       const response = await fetch('/api/create-ai-sandbox-v2', {
@@ -606,9 +691,19 @@ Tip: I automatically detect and install npm packages from your code imports (lik
       }
     } catch (error: any) {
       console.error('[createSandbox] Error:', error);
+      sandboxCreationRef.current = false; // Reset to allow retry
+      
+      // Auto-retry on failure
+      if (retryCount < MAX_RETRIES) {
+        console.log(`[createSandbox] Retrying (${retryCount + 1}/${MAX_RETRIES})...`);
+        updateStatus(`Connection failed. Retrying (${retryCount + 1}/${MAX_RETRIES})...`, false);
+        await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1))); // Exponential backoff
+        return createSandbox(fromHomeScreen, retryCount + 1);
+      }
+      
       updateStatus('Error', false);
-      log(`Failed to create sandbox: ${error.message}`, 'error');
-      addChatMessage(`Failed to create sandbox: ${error.message}`, 'system');
+      log(`Failed to create sandbox after ${MAX_RETRIES} attempts: ${error.message}`, 'error');
+      addChatMessage(`Failed to create sandbox: ${error.message}. Please try again.`, 'system');
       throw error;
     } finally {
       setLoading(false);
@@ -1158,6 +1253,32 @@ Tip: I automatically detect and install npm packages from your code imports (lik
             
             {/* File Tree */}
             <div className="flex-1 overflow-y-auto p-4 scrollbar-hide">
+              {/* Skeleton loader when generating but no files yet */}
+              {generationProgress.isGenerating && generationProgress.files.length === 0 && (
+                <div className="space-y-2 animate-pulse">
+                  <div className="flex items-center gap-2 py-1">
+                    <div className="w-4 h-4 bg-gray-200 rounded" />
+                    <div className="w-4 h-4 bg-blue-100 rounded" />
+                    <div className="w-16 h-3 bg-gray-200 rounded" />
+                  </div>
+                  <div className="ml-6 space-y-2">
+                    <div className="flex items-center gap-2 py-1">
+                      <div className="w-4 h-4 bg-gray-200 rounded" />
+                      <div className="w-4 h-4 bg-yellow-100 rounded" />
+                      <div className="w-20 h-3 bg-gray-200 rounded" />
+                    </div>
+                    <div className="ml-6 space-y-1.5">
+                      {[1, 2, 3, 4].map((i) => (
+                        <div key={i} className="flex items-center gap-2 py-0.5 px-3">
+                          <div className="w-4 h-4 bg-gray-100 rounded" />
+                          <div className={`h-3 bg-gray-200 rounded`} style={{ width: `${60 + i * 15}px` }} />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+              
               <div className="text-sm">
                 {/* Root app folder */}
                 <div 
@@ -1592,16 +1713,27 @@ Tip: I automatically detect and install npm packages from your code imports (lik
       
       // Show sandbox iframe - keep showing during edits, only hide during initial loading
       if (sandboxData?.url) {
+        const deviceStyles = {
+          desktop: { width: '100%', maxWidth: '100%' },
+          tablet: { width: '768px', maxWidth: '768px' },
+          mobile: { width: '375px', maxWidth: '375px' }
+        };
+        
         return (
-          <div className="relative w-full h-full">
-            <iframe
-              ref={iframeRef}
-              src={sandboxData.url}
-              className="w-full h-full border-none"
-              title="Open Lovable Sandbox"
-              allow="clipboard-write"
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
-            />
+          <div className="relative w-full h-full flex items-center justify-center bg-gray-100">
+            <div 
+              className={`h-full transition-all duration-300 ${previewDevice !== 'desktop' ? 'shadow-2xl rounded-lg overflow-hidden border border-gray-300' : ''}`}
+              style={deviceStyles[previewDevice]}
+            >
+              <iframe
+                ref={iframeRef}
+                src={sandboxData.url}
+                className="w-full h-full border-none bg-white"
+                title="Open Lovable Sandbox"
+                allow="clipboard-write"
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+              />
+            </div>
             
             {/* Package installation overlay - shows when installing packages or applying code */}
             {codeApplicationState.stage && codeApplicationState.stage !== 'complete' && (
@@ -2626,6 +2758,239 @@ Tip: I automatically detect and install npm packages from your code imports (lik
     }
   };
 
+  // Start generation from a text prompt (no URL scraping)
+  const startPromptGeneration = async (promptText: string) => {
+    if (!promptText.trim()) return;
+    
+    setHomeScreenFading(true);
+    setIsStartingNewGeneration(true);
+    setLoadingStage('planning');
+    setActiveTab('preview');
+    setShowLoadingBackground(true);
+    
+    setChatMessages([]);
+    const shortPrompt = promptText.length > 50 ? promptText.substring(0, 50) + '...' : promptText;
+    addChatMessage(`Building: ${shortPrompt}`, 'system');
+    
+    setTimeout(async () => {
+      setShowHomeScreen(false);
+      setHomeScreenFading(false);
+      
+      setTimeout(() => {
+        setIsStartingNewGeneration(false);
+      }, 1000);
+      
+      // Create sandbox if needed
+      let currentSandboxData = sandboxData;
+      if (!currentSandboxData) {
+        currentSandboxData = await createSandbox(true);
+      }
+      
+      setLoadingStage('generating');
+      setActiveTab('generation');
+      
+      // Build the prompt for AI
+      const prompt = `Create a complete React application based on this description:
+
+${promptText}
+
+Requirements:
+- Modern, responsive design using Tailwind CSS
+- Clean component structure with proper file organization  
+- Professional UI/UX with hover states and smooth transitions
+- Use realistic placeholder content (not lorem ipsum)
+- Include all necessary components mentioned or implied
+- Use placeholder images from picsum.photos when needed
+
+IMPORTANT INSTRUCTIONS:
+- Create a COMPLETE, working React application
+- Use Tailwind CSS for all styling (no custom CSS files)
+- Make it responsive and modern
+- Create proper component structure
+- Make sure the app actually renders visible content
+- Create ALL components that you reference in imports`;
+      
+      try {
+        // Update conversation context
+        setConversationContext(prev => ({
+          ...prev,
+          currentProject: `Build from prompt: ${shortPrompt}`
+        }));
+        
+        setGenerationProgress(prev => ({
+          isGenerating: true,
+          status: 'Initializing AI...',
+          components: [],
+          currentComponent: 0,
+          streamedCode: '',
+          isStreaming: true,
+          isThinking: false,
+          thinkingText: undefined,
+          thinkingDuration: undefined,
+          files: prev.files || [],
+          currentFile: undefined,
+          lastProcessedPosition: 0
+        }));
+        
+        const aiResponse = await fetch('/api/generate-ai-code-stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            prompt,
+            model: aiModel,
+            context: {
+              sandboxId: currentSandboxData?.sandboxId,
+              structure: structureContent,
+              conversationContext: conversationContext
+            },
+            mode: 'prompt'
+          })
+        });
+        
+        if (!aiResponse.ok || !aiResponse.body) {
+          throw new Error('Failed to generate code');
+        }
+        
+        const reader = aiResponse.body.getReader();
+        const decoder = new TextDecoder();
+        let generatedCode = '';
+        
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          
+          const chunk = decoder.decode(value);
+          const lines = chunk.split('\n');
+          
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                
+                if (data.type === 'status') {
+                  setGenerationProgress(prev => ({ ...prev, status: data.message }));
+                } else if (data.type === 'thinking') {
+                  setGenerationProgress(prev => ({ 
+                    ...prev, 
+                    isThinking: true,
+                    thinkingText: (prev.thinkingText || '') + data.text
+                  }));
+                } else if (data.type === 'thinking_complete') {
+                  setGenerationProgress(prev => ({ 
+                    ...prev, 
+                    isThinking: false,
+                    thinkingDuration: data.duration
+                  }));
+                } else if (data.type === 'conversation') {
+                  let text = data.text || '';
+                  text = text.replace(/<package>[^<]*<\/package>/g, '');
+                  text = text.replace(/<packages>[^<]*<\/packages>/g, '');
+                  
+                  if (!text.includes('<file') && !text.includes('import React') && 
+                      !text.includes('export default') && !text.includes('className=') &&
+                      text.trim().length > 0) {
+                    addChatMessage(text.trim(), 'ai');
+                  }
+                } else if (data.type === 'stream' && data.raw) {
+                  setGenerationProgress(prev => {
+                    const newStreamedCode = prev.streamedCode + data.text;
+                    
+                    const updatedState = { 
+                      ...prev, 
+                      streamedCode: newStreamedCode,
+                      isStreaming: true,
+                      isThinking: false,
+                      status: 'Generating code...'
+                    };
+                    
+                    const fileRegex = /<file path="([^"]+)">([^]*?)<\/file>/g;
+                    let match;
+                    const processedFiles = new Set(prev.files.map(f => f.path));
+                    
+                    while ((match = fileRegex.exec(newStreamedCode)) !== null) {
+                      const filePath = match[1];
+                      const fileContent = match[2];
+                      
+                      if (!processedFiles.has(filePath)) {
+                        const fileExt = filePath.split('.').pop() || '';
+                        const fileType = fileExt === 'jsx' || fileExt === 'js' ? 'javascript' :
+                                        fileExt === 'css' ? 'css' :
+                                        fileExt === 'json' ? 'json' :
+                                        fileExt === 'html' ? 'html' : 'text';
+                        
+                        updatedState.files = [...updatedState.files, {
+                          path: filePath,
+                          content: fileContent.trim(),
+                          type: fileType,
+                          completed: true,
+                          edited: false
+                        }];
+                        
+                        updatedState.status = `Completed ${filePath}`;
+                        processedFiles.add(filePath);
+                      }
+                    }
+                    
+                    return updatedState;
+                  });
+                } else if (data.type === 'complete') {
+                  generatedCode = data.generatedCode;
+                  
+                  setConversationContext(prev => ({
+                    ...prev,
+                    lastGeneratedCode: generatedCode
+                  }));
+                }
+              } catch (e) {
+                // Parsing error, skip
+              }
+            }
+          }
+        }
+        
+        // Apply the generated code
+        if (generatedCode) {
+          addChatMessage('Applying generated code to sandbox...', 'system');
+          
+          const applyResponse = await fetch('/api/apply-ai-code-stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              response: generatedCode,
+              sandboxId: currentSandboxData?.sandboxId,
+              isEdit: false
+            })
+          });
+          
+          if (applyResponse.ok) {
+            addChatMessage('Code applied successfully!', 'system');
+            setConversationContext(prev => ({
+              ...prev,
+              appliedCode: [...prev.appliedCode, { files: [], timestamp: new Date() }]
+            }));
+          }
+        }
+        
+        setGenerationProgress(prev => ({
+          ...prev,
+          isGenerating: false,
+          isStreaming: false,
+          status: 'Complete'
+        }));
+        
+      } catch (error) {
+        console.error('[generation] Error in prompt generation:', error);
+        addChatMessage(`Error: ${(error as Error).message}`, 'error');
+        setGenerationProgress(prev => ({
+          ...prev,
+          isGenerating: false,
+          isStreaming: false,
+          status: 'Error'
+        }));
+      }
+    }, 500);
+  };
+
   const handleHomeScreenSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     await startGeneration();
@@ -2655,8 +3020,10 @@ Tip: I automatically detect and install npm packages from your code imports (lik
     // Remove protocol for cleaner display
     const cleanUrl = displayUrl.replace(/^https?:\/\//i, '');
 
-    // Check if we're in brand extension mode
+    // Check if we're in brand extension mode early (used for message and scraping)
     const brandExtensionMode = sessionStorage.getItem('brandExtensionMode') === 'true';
+    const brandExtensionPrompt = sessionStorage.getItem('brandExtensionPrompt') || '';
+    const storedMarkdown = sessionStorage.getItem('siteMarkdown');
 
     addChatMessage(
       brandExtensionMode
@@ -2665,118 +3032,87 @@ Tip: I automatically detect and install npm packages from your code imports (lik
       'system'
     );
     
-    // Start creating sandbox and capturing screenshot immediately in parallel
-    const sandboxPromise = !sandboxData ? createSandbox(true) : Promise.resolve(null);
-    
     // Set loading stage immediately before hiding home screen
     setLoadingStage('gathering');
-    // Also ensure we're on preview tab to show the loading overlay
     setActiveTab('preview');
     
-    // Always capture screenshot for new URLs, even if sandbox exists
-    // This ensures the loading screen shows properly
+    // OPTIMIZATION: Run sandbox creation, screenshot capture, and scraping in parallel
+    const sandboxPromise = !sandboxData ? createSandbox(true) : Promise.resolve(null);
+    
+    // Start screenshot capture (non-blocking, updates state directly)
     captureUrlScreenshot(displayUrl);
+    
+    // Start scraping in parallel with sandbox creation
+    const scrapePromise = (async () => {
+      if (brandExtensionMode) {
+        const extractResponse = await fetch('/api/extract-brand-styles', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: displayUrl, prompt: brandExtensionPrompt })
+        });
+        if (!extractResponse.ok) throw new Error('Failed to extract brand styles');
+        return { type: 'brand' as const, data: await extractResponse.json() };
+      } else if (storedMarkdown) {
+        sessionStorage.removeItem('siteMarkdown');
+        return { 
+          type: 'scrape' as const, 
+          data: { success: true, content: storedMarkdown, title: new URL(displayUrl).hostname, source: 'search-result' } as ScrapeData 
+        };
+      } else {
+        const scrapeResponse = await fetch('/api/scrape-url-enhanced', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: displayUrl })
+        });
+        if (!scrapeResponse.ok) throw new Error('Failed to scrape website');
+        return { type: 'scrape' as const, data: await scrapeResponse.json() as ScrapeData };
+      }
+    })();
     
     setTimeout(async () => {
       setShowHomeScreen(false);
       setHomeScreenFading(false);
       
-      // Clear the starting flag after transition
       setTimeout(() => {
         setIsStartingNewGeneration(false);
       }, 1000);
       
-      // Wait for sandbox to be ready (if it's still creating)
-      const createdSandbox = await sandboxPromise;
+      // Wait for both sandbox and scraping to complete in parallel
+      const [createdSandbox, scrapeResult] = await Promise.all([sandboxPromise, scrapePromise]);
       
-      // Now start the clone process which will stream the generation
       setUrlInput(homeUrlInput);
-      setUrlOverlayVisible(false); // Make sure overlay is closed
+      setUrlOverlayVisible(false);
       setUrlStatus(['Scraping website content...']);
       
       try {
-        // Scrape the website
         let url = homeUrlInput.trim();
         if (!url.match(/^https?:\/\//i)) {
           url = 'https://' + url;
         }
 
-        // Check if we're in brand extension mode
-        const brandExtensionMode = sessionStorage.getItem('brandExtensionMode') === 'true';
-        const brandExtensionPrompt = sessionStorage.getItem('brandExtensionPrompt') || '';
-
-        // Screenshot is already being captured in parallel above
-
         let scrapeData: ScrapeData | undefined;
         let brandGuidelines: any;
 
-        if (brandExtensionMode) {
-          // === BRAND EXTENSION MODE ===
-          addChatMessage('Extracting brand styles from the website...', 'system');
-
-          // Call the brand extraction endpoint
-          const extractResponse = await fetch('/api/extract-brand-styles', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              url,
-              prompt: brandExtensionPrompt
-            })
-          });
-
-          if (!extractResponse.ok) {
-            throw new Error('Failed to extract brand styles');
-          }
-
-          brandGuidelines = await extractResponse.json();
-
+        if (scrapeResult.type === 'brand') {
+          brandGuidelines = scrapeResult.data;
           if (!brandGuidelines.success) {
             throw new Error(brandGuidelines.error || 'Failed to extract brand styles');
           }
-
-          // Display branding summary with visual UI
           addChatMessage(`Acquired branding format from ${cleanUrl}`, 'system', {
             brandingData: brandGuidelines.guidelines,
             sourceUrl: cleanUrl
           });
           addChatMessage(`Building your custom component using these brand guidelines...`, 'system');
-
-          // Clear the flags after use
           sessionStorage.removeItem('brandExtensionMode');
           sessionStorage.removeItem('brandExtensionPrompt');
-
         } else {
-          // === NORMAL CLONE MODE ===
-          // Check if we have pre-scraped markdown content from search results
-          const storedMarkdown = sessionStorage.getItem('siteMarkdown');
-        if (storedMarkdown) {
-          // Use the pre-scraped content
-          scrapeData = {
-            success: true,
-            content: storedMarkdown,
-            title: new URL(url).hostname,
-            source: 'search-result'
-          };
-          sessionStorage.removeItem('siteMarkdown'); // Clear after use
-          addChatMessage('Using cached content from search results...', 'system');
-        } else {
-          // Perform fresh scraping
-          const scrapeResponse = await fetch('/api/scrape-url-enhanced', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url })
-          });
-          
-          if (!scrapeResponse.ok) {
-            throw new Error('Failed to scrape website');
-          }
-          
-          scrapeData = await scrapeResponse.json() as ScrapeData;
-          
+          scrapeData = scrapeResult.data;
           if (!scrapeData.success) {
             throw new Error(scrapeData.error || 'Failed to scrape website');
           }
-        }
+          if (scrapeData.source === 'search-result') {
+            addChatMessage('Using cached content from search results...', 'system');
+          }
         }
 
         setUrlStatus(brandExtensionMode ? ['Brand styles extracted!', 'Building your component...'] : ['Website scraped successfully!', 'Generating React app...']);
@@ -3845,6 +4181,30 @@ Focus on the key sections and content, making it clean and modern.`;
             )}
           </div>
 
+          {/* Suggested follow-up actions after generation */}
+          {!generationProgress.isGenerating && generationProgress.files.length > 0 && !aiChatInput && (
+            <div className="px-4 py-2 border-t border-border bg-gray-50">
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { label: 'Add dark mode', prompt: 'Add a dark mode toggle and apply dark theme styles' },
+                  { label: 'Improve animations', prompt: 'Add smooth animations and hover effects to all interactive elements' },
+                  { label: 'Make responsive', prompt: 'Ensure the layout is fully responsive for mobile, tablet, and desktop' },
+                  { label: 'Add more sections', prompt: 'Add more content sections like testimonials, FAQ, and contact form' }
+                ].map((action) => (
+                  <button
+                    key={action.label}
+                    onClick={() => {
+                      setAiChatInput(action.prompt);
+                    }}
+                    className="px-3 py-1.5 text-xs bg-white hover:bg-gray-100 text-gray-600 border border-gray-200 rounded-full transition-all"
+                  >
+                    {action.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          
           <div className="p-4 border-t border-border bg-background-base">
             <HeroInput
               value={aiChatInput}
@@ -3896,6 +4256,39 @@ Focus on the key sections and content, making it clean and modern.`;
               </div>
             </div>
             <div className="flex gap-2 items-center">
+              {/* Device Frame Toggles - Only show in preview mode */}
+              {activeTab === 'preview' && sandboxData && (
+                <div className="inline-flex bg-gray-100 border border-gray-200 rounded-md p-0.5">
+                  <button
+                    onClick={() => setPreviewDevice('desktop')}
+                    className={`p-1.5 rounded transition-all ${previewDevice === 'desktop' ? 'bg-white shadow-sm' : 'hover:bg-gray-50'}`}
+                    title="Desktop view"
+                  >
+                    <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" className={previewDevice === 'desktop' ? 'text-gray-900' : 'text-gray-500'}>
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={() => setPreviewDevice('tablet')}
+                    className={`p-1.5 rounded transition-all ${previewDevice === 'tablet' ? 'bg-white shadow-sm' : 'hover:bg-gray-50'}`}
+                    title="Tablet view"
+                  >
+                    <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" className={previewDevice === 'tablet' ? 'text-gray-900' : 'text-gray-500'}>
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={() => setPreviewDevice('mobile')}
+                    className={`p-1.5 rounded transition-all ${previewDevice === 'mobile' ? 'bg-white shadow-sm' : 'hover:bg-gray-50'}`}
+                    title="Mobile view"
+                  >
+                    <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" className={previewDevice === 'mobile' ? 'text-gray-900' : 'text-gray-500'}>
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                    </svg>
+                  </button>
+                </div>
+              )}
+              
               {/* Files generated count */}
               {activeTab === 'generation' && !generationProgress.isEdit && generationProgress.files.length > 0 && (
                 <div className="text-gray-500 text-xs font-medium">
@@ -3917,6 +4310,42 @@ Focus on the key sections and content, making it clean and modern.`;
                   <div className="w-1.5 h-1.5 bg-green-500 rounded-full" />
                   Sandbox active
                 </div>
+              )}
+              
+              {/* Copy URL button */}
+              {sandboxData && (
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(sandboxData.url);
+                    setShowCopiedToast(true);
+                    setTimeout(() => setShowCopiedToast(false), 2000);
+                  }}
+                  title="Copy sandbox URL"
+                  className="p-1.5 rounded-md transition-all text-gray-600 hover:text-gray-900 hover:bg-gray-100 relative"
+                >
+                  {showCopiedToast ? (
+                    <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" className="text-green-500">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                  ) : (
+                    <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                    </svg>
+                  )}
+                </button>
+              )}
+              
+              {/* Fullscreen preview button */}
+              {sandboxData && (
+                <button
+                  onClick={() => setIsFullscreenPreview(true)}
+                  title="Fullscreen preview (⌘⇧F)"
+                  className="p-1.5 rounded-md transition-all text-gray-600 hover:text-gray-900 hover:bg-gray-100"
+                >
+                  <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                  </svg>
+                </button>
               )}
               
               {/* Open in new tab button */}
@@ -3941,8 +4370,60 @@ Focus on the key sections and content, making it clean and modern.`;
         </div>
       </div>
 
-
-
+      {/* Fullscreen Preview Modal */}
+      {isFullscreenPreview && sandboxData?.url && (
+        <div className="fixed inset-0 z-50 bg-black">
+          <div className="absolute top-4 right-4 flex gap-2 z-10">
+            {/* Device toggles in fullscreen */}
+            <div className="inline-flex bg-white/10 backdrop-blur-sm rounded-lg p-1">
+              <button
+                onClick={() => setPreviewDevice('desktop')}
+                className={`p-2 rounded transition-all ${previewDevice === 'desktop' ? 'bg-white/20' : 'hover:bg-white/10'}`}
+              >
+                <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="white">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+              </button>
+              <button
+                onClick={() => setPreviewDevice('tablet')}
+                className={`p-2 rounded transition-all ${previewDevice === 'tablet' ? 'bg-white/20' : 'hover:bg-white/10'}`}
+              >
+                <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="white">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                </svg>
+              </button>
+              <button
+                onClick={() => setPreviewDevice('mobile')}
+                className={`p-2 rounded transition-all ${previewDevice === 'mobile' ? 'bg-white/20' : 'hover:bg-white/10'}`}
+              >
+                <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="white">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                </svg>
+              </button>
+            </div>
+            <button
+              onClick={() => setIsFullscreenPreview(false)}
+              className="p-2 bg-white/10 backdrop-blur-sm rounded-lg hover:bg-white/20 transition-all"
+            >
+              <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="white">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          <div className="w-full h-full flex items-center justify-center p-8">
+            <div 
+              className={`h-full transition-all duration-300 ${previewDevice !== 'desktop' ? 'rounded-xl overflow-hidden shadow-2xl' : 'w-full'}`}
+              style={previewDevice === 'desktop' ? {} : previewDevice === 'tablet' ? { width: '768px' } : { width: '375px' }}
+            >
+              <iframe
+                src={sandboxData.url}
+                className="w-full h-full border-none bg-white rounded-lg"
+                title="Fullscreen Preview"
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
     </HeaderProvider>

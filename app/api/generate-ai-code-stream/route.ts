@@ -90,11 +90,25 @@ declare global {
 
 export async function POST(request: NextRequest) {
   try {
-    const { prompt, model = 'openai/gpt-oss-20b', context, isEdit = false } = await request.json();
+    const { prompt, model: requestedModel = 'openai/gpt-oss-20b', context, isEdit = false } = await request.json();
+    
+    // OPTIMIZATION: Smart model selection - use faster models for edits
+    let model = requestedModel;
+    if (isEdit && !requestedModel.includes('claude') && process.env.GROQ_API_KEY) {
+      // For simple edits, prefer Kimi K2 on Groq (fastest for edits)
+      const isSimpleEdit = prompt.length < 200 && 
+        /\b(change|update|fix|modify|add|remove|delete|color|text|style|button|header|footer|nav)\b/i.test(prompt);
+      if (isSimpleEdit) {
+        model = 'moonshotai/kimi-k2-instruct-0905';
+        console.log('[generate-ai-code-stream] Auto-selected Kimi K2 for simple edit');
+      }
+    }
     
     console.log('[generate-ai-code-stream] Received request:');
     console.log('[generate-ai-code-stream] - prompt:', prompt);
     console.log('[generate-ai-code-stream] - isEdit:', isEdit);
+    console.log('[generate-ai-code-stream] - requestedModel:', requestedModel);
+    console.log('[generate-ai-code-stream] - actualModel:', model);
     console.log('[generate-ai-code-stream] - context.sandboxId:', context?.sandboxId);
     console.log('[generate-ai-code-stream] - context.currentFiles:', context?.currentFiles ? Object.keys(context.currentFiles) : 'none');
     console.log('[generate-ai-code-stream] - currentFiles count:', context?.currentFiles ? Object.keys(context.currentFiles).length : 0);
