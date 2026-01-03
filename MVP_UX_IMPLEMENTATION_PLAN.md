@@ -1,9 +1,184 @@
-# MVP UI/UX Implementation Plan
+# Timbs A.I. - MVP UX Implementation Plan
 
 ## Overview
-This plan outlines the implementation of the "Overnight" MVP UI/UX workflows for the Timbs A.I. platform.
+This document is the comprehensive implementation plan for the "Overnight" MVP UI/UX workflows for the Timbs A.I. platform. It combines task tracking, technical specifications, and MCP (Model Context Protocol) integration details.
 
 ---
+
+# PART 1: USER EXPERIENCE WORKFLOWS
+
+## 1. Entry Points (3 Options)
+
+### Option A: Build from Prompt (Greenfield)
+```
+User Action: Types natural language prompt
+Example: "Build a CRM for real estate agents"
+System Response:
+  1. Validates prompt
+  2. Calls /api/plan-build
+  3. AI generates 12-15 tickets
+  4. Displays plan in Kanban
+  5. Awaits user approval to build
+```
+
+### Option B: Clone from URL
+```
+User Action: Enters website URL to clone
+Example: "stripe.com"
+System Response:
+  1. Scrapes website (screenshot + content)
+  2. Analyzes structure and design
+  3. Calls /api/plan-build with context
+  4. AI generates tickets based on scraped site
+  5. Displays plan in Kanban
+```
+
+### Option C: Import from GitHub (Brownfield)
+```
+User Action: Connects GitHub, selects repository
+System Response:
+  1. OAuth flow → GitHub connection
+  2. Fetches repository structure
+  3. Parses existing codebase
+  4. AI generates tickets to extend/modify
+  5. Displays plan in Kanban
+```
+
+---
+
+## 2. Planning Phase
+
+### Auto-Planning Flow
+```
+Input: User prompt or scraped content
+Process:
+  1. AI analyzes request
+  2. Breaks down into discrete tickets
+  3. Estimates complexity (XS, S, M, L, XL)
+  4. Identifies dependencies
+  5. Detects required user inputs (API keys, etc.)
+Output: BuildPlan with 12-15 KanbanTickets
+```
+
+### Plan Refinement
+```
+User Actions Available:
+  - Edit ticket title/description
+  - Add new tickets
+  - Remove tickets (with dependency warnings)
+  - Reorder tickets (drag-drop)
+  - Provide required inputs
+
+UI Elements:
+  - Inline editing
+  - "Add Step" button
+  - Dependency visualization
+  - "Move to Pipeline" button (commits plan)
+```
+
+---
+
+## 3. Execution Phase (Kanban Command Center)
+
+### View Modes
+| Mode | Description |
+|------|-------------|
+| Kanban Board | Source of truth - ticket management |
+| App Preview | Live sandbox showing built application |
+| Split View | Side-by-side (optional) |
+
+### Build Modes
+
+#### Auto-Build Mode
+```
+Trigger: User clicks "Auto-Build"
+Behavior:
+  - Tickets move automatically: Backlog → Generating → Applying → Testing → Done
+  - Real-time progress updates
+  - Pause button available at any time
+  - Resume continues from last ticket
+```
+
+#### Manual Build Mode
+```
+Trigger: User enables "Manual Build" toggle
+Behavior:
+  - "Build This" button on each ticket
+  - User authorizes each ticket individually
+  - Skip/defer ticket options
+```
+
+### Human-in-the-Loop (Stuck State)
+```
+Trigger: Ticket requires user input (API key, credential, clarification)
+Behavior:
+  - Ticket moves to "Awaiting Input" column
+  - Visual highlighting (pulsing border)
+  - User clicks ticket → Input modal appears
+  - User provides input
+  - Ticket resumes to "Backlog"
+```
+
+---
+
+## 4. Board Logic & Guardrails
+
+### Column Progression
+```
+Valid Flow:
+  Backlog → Generating → Applying → Testing → Done
+
+Invalid Actions:
+  - Cannot skip columns (ToDo → Done blocked)
+  - Cannot move to non-adjacent column directly
+```
+
+### Backward Regression (Undo)
+```
+Trigger: User drags ticket from Done/Review back to Backlog
+Behavior:
+  1. Warning modal: "Moving this back will remove the associated feature code. Proceed?"
+  2. If confirmed:
+     - Soft-delete/comment out associated code
+     - Trigger auto-refactor for stability
+     - Reset ticket status
+  3. If cancelled: No action
+```
+
+---
+
+## 5. GitHub Integration
+
+### Import Flow
+```
+1. User clicks "Import from GitHub"
+2. OAuth authentication
+3. Repository selector modal
+4. Branch selection
+5. Code analysis
+6. Plan generation
+```
+
+### Export Flow
+```
+1. User clicks "Export to GitHub"
+2. Options:
+   a. Create new repository (name, public/private)
+   b. Push to existing repository (branch selector)
+3. Commit message input
+4. Push execution
+5. Success → Link to repository
+```
+
+### Auto-Commit (Optional)
+```
+Toggle: "Auto-commit after each ticket"
+Behavior: After ticket completion → Auto-push to selected repo
+```
+
+---
+
+# PART 2: IMPLEMENTATION TASKS
 
 ## Phase 1: Onboarding & Project Initiation
 
@@ -309,11 +484,12 @@ This plan outlines the implementation of the "Overnight" MVP UI/UX workflows for
 
 **Database Schema:**
 ```sql
-users (id, email, name, avatar, created_at)
+users (id, email, name, avatar_url, created_at)
 projects (id, user_id, name, description, status, created_at, updated_at)
 plans (id, project_id, prompt, tickets_json, status, created_at)
 sandboxes (id, project_id, sandbox_id, url, created_at, expires_at)
 github_connections (id, user_id, access_token, username, connected_at)
+tickets (id, plan_id, title, description, type, status, order)
 ```
 
 **Files to Create/Modify:**
@@ -358,6 +534,13 @@ github_connections (id, user_id, access_token, username, connected_at)
 - [ ] Upgrade prompts when limits reached
 - [ ] Usage reset on billing cycle
 
+**Usage Limits by Tier:**
+| Tier | AI Generations/day | Sandbox Hours | Storage |
+|------|-------------------|---------------|---------|
+| Free | 10 | 2 | 100MB |
+| Pro | 100 | 24 | 5GB |
+| Enterprise | Unlimited | Unlimited | Unlimited |
+
 **Files to Create/Modify:**
 - `lib/usage/tracking.ts` (new)
 - `lib/usage/limits.ts` (new)
@@ -401,32 +584,286 @@ github_connections (id, user_id, access_token, username, connected_at)
 
 ---
 
-## Implementation Order (Recommended)
+# PART 3: TECHNICAL SPECIFICATIONS
 
-### Sprint 1: Core Flow (Days 1-3)
+## API Endpoints
+
+### Planning
+```
+POST /api/plan-build
+  Input: { prompt: string, context?: object }
+  Output: SSE stream of tickets + plan
+
+POST /api/generate-ui-options
+  Input: { prompt: string }
+  Output: { options: UIDesign[] }
+```
+
+### Execution
+```
+POST /api/generate-ai-code-stream
+  Input: { prompt: string, model: string, context: object }
+  Output: SSE stream of code chunks
+
+POST /api/apply-code
+  Input: { sandboxId: string, files: FileContent[] }
+  Output: { success: boolean }
+```
+
+### GitHub
+```
+GET /api/github/repos
+  Output: { repos: Repository[] }
+
+POST /api/github/create-repo
+  Input: { name: string, private: boolean }
+  Output: { url: string }
+
+POST /api/github/push
+  Input: { repoId: string, files: FileContent[], message: string }
+  Output: { commitUrl: string }
+```
+
+### Projects
+```
+GET /api/projects
+  Output: { projects: Project[] }
+
+POST /api/projects
+  Input: { name: string, description?: string }
+  Output: { project: Project }
+
+DELETE /api/projects/:id
+  Output: { success: boolean }
+```
+
+---
+
+## UI Component Inventory
+
+### Entry Components
+- `EntryChoice.tsx` - 3-option selector
+- `PromptInput.tsx` - Natural language input
+- `CloneURLInput.tsx` - URL clone interface
+- `GitHubImport.tsx` - Repo selector
+
+### Planning Components
+- `PlanView.tsx` - Plan display
+- `PlanEditor.tsx` - Inline editing
+- `TicketEditor.tsx` - Single ticket edit modal
+- `UIOptionsSelector.tsx` - 3 UI design picker
+
+### Execution Components
+- `KanbanBoard.tsx` - Main board
+- `KanbanColumn.tsx` - Column container
+- `KanbanTicket.tsx` - Ticket card
+- `InputRequestModal.tsx` - User input modal
+- `BuildControls.tsx` - Auto/Manual/Pause buttons
+
+### GitHub Components
+- `GitHubConnectButton.tsx` - OAuth trigger
+- `ExportToGitHub.tsx` - Export modal
+- `RepoSelector.tsx` - Repository picker
+- `CreateRepoModal.tsx` - New repo form
+
+### Dashboard Components
+- `ProjectGrid.tsx` - All projects
+- `ProjectCard.tsx` - Single project
+- `UsageIndicator.tsx` - Limits display
+
+### Auth Components
+- `LoginButton.tsx` - Login trigger
+- `LoginModal.tsx` - Auth modal
+- `UserMenu.tsx` - User dropdown
+
+---
+
+## State Management
+
+### Global State (Jotai/React Context)
+```typescript
+interface AppState {
+  user: User | null;
+  currentProject: Project | null;
+  plan: BuildPlan | null;
+  tickets: KanbanTicket[];
+  isBuilding: boolean;
+  isPaused: boolean;
+  buildMode: 'auto' | 'manual';
+  sandboxData: SandboxData | null;
+  githubConnection: GitHubConnection | null;
+}
+```
+
+### Persistence
+- Plans: LocalStorage + Database (when auth enabled)
+- Tickets: LocalStorage + Database
+- User preferences: LocalStorage
+- Sandbox sessions: Server-side only
+
+---
+
+# PART 4: SECURITY CONSIDERATIONS
+
+## 🔴 Critical Security Issues to Address
+
+### 1. API Key Exposure
+**Risk:** HIGH  
+**Current Issue:** API keys (OpenAI, GitHub tokens) may be exposed in client-side code or logs
+
+**Mitigations:**
+- [ ] All AI API calls go through server-side routes only
+- [ ] Never expose API keys in client bundle
+- [ ] Use environment variables for all secrets
+- [ ] Implement key rotation mechanism
+- [ ] Audit logs for API key usage
+
+---
+
+### 2. Sandbox Code Execution
+**Risk:** CRITICAL  
+**Current Issue:** User-generated code runs in sandboxes - potential for malicious code
+
+**Mitigations:**
+- [ ] Sandboxes are fully isolated (Vercel/E2B handles this)
+- [ ] No access to host system from sandbox
+- [ ] Network restrictions on sandboxes (no outbound to internal services)
+- [ ] Sandbox timeout limits (prevent crypto mining)
+- [ ] Resource limits (CPU, memory, disk)
+- [ ] Code scanning before execution (optional)
+
+---
+
+### 3. User Input Validation
+**Risk:** HIGH  
+**Current Issue:** Prompts and URLs are user-provided - injection risks
+
+**Mitigations:**
+- [ ] Sanitize all user inputs server-side
+- [ ] URL validation before scraping
+- [ ] Prompt injection protection (system prompt hardening)
+- [ ] XSS prevention in rendered content
+- [ ] SQL injection prevention (parameterized queries)
+
+---
+
+### 4. Authentication & Authorization
+**Risk:** CRITICAL  
+**Current Issue:** No user auth currently - all data is public/shared
+
+**Mitigations:**
+- [ ] Implement proper auth (Clerk/Auth0/Supabase)
+- [ ] JWT token validation on all API routes
+- [ ] CSRF protection
+- [ ] Secure session management
+- [ ] Password policies (if email/password auth)
+- [ ] Rate limiting on auth endpoints
+
+---
+
+### 5. GitHub Token Security
+**Risk:** HIGH  
+**Current Issue:** GitHub OAuth tokens stored - sensitive access
+
+**Mitigations:**
+- [ ] Encrypt tokens at rest
+- [ ] Minimal OAuth scopes (only what's needed)
+- [ ] Token refresh mechanism
+- [ ] Revoke tokens on user logout/disconnect
+- [ ] Never log tokens
+- [ ] Secure token storage (httpOnly cookies or encrypted DB)
+
+---
+
+### 6. Secrets in Generated Code
+**Risk:** MEDIUM  
+**Current Issue:** Users may input API keys for integrations (Stripe, etc.)
+
+**Mitigations:**
+- [ ] Store user secrets encrypted in DB, not in code
+- [ ] Generate .env files with placeholders
+- [ ] Never commit secrets to GitHub exports
+- [ ] Warn users about secret exposure
+- [ ] Auto-detect and mask secrets in logs
+
+---
+
+### 7. Rate Limiting & DDoS Protection
+**Risk:** MEDIUM  
+**Current Issue:** No rate limiting on expensive operations
+
+**Mitigations:**
+- [ ] Rate limit AI generation endpoints (per user, per IP)
+- [ ] Rate limit sandbox creation
+- [ ] Rate limit GitHub API calls
+- [ ] Implement request queuing for heavy operations
+- [ ] Use Vercel/Cloudflare DDoS protection
+
+---
+
+### 8. Data Privacy & GDPR
+**Risk:** MEDIUM  
+**Current Issue:** User data handling needs compliance
+
+**Mitigations:**
+- [ ] Privacy policy page
+- [ ] Data deletion capability (right to be forgotten)
+- [ ] Data export capability
+- [ ] Cookie consent (if using analytics)
+- [ ] Clear data retention policies
+- [ ] Anonymize logs
+
+---
+
+## Security Checklist for Launch
+
+| Item | Status | Priority |
+|------|--------|----------|
+| API keys server-side only | 🟡 Partial | Critical |
+| Sandbox isolation verified | ✅ Done (Vercel) | Critical |
+| User authentication | 🔴 Not Started | Critical |
+| Input sanitization | 🟡 Partial | Critical |
+| GitHub token encryption | 🔴 Not Started | High |
+| Rate limiting | 🔴 Not Started | High |
+| Secrets handling | 🔴 Not Started | High |
+| HTTPS everywhere | ✅ Done (Vercel) | Critical |
+| CORS configured | 🟡 Partial | Medium |
+| Security headers | 🔴 Not Started | Medium |
+
+---
+
+# PART 5: IMPLEMENTATION SCHEDULE
+
+## Sprint 1: Core Flow (Days 1-3)
 1. ✅ Plan creation from prompt (DONE)
 2. ✅ Kanban display with columns (DONE)
 3. ✅ Start Build button (DONE)
 4. Entry Choice screen refinement
 5. View mode toggle cleanup
 
-### Sprint 2: Build Execution (Days 4-6)
+## Sprint 2: Build Execution (Days 4-6)
 1. Auto-Build with real-time updates
 2. Pause/Resume functionality
 3. Manual Build mode toggle
 4. Human-in-the-Loop improvements
 
-### Sprint 3: Guardrails & Quality (Days 7-9)
+## Sprint 3: Guardrails & Quality (Days 7-9)
 1. Forward movement restrictions
 2. Backward regression with warnings
 3. PR Review column
 4. Code rollback logic
 
-### Sprint 4: Polish (Days 10-12)
-1. GitHub import flow
+## Sprint 4: Polish (Days 10-12)
+1. GitHub import/export flow
 2. "Come up with 3 UIs" feature
 3. Animations and transitions
 4. Error handling and edge cases
+
+## Sprint 5: Multi-Tenant (Days 13-18)
+1. User authentication
+2. Data isolation
+3. Project dashboard
+4. Usage tracking
 
 ---
 
@@ -457,135 +894,10 @@ github_connections (id, user_id, access_token, username, connected_at)
 | **Guardrails** | | |
 | Warning Modals (backward movement) | 🔴 Not Started | High |
 | Drag-Drop Restrictions | 🔴 Not Started | High |
-
----
-
-## Security Considerations
-
-### 🔴 Critical Security Issues to Address
-
-#### 1. API Key Exposure
-**Risk:** HIGH  
-**Current Issue:** API keys (OpenAI, GitHub tokens) may be exposed in client-side code or logs
-
-**Mitigations:**
-- [ ] All AI API calls go through server-side routes only
-- [ ] Never expose API keys in client bundle
-- [ ] Use environment variables for all secrets
-- [ ] Implement key rotation mechanism
-- [ ] Audit logs for API key usage
-
----
-
-#### 2. Sandbox Code Execution
-**Risk:** CRITICAL  
-**Current Issue:** User-generated code runs in sandboxes - potential for malicious code
-
-**Mitigations:**
-- [ ] Sandboxes are fully isolated (Vercel/E2B handles this)
-- [ ] No access to host system from sandbox
-- [ ] Network restrictions on sandboxes (no outbound to internal services)
-- [ ] Sandbox timeout limits (prevent crypto mining)
-- [ ] Resource limits (CPU, memory, disk)
-- [ ] Code scanning before execution (optional)
-
----
-
-#### 3. User Input Validation
-**Risk:** HIGH  
-**Current Issue:** Prompts and URLs are user-provided - injection risks
-
-**Mitigations:**
-- [ ] Sanitize all user inputs server-side
-- [ ] URL validation before scraping
-- [ ] Prompt injection protection (system prompt hardening)
-- [ ] XSS prevention in rendered content
-- [ ] SQL injection prevention (parameterized queries)
-
----
-
-#### 4. Authentication & Authorization
-**Risk:** CRITICAL  
-**Current Issue:** No user auth currently - all data is public/shared
-
-**Mitigations:**
-- [ ] Implement proper auth (Clerk/Auth0/Supabase)
-- [ ] JWT token validation on all API routes
-- [ ] CSRF protection
-- [ ] Secure session management
-- [ ] Password policies (if email/password auth)
-- [ ] Rate limiting on auth endpoints
-
----
-
-#### 5. GitHub Token Security
-**Risk:** HIGH  
-**Current Issue:** GitHub OAuth tokens stored - sensitive access
-
-**Mitigations:**
-- [ ] Encrypt tokens at rest
-- [ ] Minimal OAuth scopes (only what's needed)
-- [ ] Token refresh mechanism
-- [ ] Revoke tokens on user logout/disconnect
-- [ ] Never log tokens
-- [ ] Secure token storage (httpOnly cookies or encrypted DB)
-
----
-
-#### 6. Secrets in Generated Code
-**Risk:** MEDIUM  
-**Current Issue:** Users may input API keys for integrations (Stripe, etc.)
-
-**Mitigations:**
-- [ ] Store user secrets encrypted in DB, not in code
-- [ ] Generate .env files with placeholders
-- [ ] Never commit secrets to GitHub exports
-- [ ] Warn users about secret exposure
-- [ ] Auto-detect and mask secrets in logs
-
----
-
-#### 7. Rate Limiting & DDoS Protection
-**Risk:** MEDIUM  
-**Current Issue:** No rate limiting on expensive operations
-
-**Mitigations:**
-- [ ] Rate limit AI generation endpoints (per user, per IP)
-- [ ] Rate limit sandbox creation
-- [ ] Rate limit GitHub API calls
-- [ ] Implement request queuing for heavy operations
-- [ ] Use Vercel/Cloudflare DDoS protection
-
----
-
-#### 8. Data Privacy & GDPR
-**Risk:** MEDIUM  
-**Current Issue:** User data handling needs compliance
-
-**Mitigations:**
-- [ ] Privacy policy page
-- [ ] Data deletion capability (right to be forgotten)
-- [ ] Data export capability
-- [ ] Cookie consent (if using analytics)
-- [ ] Clear data retention policies
-- [ ] Anonymize logs
-
----
-
-### Security Checklist for Launch
-
-| Item | Status | Priority |
-|------|--------|----------|
-| API keys server-side only | 🟡 Partial | Critical |
-| Sandbox isolation verified | ✅ Done (Vercel) | Critical |
-| User authentication | 🔴 Not Started | Critical |
-| Input sanitization | 🟡 Partial | Critical |
-| GitHub token encryption | 🔴 Not Started | High |
-| Rate limiting | 🔴 Not Started | High |
-| Secrets handling | 🔴 Not Started | High |
-| HTTPS everywhere | ✅ Done (Vercel) | Critical |
-| CORS configured | 🟡 Partial | Medium |
-| Security headers | 🔴 Not Started | Medium |
+| **Auth & Multi-Tenant** | | |
+| Login Button | 🟡 Partial | Critical |
+| User Menu | 🟡 Partial | Critical |
+| Project Dashboard | 🔴 Not Started | High |
 
 ---
 
@@ -597,3 +909,12 @@ github_connections (id, user_id, access_token, username, connected_at)
 - Mobile responsiveness is secondary for MVP
 - Focus on desktop experience first
 - **Security audit recommended before public launch**
+
+---
+
+## Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.0.0 | 2026-01-03 | Initial combined specification |
+| 1.1.0 | 2026-01-03 | Added multi-tenant, security, MCP specs |
