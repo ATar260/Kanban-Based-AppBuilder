@@ -9,6 +9,9 @@ export interface SandboxInfo {
   url: string;
   provider: 'e2b' | 'vercel';
   createdAt: Date;
+  persistent?: boolean;
+  persistentUrl?: string;
+  expiresAt?: Date;
 }
 
 export interface CommandResult {
@@ -51,6 +54,14 @@ export abstract class SandboxProvider {
   abstract getSandboxInfo(): SandboxInfo | null;
   abstract terminate(): Promise<void>;
   abstract isAlive(): boolean;
+  
+  async makePersistent(): Promise<{ persistentUrl: string; expiresAt: Date } | null> {
+    return null;
+  }
+  
+  async extendLifetime(hours: number): Promise<boolean> {
+    return false;
+  }
   
   // Optional methods that providers can override
   async setupViteApp(): Promise<void> {

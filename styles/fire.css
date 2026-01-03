@@ -1,4 +1,4 @@
-/* Fire Design System - New Firecrawl Design System */
+/* Fire Design System - Timbs A.I. Design System */
 /* This is the new fire-inspired design system used in app and brand pages */
 
 /* ALL @import statements must come FIRST before any other CSS */
@@ -20,13 +20,13 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Container configuration from firecrawl-marketing */
+/* Container configuration */
 :root {
   --container-width: 1112px;
   --container-width-padding: 1144px;
 }
 
-/* Container implementation matching firecrawl-marketing */
+/* Container implementation */
 .container {
   max-width: min(calc(100% - 32px), var(--container-width));
   --padding: 16px;

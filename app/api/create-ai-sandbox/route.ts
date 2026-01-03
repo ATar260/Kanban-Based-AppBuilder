@@ -89,6 +89,13 @@ async function createSandboxInternal() {
     // Create Vercel sandbox with flexible authentication
     console.log(`[create-ai-sandbox] Creating Vercel sandbox with ${appConfig.vercelSandbox.timeoutMinutes} minute timeout...`);
     
+    // Log environment check (without exposing full tokens)
+    console.log('[create-ai-sandbox] Environment check:');
+    console.log('[create-ai-sandbox] - VERCEL_TOKEN:', process.env.VERCEL_TOKEN ? `set (${process.env.VERCEL_TOKEN.substring(0, 8)}...)` : 'NOT SET');
+    console.log('[create-ai-sandbox] - VERCEL_TEAM_ID:', process.env.VERCEL_TEAM_ID || 'NOT SET');
+    console.log('[create-ai-sandbox] - VERCEL_PROJECT_ID:', process.env.VERCEL_PROJECT_ID || 'NOT SET');
+    console.log('[create-ai-sandbox] - VERCEL_OIDC_TOKEN:', process.env.VERCEL_OIDC_TOKEN ? 'set' : 'NOT SET');
+    
     // Prepare sandbox configuration
     const sandboxConfig: any = {
       timeout: appConfig.vercelSandbox.timeoutMs,
@@ -104,11 +111,25 @@ async function createSandboxInternal() {
       sandboxConfig.token = process.env.VERCEL_TOKEN;
     } else if (process.env.VERCEL_OIDC_TOKEN) {
       console.log('[create-ai-sandbox] Using OIDC token authentication');
+      sandboxConfig.oidcToken = process.env.VERCEL_OIDC_TOKEN;
     } else {
-      console.log('[create-ai-sandbox] No authentication found - relying on default Vercel authentication');
+      console.log('[create-ai-sandbox] WARNING: No authentication found!');
+      throw new Error('Vercel Sandbox requires authentication. Set VERCEL_TOKEN + VERCEL_TEAM_ID + VERCEL_PROJECT_ID, or VERCEL_OIDC_TOKEN');
     }
     
+    console.log('[create-ai-sandbox] Sandbox config:', JSON.stringify({ 
+      timeout: sandboxConfig.timeout,
+      runtime: sandboxConfig.runtime,
+      ports: sandboxConfig.ports,
+      hasToken: !!sandboxConfig.token,
+      hasOidcToken: !!sandboxConfig.oidcToken,
+      teamId: sandboxConfig.teamId,
+      projectId: sandboxConfig.projectId
+    }));
+    
+    console.log('[create-ai-sandbox] Calling Sandbox.create()...');
     sandbox = await Sandbox.create(sandboxConfig);
+    console.log('[create-ai-sandbox] Sandbox.create() succeeded!');
     
     const sandboxId = sandbox.sandboxId;
     console.log(`[create-ai-sandbox] Sandbox created: ${sandboxId}`);

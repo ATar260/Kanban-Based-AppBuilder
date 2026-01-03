@@ -6,8 +6,6 @@ import { AnimatePresence, motion } from "motion/react";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import FirecrawlIcon from "@/components/shared/firecrawl-icon/firecrawl-icon";
-import Logo from "@/components/shared/header/_svg/Logo";
 import { useHeaderContext } from "@/components/shared/header/HeaderContext";
 import { cn } from "@/utils/cn";
 
@@ -34,7 +32,7 @@ export default function HeaderBrandKit() {
   return (
     <div className="relative">
       <Link
-        className="flex items-center gap-2 relative brand-kit-menu"
+        className="flex items-center gap-2.5 relative brand-kit-menu group"
         href="/"
         onContextMenu={(e) => {
           e.preventDefault();
@@ -45,8 +43,14 @@ export default function HeaderBrandKit() {
           }
         }}
       >
-        <FirecrawlIcon className="size-28 -top-2 relative" />
-        <Logo />
+        {/* Logo Icon with amber gradient */}
+        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shadow-lg shadow-amber-500/20 group-hover:shadow-amber-500/40 transition-shadow">
+          <span className="text-black font-bold text-sm">T</span>
+        </div>
+        {/* Brand text with gradient */}
+        <span className="font-semibold text-lg bg-gradient-to-r from-amber-400 via-orange-400 to-amber-500 bg-clip-text text-transparent">
+          Timbs A.I.
+        </span>
       </Link>
 
       <AnimatePresence initial={false} mode="popLayout">
