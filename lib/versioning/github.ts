@@ -78,12 +78,14 @@ export function validateOAuthState(state: string): boolean {
 
 export async function fetchUserRepos(): Promise<GitHubRepo[]> {
     const connection = getGitHubConnection();
-    if (!connection?.connected) {
+    if (!connection?.accessToken) {
         throw new Error('GitHub not connected');
     }
 
     const response = await fetch('/api/github/repos', {
-        credentials: 'include'
+        headers: {
+            'Authorization': `Bearer ${connection.accessToken}`
+        }
     });
 
     if (!response.ok) {
@@ -99,15 +101,15 @@ export async function createRepository(
     description?: string
 ): Promise<GitHubRepo> {
     const connection = getGitHubConnection();
-    if (!connection?.connected) {
+    if (!connection?.accessToken) {
         throw new Error('GitHub not connected');
     }
 
     const response = await fetch('/api/github/repos', {
         method: 'POST',
-        credentials: 'include',
         headers: {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${connection.accessToken}`
         },
         body: JSON.stringify({
             name,
@@ -127,16 +129,16 @@ export async function createRepository(
 
 export async function commitFiles(request: GitHubCommitRequest): Promise<GitHubCommitResult> {
     const connection = getGitHubConnection();
-    if (!connection?.connected) {
+    if (!connection?.accessToken) {
         return { success: false, error: 'GitHub not connected' };
     }
 
     try {
         const response = await fetch('/api/github/commit', {
             method: 'POST',
-            credentials: 'include',
             headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${connection.accessToken}`
             },
             body: JSON.stringify(request)
         });

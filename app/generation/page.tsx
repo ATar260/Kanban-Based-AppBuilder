@@ -27,6 +27,7 @@ import CodeApplicationProgress, { type CodeApplicationState } from '@/components
 import { KanbanBoard, useKanbanBoard, KanbanTicket as KanbanTicketType, BuildPlan, TicketStatus } from '@/components/kanban';
 import { useVersioning } from '@/hooks/useVersioning';
 import { GitHubConnectButton, VersionHistoryPanel, SaveStatusIndicator } from '@/components/versioning';
+import { saveGitHubConnection } from '@/lib/versioning/github';
 import { useBuildTracker } from '@/hooks/useBuildTracker';
 
 interface SandboxData {
@@ -465,6 +466,36 @@ Visual Features: ${uiOption.features.join(', ')}`;
       chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight;
     }
   }, [chatMessages]);
+
+  useEffect(() => {
+    const githubConnected = searchParams.get('github_connected');
+    const githubUsername = searchParams.get('github_username');
+    const githubAvatar = searchParams.get('github_avatar');
+    const githubToken = searchParams.get('github_token');
+
+    if (githubConnected === 'true' && githubToken && githubUsername) {
+      saveGitHubConnection({
+        connected: true,
+        accessToken: githubToken,
+        username: githubUsername,
+        avatarUrl: githubAvatar || undefined,
+        connectedAt: new Date().toISOString()
+      });
+
+      const url = new URL(window.location.href);
+      url.searchParams.delete('github_connected');
+      url.searchParams.delete('github_username');
+      url.searchParams.delete('github_avatar');
+      url.searchParams.delete('github_token');
+      window.history.replaceState({}, '', url.toString());
+
+      setChatMessages(prev => [...prev, {
+        content: `GitHub connected as @${githubUsername}! You can now save your projects to GitHub.`,
+        type: 'system',
+        timestamp: new Date()
+      }]);
+    }
+  }, [searchParams]);
 
   // Auto-trigger generation when flag is set (from home page navigation)
   useEffect(() => {
@@ -3958,25 +3989,20 @@ Focus on the key sections and content, making it clean and modern.`;
             {!hasInitialSubmission ? (
               <div className="p-4 border-b border-border">
                 <SidebarInput
-                  onSubmit={(url, style, model, instructions) => {
-                    setHasInitialSubmission(true);
-                    sessionStorage.setItem('targetUrl', url);
-                    sessionStorage.setItem('selectedStyle', style);
-                    sessionStorage.setItem('selectedModel', model);
-                    if (instructions) {
-                      sessionStorage.setItem('additionalInstructions', instructions);
-                    }
-                    sessionStorage.setItem('autoStart', 'true');
-                    setHomeUrlInput(url);
-                    setHomeContextInput(instructions || '');
-                    startGeneration();
-                  }}
-                  onPromptSubmit={(prompt, model) => {
+                  onSubmit={async (url, style, model, instructions) => {
                     setHasInitialSubmission(true);
                     setAiModel(model);
-                    startPromptGeneration(prompt);
+                    // Create a plan from the clone URL request
+                    const prompt = `Clone and recreate the website at ${url}. ${instructions ? `Additional instructions: ${instructions}` : ''} Style preference: ${style}`;
+                    await planBuild(prompt);
                   }}
-                  disabled={loading || generationProgress.isGenerating}
+                  onPromptSubmit={async (prompt, model) => {
+                    setHasInitialSubmission(true);
+                    setAiModel(model);
+                    // Create a plan from the prompt
+                    await planBuild(prompt);
+                  }}
+                  disabled={loading || generationProgress.isGenerating || isPlanning}
                 />
               </div>
             ) : null}

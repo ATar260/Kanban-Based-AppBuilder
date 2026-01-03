@@ -58,10 +58,11 @@ export async function GET(request: NextRequest) {
 
         const userData = await userResponse.json();
 
-        const redirectUrl = new URL('/', request.url);
+        const redirectUrl = new URL('/generation', request.url);
         redirectUrl.searchParams.set('github_connected', 'true');
         redirectUrl.searchParams.set('github_username', userData.login);
         redirectUrl.searchParams.set('github_avatar', userData.avatar_url || '');
+        redirectUrl.searchParams.set('github_token', accessToken);
 
         const response = NextResponse.redirect(redirectUrl);
         

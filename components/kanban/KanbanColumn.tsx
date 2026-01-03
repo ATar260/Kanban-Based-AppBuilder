@@ -82,8 +82,8 @@ export default function KanbanColumn({
   return (
     <div
       className={`w-full h-full flex flex-col rounded-none bg-transparent transition-all ${isActiveColumn && tickets.length > 0
-          ? ''
-          : ''
+        ? ''
+        : ''
         }`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -122,10 +122,10 @@ export default function KanbanColumn({
       )}
 
       {/* Tickets List */}
-      <div className="flex-1 space-y-2 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-transparent">
+      <div className="flex-1 space-y-2">
         {tickets.length === 0 ? (
-          <div className="text-center py-6 text-zinc-600 text-xs">
-            {emptyMessages[id]}
+          <div className="text-center py-8 px-4">
+            <p className="text-sm text-zinc-500">{emptyMessages[id]}</p>
           </div>
         ) : (
           tickets.map(ticket => (

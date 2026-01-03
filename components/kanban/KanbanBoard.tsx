@@ -140,16 +140,57 @@ export default function KanbanBoard({
           </div>
 
           <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-green-500/5 border border-green-500/10">
-              <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-              <span className="text-xs font-medium text-green-500">Active</span>
-            </div>
+            {/* Build Controls */}
+            {tickets.length > 0 && !isPlanning && (
+              <>
+                {!isBuilding ? (
+                  <button
+                    onClick={onStartBuild}
+                    className="px-4 py-1.5 text-sm font-medium rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-black hover:from-amber-400 hover:to-orange-400 transition-all shadow-lg shadow-amber-500/20"
+                  >
+                    ▶ Start Build
+                  </button>
+                ) : isPaused ? (
+                  <button
+                    onClick={onResumeBuild}
+                    className="px-4 py-1.5 text-sm font-medium rounded-lg bg-green-500 text-white hover:bg-green-400 transition-all"
+                  >
+                    ▶ Resume
+                  </button>
+                ) : (
+                  <button
+                    onClick={onPauseBuild}
+                    className="px-4 py-1.5 text-sm font-medium rounded-lg bg-zinc-700 text-white hover:bg-zinc-600 transition-all"
+                  >
+                    ⏸ Pause
+                  </button>
+                )}
+              </>
+            )}
+
+            {isPlanning && (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-purple-500/10 border border-purple-500/20">
+                <div className="w-3 h-3 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
+                <span className="text-xs font-medium text-purple-400">Planning...</span>
+              </div>
+            )}
+
+            {isBuilding && !isPaused && (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/20">
+                <div className="w-3 h-3 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+                <span className="text-xs font-medium text-amber-400">Building...</span>
+              </div>
+            )}
+
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-zinc-800 border border-zinc-700">
               <span className="text-xs font-medium text-zinc-400">{tickets.length} Tasks</span>
             </div>
-            <button className="p-1.5 text-zinc-400 hover:text-white transition-colors">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z" /></svg>
-            </button>
+
+            {analytics.completed > 0 && (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-green-500/10 border border-green-500/20">
+                <span className="text-xs font-medium text-green-400">{analytics.completed} Done</span>
+              </div>
+            )}
           </div>
         </header>
 
@@ -178,78 +219,60 @@ export default function KanbanBoard({
         )}
 
         {/* Main Board Area */}
-        <div className="flex-1 overflow-x-auto bg-[#0c0c0e] p-6">
+        <div className="flex-1 overflow-x-auto overflow-y-hidden bg-[#0c0c0e] p-4">
           {activeView === 'kanban' ? (
-            tickets.length > 0 ? (
-              <div className="flex gap-4 min-w-max h-full">
-                {displayColumns.map((column, index) => {
-                  const filteredTickets = activeFilter
-                    ? ticketsByColumn[column.id].filter(t => t.type === activeFilter)
-                    : ticketsByColumn[column.id];
+            <div className="flex gap-3 h-full pb-2" style={{ minWidth: 'max-content' }}>
+              {displayColumns.map((column, index) => {
+                const filteredTickets = activeFilter
+                  ? ticketsByColumn[column.id].filter(t => t.type === activeFilter)
+                  : ticketsByColumn[column.id];
 
-                  return (
-                    <motion.div
-                      key={column.id}
-                      initial={{ opacity: 0, scale: 0.95 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      transition={{ delay: index * 0.05 }}
-                      className="w-80 flex flex-col h-full rounded-xl bg-[#0f0f11]/50 border border-white/[0.04] overflow-hidden shadow-sm"
-                    >
-                      <div className="p-3 border-b border-white/[0.04] flex items-center justify-between bg-[#111113]">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm grayscale opacity-70">{COLUMN_EMOJIS[column.id]}</span>
-                          <span className="text-xs font-bold text-zinc-300 uppercase tracking-wide">{column.title}</span>
-                          <span className="px-1.5 py-0.5 rounded text-[10px] bg-zinc-800/80 text-zinc-500 font-mono">
-                            {filteredTickets.length}
-                          </span>
-                        </div>
-                        <button onClick={() => setShowAddModal(true)} className="text-zinc-600 hover:text-zinc-400 transition-colors">
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14M5 12h14" /></svg>
-                        </button>
-                      </div>
-                      <div className="flex-1 overflow-y-auto p-2 scrollbar-thin scrollbar-thumb-zinc-800">
-                        <KanbanColumn
-                          id={column.id}
-                          title={column.title}
-                          color={column.color}
-                          emoji={COLUMN_EMOJIS[column.id]}
-                          tickets={filteredTickets}
-                          onEditTicket={(id) => setSelectedTicketId(id)}
-                          onSkipTicket={onSkipTicket}
-                          onRetryTicket={onRetryTicket}
-                          onDeleteTicket={onDeleteTicket}
-                          onRestoreTicket={onRestoreTicket}
-                          onViewCode={(id) => setSelectedTicketId(id)}
-                          onMoveUp={(id) => onReorderTicket(id, 'up')}
-                          onMoveDown={(id) => onReorderTicket(id, 'down')}
-                          onProvideInput={(id) => setInputTicketId(id)}
-                          onDropTicket={onMoveTicket}
-                          onBuildNow={buildMode === 'manual' ? onBuildSingleTicket : undefined}
-                          minimalHeader={true}
-                        />
-                      </div>
-                    </motion.div>
-                  );
-                })}
-              </div>
-            ) : (
-              // Empty State
-              <div className="h-full flex flex-col items-center justify-center">
-                <div className="text-center p-12 rounded-2xl border border-zinc-800 bg-zinc-900/30">
-                  <div className="text-5xl mb-6">✨</div>
-                  <h3 className="text-2xl font-bold text-white mb-2">Timbs A.I. Command Centre</h3>
-                  <p className="text-zinc-500 mb-8 max-w-sm mx-auto leading-relaxed">
-                    Your agents are ready. Establish a mission to begin the architectural drafting process.
-                  </p>
-                  <button
-                    onClick={() => onPlanBuild('Build a new react application')}
-                    className="px-8 py-3 bg-gradient-to-r from-amber-500 to-orange-500 text-black font-bold rounded-xl hover:shadow-lg hover:shadow-amber-500/20 transition-all opacity-80 hover:opacity-100"
+                return (
+                  <motion.div
+                    key={column.id}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: index * 0.03, duration: 0.2 }}
+                    className="w-[280px] min-w-[280px] flex flex-col rounded-xl bg-[#18181b] border border-zinc-800/60 overflow-hidden shadow-lg"
+                    style={{ height: 'calc(100% - 8px)' }}
                   >
-                    Initialize Mission
-                  </button>
-                </div>
-              </div>
-            )
+                    <div className="px-4 py-3 border-b border-zinc-800/60 flex items-center justify-between bg-[#1f1f23]">
+                      <div className="flex items-center gap-2">
+                        <span className="text-base">{COLUMN_EMOJIS[column.id]}</span>
+                        <span className="text-sm font-semibold text-zinc-200 uppercase tracking-wider">{column.title}</span>
+                        <span className="px-2 py-0.5 rounded-full text-xs bg-zinc-700/60 text-zinc-400 font-medium">
+                          {filteredTickets.length}
+                        </span>
+                      </div>
+                      <button onClick={() => setShowAddModal(true)} className="p-1.5 rounded-md text-zinc-500 hover:text-zinc-300 hover:bg-zinc-700/50 transition-all">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14M5 12h14" /></svg>
+                      </button>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-3 space-y-2">
+                      <KanbanColumn
+                        id={column.id}
+                        title={column.title}
+                        color={column.color}
+                        emoji={COLUMN_EMOJIS[column.id]}
+                        tickets={filteredTickets}
+                        onEditTicket={(id) => setSelectedTicketId(id)}
+                        onSkipTicket={onSkipTicket}
+                        onRetryTicket={onRetryTicket}
+                        onDeleteTicket={onDeleteTicket}
+                        onRestoreTicket={onRestoreTicket}
+                        onViewCode={(id) => setSelectedTicketId(id)}
+                        onMoveUp={(id) => onReorderTicket(id, 'up')}
+                        onMoveDown={(id) => onReorderTicket(id, 'down')}
+                        onProvideInput={(id) => setInputTicketId(id)}
+                        onDropTicket={onMoveTicket}
+                        onBuildNow={buildMode === 'manual' ? onBuildSingleTicket : undefined}
+                        minimalHeader={true}
+                      />
+                    </div>
+                  </motion.div>
+                );
+              })}
+            </div>
           ) : (
             /* Preview Mode */
             <div className="h-full rounded-xl overflow-hidden border border-white/[0.06] bg-black shadow-2xl">
