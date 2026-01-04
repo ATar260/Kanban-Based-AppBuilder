@@ -115,6 +115,7 @@ function AISandboxPage() {
   const [fileStructure, setFileStructure] = useState<string>('');
   const [isPlanning, setIsPlanning] = useState(false);
   const [kanbanBuildActive, setKanbanBuildActive] = useState(false);
+  const [isPreviewRefreshing, setIsPreviewRefreshing] = useState(false);
 
   const kanban = useKanbanBoard();
 
@@ -1395,71 +1396,36 @@ Tip: I automatically detect and install npm packages from your code imports (lik
             const refreshDelay = packagesInstalled ? appConfig.codeApplication.packageInstallRefreshDelay : appConfig.codeApplication.defaultRefreshDelay;
             console.log(`[applyGeneratedCode] Packages installed: ${packagesInstalled}, refresh delay: ${refreshDelay}ms`);
 
+            setIsPreviewRefreshing(true);
+            setActiveTab('preview');
+            
             setTimeout(async () => {
               if (iframeRef.current && currentSandboxData?.url) {
                 console.log('[applyGeneratedCode] Starting iframe refresh sequence...');
-                console.log('[applyGeneratedCode] Current iframe src:', iframeRef.current.src);
-                console.log('[applyGeneratedCode] Sandbox URL:', currentSandboxData.url);
 
-                // Method 1: Try direct navigation first
                 try {
                   const urlWithTimestamp = `${currentSandboxData.url}?t=${Date.now()}&force=true`;
-                  console.log('[applyGeneratedCode] Attempting direct navigation to:', urlWithTimestamp);
-
-                  // Remove any existing onload handler
-                  iframeRef.current.onload = null;
-
-                  // Navigate directly
+                  iframeRef.current.onload = () => {
+                    console.log('[applyGeneratedCode] Iframe loaded successfully');
+                    setIsPreviewRefreshing(false);
+                  };
+                  iframeRef.current.onerror = () => {
+                    console.error('[applyGeneratedCode] Iframe load error');
+                    setIsPreviewRefreshing(false);
+                  };
                   iframeRef.current.src = urlWithTimestamp;
-
-                  // Wait a bit and check if it loaded
-                  await new Promise(resolve => setTimeout(resolve, 2000));
-
-                  // Try to access the iframe content to verify it loaded
-                  try {
-                    const iframeDoc = iframeRef.current.contentDocument || iframeRef.current.contentWindow?.document;
-                    if (iframeDoc && iframeDoc.readyState === 'complete') {
-                      console.log('[applyGeneratedCode] Iframe loaded successfully');
-                      return;
-                    }
-                  } catch {
-                    console.log('[applyGeneratedCode] Cannot access iframe content (CORS), assuming loaded');
-                    return;
-                  }
+                  
+                  // Fallback timeout to hide loading state
+                  setTimeout(() => setIsPreviewRefreshing(false), 5000);
                 } catch (e) {
-                  console.error('[applyGeneratedCode] Direct navigation failed:', e);
+                  console.error('[applyGeneratedCode] Refresh failed:', e);
+                  setIsPreviewRefreshing(false);
                 }
-
-                // Method 2: Force complete iframe recreation if direct navigation failed
-                console.log('[applyGeneratedCode] Falling back to iframe recreation...');
-                const parent = iframeRef.current.parentElement;
-                const newIframe = document.createElement('iframe');
-
-                // Copy attributes
-                newIframe.className = iframeRef.current.className;
-                newIframe.title = iframeRef.current.title;
-                newIframe.allow = iframeRef.current.allow;
-                // Copy sandbox attributes
-                const sandboxValue = iframeRef.current.getAttribute('sandbox');
-                if (sandboxValue) {
-                  newIframe.setAttribute('sandbox', sandboxValue);
-                }
-
-                // Remove old iframe
-                iframeRef.current.remove();
-
-                // Add new iframe
-                newIframe.src = `${currentSandboxData.url}?t=${Date.now()}&recreated=true`;
-                parent?.appendChild(newIframe);
-
-                // Update ref
-                (iframeRef as any).current = newIframe;
-
-                console.log('[applyGeneratedCode] Iframe recreated with new content');
               } else {
-                console.error('[applyGeneratedCode] No iframe or sandbox URL available for refresh');
+                console.error('[applyGeneratedCode] No iframe or sandbox URL available');
+                setIsPreviewRefreshing(false);
               }
-            }, refreshDelay); // Dynamic delay based on whether packages were installed
+            }, refreshDelay);
           }
 
         } else {
@@ -2044,6 +2010,16 @@ Tip: I automatically detect and install npm packages from your code imports (lik
                 sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
               />
             </div>
+
+            {/* Preview refreshing overlay */}
+            {isPreviewRefreshing && (
+              <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-20">
+                <div className="text-center">
+                  <div className="w-10 h-10 mx-auto mb-3 border-3 border-orange-500 border-t-transparent rounded-full animate-spin" />
+                  <p className="text-sm font-medium text-gray-700">Updating preview...</p>
+                </div>
+              </div>
+            )}
 
             {/* Package installation overlay - shows when installing packages or applying code */}
             {codeApplicationState.stage && codeApplicationState.stage !== 'complete' && (
