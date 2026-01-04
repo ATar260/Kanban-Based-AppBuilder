@@ -19,27 +19,6 @@ export function getPrompts(config) {
     });
   }
 
-  if (!config.sandbox) {
-    prompts.push({
-      type: 'list',
-      name: 'sandbox',
-      message: 'Choose your sandbox provider:',
-      choices: [
-        {
-          name: 'E2B - Full-featured development sandboxes',
-          value: 'e2b',
-          short: 'E2B'
-        },
-        {
-          name: 'Vercel - Lightweight ephemeral VMs',
-          value: 'vercel',
-          short: 'Vercel'
-        }
-      ],
-      default: 'e2b'
-    });
-  }
-
   prompts.push({
     type: 'confirm',
     name: 'configureEnv',
@@ -66,19 +45,7 @@ export function getEnvPrompts(provider) {
     }
   });
 
-  if (provider === 'e2b') {
-    prompts.push({
-      type: 'input',
-      name: 'e2bApiKey',
-      message: 'E2B API key:',
-      validate: (input) => {
-        if (!input || input.trim() === '') {
-          return 'E2B API key is required';
-        }
-        return true;
-      }
-    });
-  } else if (provider === 'vercel') {
+  if (provider === 'vercel') {
     prompts.push({
       type: 'list',
       name: 'vercelAuthMethod',

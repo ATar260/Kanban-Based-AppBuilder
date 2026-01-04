@@ -6,14 +6,14 @@ import inquirer from 'inquirer';
 import { getEnvPrompts } from './prompts.js';
 
 export async function installer(config) {
-  const { name, sandbox, path: installPath, skipInstall, dryRun, templatesDir } = config;
+  const { name, path: installPath, skipInstall, dryRun, templatesDir } = config;
   const projectPath = path.join(installPath, name);
 
   if (dryRun) {
     console.log(chalk.blue('\n📋 Dry run - would perform these actions:'));
     console.log(chalk.gray(`  - Create directory: ${projectPath}`));
     console.log(chalk.gray(`  - Copy base template files`));
-    console.log(chalk.gray(`  - Copy ${sandbox}-specific files`));
+    console.log(chalk.gray(`  - Copy vercel-specific files`));
     console.log(chalk.gray(`  - Create .env file`));
     if (!skipInstall) {
       console.log(chalk.gray(`  - Run npm install`));
@@ -48,26 +48,24 @@ export async function installer(config) {
     await copyMainProject(path.dirname(templatesDir), projectPath, sandbox);
   }
 
-  // Copy provider-specific template
-  const providerTemplatePath = path.join(templatesDir, sandbox);
+  // Copy vercel-specific template
+  const providerTemplatePath = path.join(templatesDir, 'vercel');
   if (await fs.pathExists(providerTemplatePath)) {
     await copyTemplate(providerTemplatePath, projectPath);
   }
 
   // Configure environment variables
   if (config.configureEnv) {
-    const envAnswers = await inquirer.prompt(getEnvPrompts(sandbox));
-    await createEnvFile(projectPath, sandbox, envAnswers);
+    const envAnswers = await inquirer.prompt(getEnvPrompts('vercel'));
+    await createEnvFile(projectPath, envAnswers);
   } else {
     // Create .env.example copy
-    await createEnvExample(projectPath, sandbox);
+    await createEnvExample(projectPath);
   }
 
   // Update package.json with project name
   await updatePackageJson(projectPath, name);
 
-  // Update configuration to use the selected sandbox provider
-  await updateAppConfig(projectPath, sandbox);
 
   // Install dependencies
   if (!skipInstall) {
@@ -97,7 +95,7 @@ async function copyTemplate(src, dest) {
   }
 }
 
-async function copyMainProject(mainProjectPath, projectPath, sandbox) {
+async function copyMainProject(mainProjectPath, projectPath) {
   // Copy essential directories and files from the main project
   const itemsToCopy = [
     'app',
@@ -135,31 +133,22 @@ async function copyMainProject(mainProjectPath, projectPath, sandbox) {
   }
 }
 
-async function createEnvFile(projectPath, sandbox, answers) {
+async function createEnvFile(projectPath, answers) {
   let envContent = '# Open Lovable Configuration\n\n';
-  
-  // Sandbox provider
-  envContent += `# Sandbox Provider\n`;
-  envContent += `SANDBOX_PROVIDER=${sandbox}\n\n`;
   
   // Required keys
   envContent += `# REQUIRED - Web scraping for cloning websites\n`;
   envContent += `FIRECRAWL_API_KEY=${answers.firecrawlApiKey || 'your_firecrawl_api_key_here'}\n\n`;
   
-  if (sandbox === 'e2b') {
-    envContent += `# REQUIRED - E2B Sandboxes\n`;
-    envContent += `E2B_API_KEY=${answers.e2bApiKey || 'your_e2b_api_key_here'}\n\n`;
-  } else if (sandbox === 'vercel') {
-    envContent += `# REQUIRED - Vercel Sandboxes\n`;
-    if (answers.vercelAuthMethod === 'oidc') {
-      envContent += `# Using OIDC authentication (automatic in Vercel environment)\n`;
-    } else {
-      envContent += `VERCEL_TEAM_ID=${answers.vercelTeamId || 'your_team_id'}\n`;
-      envContent += `VERCEL_PROJECT_ID=${answers.vercelProjectId || 'your_project_id'}\n`;
-      envContent += `VERCEL_TOKEN=${answers.vercelToken || 'your_access_token'}\n`;
-    }
-    envContent += '\n';
+  envContent += `# REQUIRED - Vercel Sandboxes\n`;
+  if (answers.vercelAuthMethod === 'oidc') {
+    envContent += `# Using OIDC authentication (automatic in Vercel environment)\n`;
+  } else {
+    envContent += `VERCEL_TEAM_ID=${answers.vercelTeamId || 'your_team_id'}\n`;
+    envContent += `VERCEL_PROJECT_ID=${answers.vercelProjectId || 'your_project_id'}\n`;
+    envContent += `VERCEL_TOKEN=${answers.vercelToken || 'your_access_token'}\n`;
   }
+  envContent += '\n';
   
   // Optional AI provider keys
   envContent += `# OPTIONAL - AI Providers\n`;
@@ -192,28 +181,19 @@ async function createEnvFile(projectPath, sandbox, answers) {
   await fs.writeFile(path.join(projectPath, '.env.example'), envContent.replace(/=.+/g, '=your_key_here'));
 }
 
-async function createEnvExample(projectPath, sandbox) {
+async function createEnvExample(projectPath) {
   let envContent = '# Open Lovable Configuration\n\n';
-  
-  envContent += `# Sandbox Provider\n`;
-  envContent += `SANDBOX_PROVIDER=${sandbox}\n\n`;
   
   envContent += `# REQUIRED - Web scraping for cloning websites\n`;
   envContent += `# Get yours at https://firecrawl.dev\n`;
   envContent += `FIRECRAWL_API_KEY=your_firecrawl_api_key_here\n\n`;
   
-  if (sandbox === 'e2b') {
-    envContent += `# REQUIRED - Sandboxes for code execution\n`;
-    envContent += `# Get yours at https://e2b.dev\n`;
-    envContent += `E2B_API_KEY=your_e2b_api_key_here\n\n`;
-  } else if (sandbox === 'vercel') {
-    envContent += `# REQUIRED - Vercel Sandboxes\n`;
-    envContent += `# Option 1: OIDC (automatic in Vercel environment)\n`;
-    envContent += `# Option 2: Personal Access Token\n`;
-    envContent += `VERCEL_TEAM_ID=your_team_id\n`;
-    envContent += `VERCEL_PROJECT_ID=your_project_id\n`;
-    envContent += `VERCEL_TOKEN=your_access_token\n\n`;
-  }
+  envContent += `# REQUIRED - Vercel Sandboxes\n`;
+  envContent += `# Option 1: OIDC (automatic in Vercel environment)\n`;
+  envContent += `# Option 2: Personal Access Token\n`;
+  envContent += `VERCEL_TEAM_ID=your_team_id\n`;
+  envContent += `VERCEL_PROJECT_ID=your_project_id\n`;
+  envContent += `VERCEL_TOKEN=your_access_token\n\n`;
   
   envContent += `# OPTIONAL - AI Providers (need at least one)\n`;
   envContent += `# Get yours at https://console.anthropic.com\n`;
@@ -238,24 +218,3 @@ async function updatePackageJson(projectPath, name) {
   }
 }
 
-async function updateAppConfig(projectPath, sandbox) {
-  const configPath = path.join(projectPath, 'config', 'app.config.ts');
-  
-  if (await fs.pathExists(configPath)) {
-    let content = await fs.readFile(configPath, 'utf-8');
-    
-    // Add sandbox provider configuration
-    const sandboxConfig = `
-  // Sandbox Provider Configuration
-  sandboxProvider: process.env.SANDBOX_PROVIDER || '${sandbox}',
-`;
-    
-    // Insert after the opening of appConfig
-    content = content.replace(
-      'export const appConfig = {',
-      `export const appConfig = {${sandboxConfig}`
-    );
-    
-    await fs.writeFile(configPath, content);
-  }
-}

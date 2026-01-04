@@ -16,9 +16,8 @@ const program = new Command();
 
 program
   .name('create-open-lovable')
-  .description('Create a new Open Lovable project with your choice of sandbox provider')
+  .description('Create a new Open Lovable project')
   .version('1.0.0')
-  .option('-s, --sandbox <provider>', 'Sandbox provider (e2b or vercel)')
   .option('-n, --name <name>', 'Project name')
   .option('-p, --path <path>', 'Installation path (defaults to current directory)')
   .option('--skip-install', 'Skip npm install')
@@ -31,30 +30,18 @@ async function main() {
   console.log(chalk.cyan('\n🚀 Welcome to Open Lovable Setup!\n'));
 
   let config = {
-    sandbox: options.sandbox,
     name: options.name || 'my-open-lovable',
     path: options.path || process.cwd(),
     skipInstall: options.skipInstall || false,
     dryRun: options.dryRun || false
   };
 
-  // Interactive mode if sandbox not specified
-  if (!config.sandbox) {
-    const prompts = getPrompts(config);
-    const answers = await inquirer.prompt(prompts);
-    config = { ...config, ...answers };
-  }
-
-  // Validate sandbox provider
-  if (!['e2b', 'vercel'].includes(config.sandbox)) {
-    console.error(chalk.red(`\n❌ Invalid sandbox provider: ${config.sandbox}`));
-    console.log(chalk.yellow('Valid options: e2b, vercel\n'));
-    process.exit(1);
-  }
+  const prompts = getPrompts(config);
+  const answers = await inquirer.prompt(prompts);
+  config = { ...config, ...answers };
 
   console.log(chalk.gray('\nConfiguration:'));
   console.log(chalk.gray(`  Project: ${config.name}`));
-  console.log(chalk.gray(`  Sandbox: ${config.sandbox}`));
   console.log(chalk.gray(`  Path: ${path.resolve(config.path, config.name)}\n`));
 
   if (config.dryRun) {

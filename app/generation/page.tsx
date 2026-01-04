@@ -425,33 +425,51 @@ Visual Features: ${uiOption.features.join(', ')}`;
     }
   }, [showHomeScreen, homeUrlInput]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-start generation if flagged
+  // Ref to prevent double-triggering of auto-generation (race condition fix)
+  const autoGenerationTriggeredRef = useRef<boolean>(false);
+
+  // CONSOLIDATED: Single auto-start generation effect to prevent race conditions
+  // Previously there were two effects that could both trigger generation
   useEffect(() => {
+    // Guard against double execution
+    if (autoGenerationTriggeredRef.current) {
+      return;
+    }
+
     const autoStart = sessionStorage.getItem('autoStart');
     const promptMode = sessionStorage.getItem('promptMode') === 'true';
     const pendingPrompt = sessionStorage.getItem('pendingBuildPrompt');
 
-    if (autoStart === 'true' && !showHomeScreen) {
-      // Handle prompt mode
+    // Only proceed if we have auto-start flag AND home screen is hidden
+    if (autoStart !== 'true' || showHomeScreen) {
+      return;
+    }
+
+    // Mark as triggered to prevent race condition
+    autoGenerationTriggeredRef.current = true;
+
+    // Clean up session storage immediately
+    sessionStorage.removeItem('autoStart');
+
+    const timer = setTimeout(() => {
       if (promptMode && pendingPrompt) {
-        sessionStorage.removeItem('autoStart');
+        console.log('[generation] Auto-starting generation from prompt');
         sessionStorage.removeItem('promptMode');
         sessionStorage.removeItem('pendingBuildPrompt');
-        setTimeout(() => {
-          console.log('[generation] Auto-starting generation from prompt');
-          startPromptGeneration(pendingPrompt);
-        }, 1000);
+        startPromptGeneration(pendingPrompt);
       } else if (homeUrlInput) {
-        // Handle clone mode
-        sessionStorage.removeItem('autoStart');
-        setTimeout(() => {
-          console.log('[generation] Auto-starting generation for URL:', homeUrlInput);
-          startGeneration();
-        }, 1000);
+        console.log('[generation] Auto-starting generation for URL:', homeUrlInput);
+        startGeneration();
+      } else {
+        // Reset the guard if we didn't actually trigger anything
+        autoGenerationTriggeredRef.current = false;
       }
-    }
-  }, [showHomeScreen, homeUrlInput]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, 1000);
 
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [showHomeScreen, homeUrlInput]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     // Only check sandbox status on mount if we don't already have sandboxData
@@ -498,30 +516,36 @@ Visual Features: ${uiOption.features.join(', ')}`;
     }
   }, [searchParams]);
 
-  // Auto-trigger generation when flag is set (from home page navigation)
+  // Handle shouldAutoGenerate flag (set by initializePage)
+  // This works with the consolidated effect above - if autoStart is already cleared,
+  // this provides a fallback trigger mechanism
   useEffect(() => {
+    if (!shouldAutoGenerate || showHomeScreen || autoGenerationTriggeredRef.current) {
+      return;
+    }
+
     const promptMode = sessionStorage.getItem('promptMode') === 'true';
     const pendingPrompt = sessionStorage.getItem('pendingBuildPrompt');
 
-    if (shouldAutoGenerate && !showHomeScreen) {
-      // Reset the flag
-      setShouldAutoGenerate(false);
+    // Reset the flag
+    setShouldAutoGenerate(false);
+    autoGenerationTriggeredRef.current = true;
 
-      // Trigger generation after a short delay to ensure everything is set up
-      const timer = setTimeout(() => {
-        if (promptMode && pendingPrompt) {
-          console.log('[generation] Auto-triggering generation from prompt');
-          sessionStorage.removeItem('promptMode');
-          sessionStorage.removeItem('pendingBuildPrompt');
-          startPromptGeneration(pendingPrompt);
-        } else if (homeUrlInput) {
-          console.log('[generation] Auto-triggering generation from URL params');
-          startGeneration();
-        }
-      }, 1000);
+    const timer = setTimeout(() => {
+      if (promptMode && pendingPrompt) {
+        console.log('[generation] Auto-triggering generation from prompt (fallback)');
+        sessionStorage.removeItem('promptMode');
+        sessionStorage.removeItem('pendingBuildPrompt');
+        startPromptGeneration(pendingPrompt);
+      } else if (homeUrlInput) {
+        console.log('[generation] Auto-triggering generation from URL params (fallback)');
+        startGeneration();
+      } else {
+        autoGenerationTriggeredRef.current = false;
+      }
+    }, 1000);
 
-      return () => clearTimeout(timer);
-    }
+    return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shouldAutoGenerate, homeUrlInput, showHomeScreen]);
 
@@ -676,7 +700,6 @@ Visual Features: ${uiOption.features.join(', ')}`;
 
   const planBuild = async (prompt: string) => {
     setIsPlanning(true);
-    setActiveTab('kanban');
     kanban.setTickets([]);
 
     try {
@@ -738,8 +761,16 @@ Visual Features: ${uiOption.features.join(', ')}`;
     setKanbanBuildActive(true);
     kanban.setIsPaused(false);
 
+    // Ensure sandbox exists before proceeding
     if (!sandboxData) {
-      await createSandbox(true);
+      const newSandbox = await createSandbox(true);
+      // Critical: Check if sandbox creation actually succeeded
+      if (!newSandbox && !sandboxData) {
+        setKanbanBuildActive(false);
+        addChatMessage('❌ Failed to create sandbox. Please try again or refresh the page.', 'error');
+        console.error('[handleStartKanbanBuild] Sandbox creation failed, aborting build');
+        return;
+      }
     }
 
     await handleContinueKanbanBuild();
@@ -834,11 +865,15 @@ Requirements:
                   const filePath = match[1];
                   const content = match[2];
                   const ext = filePath.split('.').pop() || '';
+                  // Check if THIS file's content block was properly closed
+                  // by looking for </file> immediately after the matched content
+                  const matchEndIndex = match.index + match[0].length;
+                  const hasClosingTag = match[0].includes('</file>');
                   parsedFiles.push({
                     path: filePath,
                     content,
                     type: ext,
-                    completed: content.includes('</file>') || generatedCode.includes(`</file>`)
+                    completed: hasClosingTag
                   });
                 }
                 if (parsedFiles.length > 0) {
@@ -848,7 +883,8 @@ Requirements:
                 generatedCode = data.generatedCode || generatedCode;
               }
             } catch (e) {
-              // Ignore parse errors
+              // Log parse errors for debugging (don't throw - stream may have partial JSON)
+              console.debug('[stream-parse] Partial JSON chunk, continuing...', e);
             }
           }
         }
@@ -877,11 +913,17 @@ Requirements:
         setTimeout(() => setActiveTab('preview'), 1000);
       }
     } catch (error: any) {
+      // Mark as failed with error message for user visibility
       kanban.updateTicketStatus(nextTicket.id, 'failed', error.message);
       setGenerationProgress(prev => ({ ...prev, isGenerating: false, status: `Failed: ${error.message}` }));
 
+      // Show user-friendly error message
+      addChatMessage(`⚠️ Task "${nextTicket.title}" failed: ${error.message}. Continuing with next task...`, 'system');
+
+      // Continue build if not paused - unblock dependents but keep 'failed' status intact
+      // (Previously this called skipTicket which changed status to 'skipped', causing confusion)
       if (!kanban.isPaused) {
-        kanban.skipTicket(nextTicket.id);
+        kanban.unblockDependents(nextTicket.id);  // Allow dependent tasks to proceed
         setTimeout(() => handleContinueKanbanBuild(), 500);
       }
     }
@@ -2141,6 +2183,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
           onSetBuildMode={kanban.setBuildMode}
           buildMode={kanban.buildMode}
           tickets={kanban.tickets}
+          previewUrl={sandboxData?.url}
           chatMessages={chatMessages}
           chatInput={aiChatInput}
           setChatInput={setAiChatInput}
@@ -2526,8 +2569,9 @@ Tip: I automatically detect and install npm packages from your code imports (lik
             }
             // Remove the waiting message
             setChatMessages(prev => prev.filter(msg => msg.content !== 'Waiting for sandbox to be ready...'));
-          } catch {
-            addChatMessage('Sandbox creation failed. Cannot apply code.', 'system');
+          } catch (sandboxError) {
+            console.error('[sendChatMessage] Sandbox creation failed:', sandboxError);
+            addChatMessage('Sandbox creation failed. Cannot apply code.', 'error');
             return;
           }
         }
@@ -4050,6 +4094,93 @@ Focus on the key sections and content, making it clean and modern.`;
                 />
               </div>
             ) : null}
+
+            {(isPlanning || kanban.tickets.length > 0) && hasInitialSubmission && (
+              <div className="flex-1 overflow-y-auto border-b border-border">
+                <div className="p-3 border-b border-gray-100 bg-gray-50 sticky top-0 z-10">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      {isPlanning && (
+                        <div className="w-3 h-3 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
+                      )}
+                      <span className="text-xs font-semibold text-gray-700">
+                        {isPlanning ? 'Planning Build...' : `Build Plan (${kanban.tickets.length} tasks)`}
+                      </span>
+                    </div>
+                    {!isPlanning && kanban.tickets.length > 0 && !kanban.isBuilding && (
+                      <button
+                        onClick={handleStartKanbanBuild}
+                        className="px-2 py-1 text-[10px] font-medium rounded bg-orange-500 text-white hover:bg-orange-600 transition-colors"
+                      >
+                        Start Build
+                      </button>
+                    )}
+                  </div>
+                  {kanban.tickets.length > 0 && (
+                    <div className="mt-2">
+                      <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                        <div 
+                          className="h-full bg-gradient-to-r from-orange-400 to-orange-500 transition-all duration-500"
+                          style={{ width: `${kanban.tickets.length > 0 ? (kanban.tickets.filter(t => t.status === 'done').length / kanban.tickets.length) * 100 : 0}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div className="p-2 space-y-1.5">
+                  {kanban.tickets.map((ticket, idx) => (
+                    <motion.div
+                      key={ticket.id}
+                      initial={{ opacity: 0, x: -10 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: idx * 0.05 }}
+                      className={`p-2.5 rounded-lg border transition-all ${
+                        ticket.status === 'done' ? 'bg-green-50 border-green-200' :
+                        ticket.status === 'generating' ? 'bg-orange-50 border-orange-200' :
+                        ticket.status === 'failed' ? 'bg-red-50 border-red-200' :
+                        'bg-white border-gray-200 hover:border-gray-300'
+                      }`}
+                    >
+                      <div className="flex items-start gap-2">
+                        <span className="text-sm">
+                          {ticket.status === 'done' ? '✅' :
+                           ticket.status === 'generating' ? '⚡' :
+                           ticket.status === 'failed' ? '❌' :
+                           ticket.status === 'backlog' ? '📋' :
+                           ticket.status === 'planning' ? '🎯' : '⏳'}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs font-medium text-gray-800 truncate">{ticket.title}</div>
+                          <div className="text-[10px] text-gray-500 truncate">{ticket.description}</div>
+                          {ticket.status === 'generating' && ticket.progress !== undefined && (
+                            <div className="mt-1.5 w-full h-1 bg-gray-200 rounded-full overflow-hidden">
+                              <div 
+                                className="h-full bg-orange-400 transition-all duration-300"
+                                style={{ width: `${ticket.progress}%` }}
+                              />
+                            </div>
+                          )}
+                        </div>
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${
+                          ticket.type === 'Coder' ? 'bg-blue-100 text-blue-700' :
+                          ticket.type === 'Designer' ? 'bg-purple-100 text-purple-700' :
+                          ticket.type === 'Architect' ? 'bg-amber-100 text-amber-700' :
+                          'bg-gray-100 text-gray-600'
+                        }`}>
+                          {ticket.type}
+                        </span>
+                      </div>
+                    </motion.div>
+                  ))}
+                  {isPlanning && (
+                    <div className="flex items-center gap-2 p-2 text-gray-400">
+                      <div className="w-2 h-2 bg-gray-300 rounded-full animate-pulse" />
+                      <span className="text-[10px]">Analyzing requirements...</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {conversationContext.scrapedWebsites.length > 0 && (
               <div className="p-4 bg-card border-b border-gray-200">
