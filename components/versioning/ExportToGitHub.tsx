@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useSession } from 'next-auth/react';
 import { isGitHubConnected, getGitHubConnection, fetchUserRepos, createRepository, commitFiles } from '@/lib/versioning/github';
 import type { GitHubRepo } from '@/lib/versioning/types';
 
@@ -15,7 +14,6 @@ interface ExportToGitHubProps {
 type ExportMode = 'select' | 'new' | 'existing';
 
 export function ExportToGitHub({ files, onSuccess, onError, className = '' }: ExportToGitHubProps) {
-  const { data: session } = useSession();
   const [isOpen, setIsOpen] = useState(false);
   const [mode, setMode] = useState<ExportMode>('select');
   const [isLoading, setIsLoading] = useState(false);
@@ -24,12 +22,12 @@ export function ExportToGitHub({ files, onSuccess, onError, className = '' }: Ex
   const [newRepoName, setNewRepoName] = useState('');
   const [newRepoPrivate, setNewRepoPrivate] = useState(false);
   const [newRepoDescription, setNewRepoDescription] = useState('');
-  const [commitMessage, setCommitMessage] = useState('Update from Timbs A.I.');
+  const [commitMessage, setCommitMessage] = useState('Update from Paynto A.I.');
   const [branch, setBranch] = useState('main');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const isConnected = isGitHubConnected() || !!session?.user;
+  const isConnected = isGitHubConnected();
   const connection = getGitHubConnection();
 
   useEffect(() => {
@@ -68,7 +66,7 @@ export function ExportToGitHub({ files, onSuccess, onError, className = '' }: Ex
       const result = await commitFiles({
         repoFullName: repo.fullName,
         branch: 'main',
-        message: commitMessage || 'Initial commit from Timbs A.I.',
+        message: commitMessage || 'Initial commit from Paynto A.I.',
         files: files.map(f => ({ path: f.path, content: f.content }))
       });
 
@@ -100,7 +98,7 @@ export function ExportToGitHub({ files, onSuccess, onError, className = '' }: Ex
       const result = await commitFiles({
         repoFullName: selectedRepo.fullName,
         branch: branch || selectedRepo.defaultBranch,
-        message: commitMessage || 'Update from Timbs A.I.',
+        message: commitMessage || 'Update from Paynto A.I.',
         files: files.map(f => ({ path: f.path, content: f.content }))
       });
 
@@ -210,7 +208,7 @@ export function ExportToGitHub({ files, onSuccess, onError, className = '' }: Ex
                       type="text"
                       value={newRepoDescription}
                       onChange={(e) => setNewRepoDescription(e.target.value)}
-                      placeholder="Built with Timbs A.I."
+                      placeholder="Built with Paynto A.I."
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900"
                     />
                   </div>
@@ -232,7 +230,7 @@ export function ExportToGitHub({ files, onSuccess, onError, className = '' }: Ex
                       type="text"
                       value={commitMessage}
                       onChange={(e) => setCommitMessage(e.target.value)}
-                      placeholder="Initial commit from Timbs A.I."
+                      placeholder="Initial commit from Paynto A.I."
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900"
                     />
                   </div>
@@ -313,7 +311,7 @@ export function ExportToGitHub({ files, onSuccess, onError, className = '' }: Ex
                       type="text"
                       value={commitMessage}
                       onChange={(e) => setCommitMessage(e.target.value)}
-                      placeholder="Update from Timbs A.I."
+                      placeholder="Update from Paynto A.I."
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900"
                     />
                   </div>

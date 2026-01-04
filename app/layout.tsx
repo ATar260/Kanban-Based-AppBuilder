@@ -28,7 +28,7 @@ const robotoMono = Roboto_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Timbs A.I.",
+  title: "Paynto A.I.",
   description: "Re-imagine any website in seconds with AI-powered website builder.",
 };
 

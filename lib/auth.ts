@@ -1,10 +1,21 @@
 import { NextAuthOptions } from "next-auth";
 import GitHubProvider from "next-auth/providers/github";
-import { PrismaAdapter } from "@auth/prisma-adapter";
-import { prisma } from "./prisma";
+import { SupabaseAdapter } from "@auth/supabase-adapter";
+import { getGitHubToken as getToken } from "./supabase";
 
-export const authOptions: NextAuthOptions = {
-  adapter: PrismaAdapter(prisma) as any,
+const isAuthConfigured = !!(
+  process.env.GITHUB_CLIENT_ID &&
+  process.env.GITHUB_CLIENT_SECRET &&
+  process.env.NEXTAUTH_SECRET &&
+  process.env.NEXT_PUBLIC_SUPABASE_URL &&
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
+
+export const authOptions: NextAuthOptions = isAuthConfigured ? {
+  adapter: SupabaseAdapter({
+    url: process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    secret: process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  }) as any,
   providers: [
     GitHubProvider({
       clientId: process.env.GITHUB_CLIENT_ID!,
@@ -38,18 +49,9 @@ export const authOptions: NextAuthOptions = {
     strategy: "database",
   },
   secret: process.env.NEXTAUTH_SECRET,
+} : {
+  providers: [],
+  secret: "placeholder-secret-for-build",
 };
 
-export async function getGitHubToken(userId: string): Promise<string | null> {
-  const account = await prisma.account.findFirst({
-    where: {
-      userId,
-      provider: "github",
-    },
-    select: {
-      access_token: true,
-    },
-  });
-
-  return account?.access_token || null;
-}
+export { getToken as getGitHubToken };

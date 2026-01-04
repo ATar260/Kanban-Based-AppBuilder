@@ -6,7 +6,9 @@ interface LoginButtonProps {
   className?: string;
 }
 
-export function LoginButton({ className = "" }: LoginButtonProps) {
+const isAuthEnabled = process.env.NEXT_PUBLIC_AUTH_ENABLED === "true";
+
+function LoginButtonInner({ className = "" }: LoginButtonProps) {
   const { data: session, status } = useSession();
 
   if (status === "loading") {
@@ -32,4 +34,11 @@ export function LoginButton({ className = "" }: LoginButtonProps) {
       Sign in with GitHub
     </button>
   );
+}
+
+export function LoginButton({ className = "" }: LoginButtonProps) {
+  if (!isAuthEnabled) {
+    return null;
+  }
+  return <LoginButtonInner className={className} />;
 }

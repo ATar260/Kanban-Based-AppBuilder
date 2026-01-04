@@ -51,16 +51,16 @@ export const appConfig = {
   // AI Model Configuration
   ai: {
     // Default AI model
-    defaultModel: 'openai/gpt-4.1',
+    defaultModel: 'openai/gpt-5.2',
 
     // Available models
     availableModels: [
-      'openai/gpt-4.1'
+      'openai/gpt-5.2'
     ],
 
     // Model display names
     modelDisplayNames: {
-      'openai/gpt-4.1': 'GPT-4.1'
+      'openai/gpt-5.2': 'GPT-5.2'
     } as Record<string, string>,
 
     // Model API configuration

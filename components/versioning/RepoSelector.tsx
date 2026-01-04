@@ -58,7 +58,7 @@ export function RepoSelector({ projectDescription, onSelect, onCancel }: RepoSel
             const repo = await createRepository(
                 newRepoName.trim(),
                 isPrivate,
-                `Created by Timbs A.I.: ${projectDescription.substring(0, 100)}`
+                `Created by Paynto A.I.: ${projectDescription.substring(0, 100)}`
             );
 
             onSelect(repo, repo.defaultBranch, true);

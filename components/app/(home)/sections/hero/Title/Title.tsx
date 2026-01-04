@@ -257,7 +257,7 @@ export const encryptText = (
 export default function HomeHeroTitle() {
   return (
     <h1 className="text-title-h1 mx-auto text-center [&_span]:text-heat-100 mb-12 lg:mb-16">
-     Timbs <span>A.I.</span>
+     Paynto <span>A.I.</span>
     </h1>
   );
 }

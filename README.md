@@ -1,4 +1,4 @@
-# Timbs A.I. - Open Source AI App Builder
+# Paynto A.I. - Open Source AI App Builder
 
 Build production-ready React applications with AI. Clone websites, generate from prompts, and export to GitHub.
 

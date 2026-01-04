@@ -5,6 +5,8 @@ import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 
+const isAuthEnabled = process.env.NEXT_PUBLIC_AUTH_ENABLED === "true";
+
 interface Project {
   id: string;
   name: string;
@@ -17,8 +19,17 @@ interface Project {
   updatedAt: string;
 }
 
+function useOptionalSession() {
+  try {
+    const session = useSession();
+    return session || { data: null, status: 'unauthenticated' as const };
+  } catch {
+    return { data: null, status: 'unauthenticated' as const };
+  }
+}
+
 export default function DashboardPage() {
-  const { data: session, status } = useSession();
+  const { data: session, status } = useOptionalSession();
   const router = useRouter();
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -28,6 +39,10 @@ export default function DashboardPage() {
   const [isCreating, setIsCreating] = useState(false);
 
   useEffect(() => {
+    if (!isAuthEnabled) {
+      router.push('/generation');
+      return;
+    }
     if (status === 'authenticated') {
       loadProjects();
     } else if (status === 'unauthenticated') {
@@ -104,7 +119,7 @@ export default function DashboardPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <Link href="/" className="text-xl font-bold text-gray-900">
-              Timbs A.I.
+              Paynto A.I.
             </Link>
             <span className="text-gray-300">/</span>
             <span className="text-gray-600">My Projects</span>

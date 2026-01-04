@@ -38,7 +38,7 @@ export default function HomeHero() {
               href="#"
               target="_blank"
             >
-              Powered by Timbs A.I.
+              Powered by Paynto A.I.
             </Link>
           </p>
         </div>

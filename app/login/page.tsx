@@ -4,18 +4,44 @@ import { signIn, useSession } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, Suspense } from "react";
 
+const isAuthEnabled = process.env.NEXT_PUBLIC_AUTH_ENABLED === "true";
+
+function useOptionalSession() {
+  try {
+    const session = useSession();
+    return session || { data: null, status: 'unauthenticated' as const };
+  } catch {
+    return { data: null, status: 'unauthenticated' as const };
+  }
+}
+
 function LoginContent() {
-  const { data: session, status } = useSession();
+  const { data: session, status } = useOptionalSession();
   const router = useRouter();
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get("callbackUrl") || "/generation";
   const error = searchParams.get("error");
 
   useEffect(() => {
+    if (!isAuthEnabled) {
+      router.push("/generation");
+      return;
+    }
     if (session) {
       router.push(callbackUrl);
     }
   }, [session, router, callbackUrl]);
+
+  if (!isAuthEnabled) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <p className="text-gray-600 mb-4">Authentication is not configured.</p>
+          <a href="/generation" className="text-blue-600 hover:underline">Go to app</a>
+        </div>
+      </div>
+    );
+  }
 
   if (status === "loading") {
     return (
@@ -31,7 +57,7 @@ function LoginContent() {
         <div className="bg-white rounded-2xl shadow-xl p-8">
           <div className="text-center mb-8">
             <h1 className="text-2xl font-bold text-gray-900 mb-2">
-              Welcome to Timbs A.I.
+              Welcome to Paynto A.I.
             </h1>
             <p className="text-gray-600">
               Sign in to save your projects and sync with GitHub

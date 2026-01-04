@@ -1,36 +1,49 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { prisma } from '@/lib/prisma';
+import { supabaseAdmin, Database } from '@/lib/supabase';
 import { projectSchema, validateAndParse } from '@/lib/api-validation';
+
+type Project = Database['public']['Tables']['projects']['Row'];
 
 export async function GET() {
   try {
+    if (!supabaseAdmin) {
+      return NextResponse.json({ error: 'Database not configured' }, { status: 503 });
+    }
+
     const session = await getServerSession(authOptions);
     
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const projects = await prisma.project.findMany({
-      where: { userId: session.user.id },
-      orderBy: { updatedAt: 'desc' },
-      select: {
-        id: true,
-        name: true,
-        description: true,
-        sandboxId: true,
-        sandboxUrl: true,
-        mode: true,
-        sourceUrl: true,
-        createdAt: true,
-        updatedAt: true,
-        githubRepo: true,
-        githubBranch: true,
-      },
-    });
+    const { data: projects, error } = await (supabaseAdmin as any)
+      .from('projects')
+      .select('id, name, description, sandbox_id, sandbox_url, mode, source_url, created_at, updated_at, github_repo, github_branch')
+      .eq('user_id', session.user.id)
+      .order('updated_at', { ascending: false });
 
-    return NextResponse.json({ projects });
+    if (error) {
+      console.error('[Projects API] Error:', error);
+      return NextResponse.json({ error: 'Failed to fetch projects' }, { status: 500 });
+    }
+
+    const formattedProjects = (projects as Project[] | null)?.map(p => ({
+      id: p.id,
+      name: p.name,
+      description: p.description,
+      sandboxId: p.sandbox_id,
+      sandboxUrl: p.sandbox_url,
+      mode: p.mode,
+      sourceUrl: p.source_url,
+      createdAt: p.created_at,
+      updatedAt: p.updated_at,
+      githubRepo: p.github_repo,
+      githubBranch: p.github_branch,
+    }));
+
+    return NextResponse.json({ projects: formattedProjects });
   } catch (error: any) {
     console.error('[Projects API] Error:', error);
     return NextResponse.json({ error: 'Failed to fetch projects' }, { status: 500 });
@@ -39,6 +52,10 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
+    if (!supabaseAdmin) {
+      return NextResponse.json({ error: 'Database not configured' }, { status: 503 });
+    }
+
     const session = await getServerSession(authOptions);
     
     if (!session?.user?.id) {
@@ -59,26 +76,47 @@ export async function POST(request: NextRequest) {
 
     const { name, description, sandboxId, sandboxUrl, mode, sourceUrl } = validation.data;
 
-    const project = await prisma.project.create({
-      data: {
-        userId: session.user.id,
+    const { data, error } = await (supabaseAdmin as any)
+      .from('projects')
+      .insert({
+        user_id: session.user.id,
         name,
         description: description || null,
-        sandboxId: sandboxId || null,
-        sandboxUrl: sandboxUrl || null,
+        sandbox_id: sandboxId || null,
+        sandbox_url: sandboxUrl || null,
         mode: mode || 'prompt',
-        sourceUrl: sourceUrl || null,
-      },
-    });
+        source_url: sourceUrl || null,
+      })
+      .select()
+      .single();
 
-    return NextResponse.json({ project }, { status: 201 });
+    if (error) {
+      console.error('[Projects API] Error creating project:', error);
+      
+      if (error.code === '23505') {
+        return NextResponse.json({ error: 'Project with this name already exists' }, { status: 409 });
+      }
+      
+      return NextResponse.json({ error: 'Failed to create project' }, { status: 500 });
+    }
+
+    const project = data as Project;
+
+    return NextResponse.json({ 
+      project: {
+        id: project.id,
+        name: project.name,
+        description: project.description,
+        sandboxId: project.sandbox_id,
+        sandboxUrl: project.sandbox_url,
+        mode: project.mode,
+        sourceUrl: project.source_url,
+        createdAt: project.created_at,
+        updatedAt: project.updated_at,
+      }
+    }, { status: 201 });
   } catch (error: any) {
     console.error('[Projects API] Error creating project:', error);
-    
-    if (error.code === 'P2002') {
-      return NextResponse.json({ error: 'Project with this name already exists' }, { status: 409 });
-    }
-    
     return NextResponse.json({ error: 'Failed to create project' }, { status: 500 });
   }
 }

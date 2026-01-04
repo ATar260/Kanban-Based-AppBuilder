@@ -21,7 +21,7 @@ export default function HeaderDropdownStories() {
       <Replit />
 
       <div className="text-title-h5 mt-31 pr-32">
-        How teams use <span className="text-heat-100">Timbs A.I.</span> to
+        How teams use <span className="text-heat-100">Paynto A.I.</span> to
         power their apps
       </div>
 

@@ -87,7 +87,7 @@ export async function POST(request: NextRequest) {
             },
             body: JSON.stringify({
                 name: body.name,
-                description: body.description || 'Created by Timbs A.I.',
+                description: body.description || 'Created by Paynto A.I.',
                 private: body.private || false,
                 auto_init: body.auto_init !== false, // Default to true
             }),

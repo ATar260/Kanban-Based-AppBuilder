@@ -1,4 +1,4 @@
-# Timbs A.I. Design System Rules
+# Paynto A.I. Design System Rules
 
 When working with the fire-inspired design system:
 

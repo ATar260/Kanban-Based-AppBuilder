@@ -3,7 +3,9 @@
 import { useSession, signOut } from "next-auth/react";
 import { useState, useRef, useEffect } from "react";
 
-export function UserMenu() {
+const isAuthEnabled = process.env.NEXT_PUBLIC_AUTH_ENABLED === "true";
+
+function UserMenuInner() {
   const { data: session, status } = useSession();
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -64,4 +66,11 @@ export function UserMenu() {
       )}
     </div>
   );
+}
+
+export function UserMenu() {
+  if (!isAuthEnabled) {
+    return null;
+  }
+  return <UserMenuInner />;
 }

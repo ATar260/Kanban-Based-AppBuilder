@@ -1997,7 +1997,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
                 ref={iframeRef}
                 src={sandboxData.url}
                 className="w-full h-full border-none bg-white"
-                title="Timbs A.I. Sandbox"
+                title="Paynto A.I. Sandbox"
                 allow="clipboard-write"
                 sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
               />
