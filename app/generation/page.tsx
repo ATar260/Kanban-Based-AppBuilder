@@ -337,17 +337,18 @@ Visual Features: ${uiOption.features.join(', ')}`;
 
       setLoading(true);
       try {
+        // Always create a fresh sandbox - old sandbox IDs in URL are likely expired
         if (sandboxIdParam) {
-          console.log('[home] Attempting to restore sandbox:', sandboxIdParam);
-          // For now, just create a new sandbox - you could enhance this to actually restore
-          // the specific sandbox if your backend supports it
-          sandboxCreated = true;
-          await createSandbox(true);
-        } else {
-          console.log('[home] No sandbox in URL, creating new sandbox automatically...');
-          sandboxCreated = true;
-          await createSandbox(true);
+          console.log('[home] Found sandbox ID in URL, but creating fresh sandbox (old ones expire)');
+          // Clear the old sandbox ID from URL
+          const newParams = new URLSearchParams(searchParams.toString());
+          newParams.delete('sandbox');
+          window.history.replaceState({}, '', `/generation?${newParams.toString()}`);
         }
+        
+        console.log('[home] Creating new sandbox...');
+        sandboxCreated = true;
+        await createSandbox(true);
 
         // If we have a URL from the home page, mark for automatic start
         if (storedUrl && isMounted) {
@@ -669,6 +670,12 @@ Visual Features: ${uiOption.features.join(', ')}`;
         console.log('[checkSandboxStatus] Sandbox stopped, clearing state and creating new one');
         setSandboxData(null);
         updateStatus('Sandbox stopped - creating new one...', false);
+        
+        // Clear old sandbox ID from URL
+        const newParams = new URLSearchParams(searchParams.toString());
+        newParams.delete('sandbox');
+        router.replace(`/generation?${newParams.toString()}`, { scroll: false });
+        
         await createSandbox(true);
         return;
       }
