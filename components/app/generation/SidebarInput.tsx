@@ -209,7 +209,7 @@ export default function SidebarInput({ onSubmit, onPromptSubmit, disabled = fals
                   : "bg-gray-100 text-gray-400 cursor-not-allowed"
               }`}
             >
-              {disabled ? "Building..." : "Start Building"}
+              {disabled ? "Planning..." : "Start Building"}
             </button>
           </div>
 
@@ -335,7 +335,7 @@ export default function SidebarInput({ onSubmit, onPromptSubmit, disabled = fals
                     : "bg-gray-100 text-gray-400 cursor-not-allowed"
                 }`}
               >
-                {disabled ? "Cloning..." : "Clone Website"}
+                {disabled ? "Planning..." : "Clone Website"}
               </button>
             </div>
           )}

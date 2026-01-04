@@ -832,7 +832,6 @@ Requirements:
         streamedCode: '',
         files: [],
       }));
-      setActiveTab('generation');
 
       // Start build tracker
       buildTracker.startBuild(`Building ${backlogTickets.length} features`);
@@ -915,7 +914,6 @@ Requirements:
 
       setKanbanBuildActive(false);
       setGenerationProgress(prev => ({ ...prev, isGenerating: false, status: 'Build complete' }));
-      setTimeout(() => setActiveTab('preview'), 1000);
 
     } catch (error: any) {
       buildTracker.markFailed(error.message);
@@ -4181,7 +4179,7 @@ Focus on the key sections and content, making it clean and modern.`;
               </div>
             )}
 
-            {conversationContext.scrapedWebsites.length > 0 && (
+            {conversationContext.scrapedWebsites.length > 0 && !hasInitialSubmission && (
               <div className="p-4 bg-card border-b border-gray-200">
                 <div className="flex flex-col gap-4">
                   {conversationContext.scrapedWebsites.map((site, idx) => {
@@ -4264,6 +4262,7 @@ Focus on the key sections and content, making it clean and modern.`;
               </div>
             )}
 
+            {!hasInitialSubmission && (
             <div
               className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 scrollbar-hide bg-gray-50"
               ref={chatMessagesRef}>
@@ -4653,6 +4652,7 @@ Focus on the key sections and content, making it clean and modern.`;
                 </div>
               )}
             </div>
+            )}
 
             {/* Suggested follow-up actions after generation */}
             {!generationProgress.isGenerating && generationProgress.files.length > 0 && !aiChatInput && (
