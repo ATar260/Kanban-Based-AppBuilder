@@ -2,11 +2,12 @@ import { NextResponse } from 'next/server';
 import { sandboxManager } from '@/lib/sandbox/sandbox-manager';
 import { parseJavaScriptFile, buildComponentTree } from '@/lib/file-parser';
 import { FileManifest, FileInfo, RouteInfo } from '@/types/file-manifest';
+import type { SandboxState } from '@/types/sandbox';
 // SandboxState type used implicitly through global.sandboxState
 
 declare global {
   var activeSandboxProvider: any;
-  var sandboxState: any;
+  var sandboxState: SandboxState;
 }
 
 export async function GET() {
