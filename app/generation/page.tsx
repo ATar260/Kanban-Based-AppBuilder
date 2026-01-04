@@ -4062,6 +4062,7 @@ Focus on the key sections and content, making it clean and modern.`;
               </svg>
             </button>
             <div className="border-l border-gray-200 h-6 mx-1" />
+            <GitHubConnectButton className="text-sm" />
             <LoginButton className="text-sm" />
             <UserMenu />
             {versioning.saveStatus.local !== 'idle' && (
