@@ -901,6 +901,9 @@ Requirements:
       });
       setGenerationProgress(prev => ({ ...prev, status: 'Applying code...' }));
 
+      // Switch to preview as soon as we start applying code
+      setActiveTab('preview');
+
       await applyGeneratedCode(generatedCode, false);
 
       // Mark all as done
