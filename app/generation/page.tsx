@@ -2144,7 +2144,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
           onPauseBuild={() => kanban.setIsPaused(true)}
           onResumeBuild={() => {
             kanban.setIsPaused(false);
-            handleContinueKanbanBuild();
+            handleStartKanbanBuild();
           }}
           onEditTicket={kanban.editTicket}
           onSkipTicket={kanban.skipTicket}
@@ -4084,7 +4084,7 @@ Focus on the key sections and content, making it clean and modern.`;
                         {isPlanning ? 'Planning Build...' : `Build Plan (${kanban.tickets.length} tasks)`}
                       </span>
                     </div>
-                    {!isPlanning && kanban.tickets.length > 0 && !kanban.isBuilding && (
+                    {!isPlanning && kanban.tickets.length > 0 && !kanbanBuildActive && (
                       <button
                         onClick={handleStartKanbanBuild}
                         className="px-2 py-1 text-[10px] font-medium rounded bg-orange-500 text-white hover:bg-orange-600 transition-colors"
@@ -4139,9 +4139,11 @@ Focus on the key sections and content, making it clean and modern.`;
                           )}
                         </div>
                         <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${
-                          ticket.type === 'Coder' ? 'bg-blue-100 text-blue-700' :
-                          ticket.type === 'Designer' ? 'bg-purple-100 text-purple-700' :
-                          ticket.type === 'Architect' ? 'bg-amber-100 text-amber-700' :
+                          ticket.type === 'component' ? 'bg-blue-100 text-blue-700' :
+                          ticket.type === 'feature' ? 'bg-green-100 text-green-700' :
+                          ticket.type === 'layout' ? 'bg-purple-100 text-purple-700' :
+                          ticket.type === 'styling' ? 'bg-pink-100 text-pink-700' :
+                          ticket.type === 'integration' ? 'bg-amber-100 text-amber-700' :
                           'bg-gray-100 text-gray-600'
                         }`}>
                           {ticket.type}
