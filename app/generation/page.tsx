@@ -2,10 +2,10 @@
 
 import { useState, useEffect, useRef, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import Image from 'next/image';
 import { appConfig } from '@/config/app.config';
-import HeroInput from '@/components/HeroInput';
-import SidebarInput from '@/components/app/generation/SidebarInput';
+import type { GenerationComposerMode } from '@/components/app/generation/GenerationComposer';
+import GenerationLeftPanel from '@/components/app/generation/GenerationLeftPanel';
+import type { ConversationContext, GenerationChatMessage, GenerationProgressState, SandboxData, ScrapeData } from '@/types/generation';
 import HeaderBrandKit from '@/components/shared/header/BrandKit/BrandKit';
 import { HeaderProvider } from '@/components/shared/header/HeaderContext';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -23,47 +23,15 @@ import {
   SiJson
 } from '@/lib/icons';
 import { motion } from 'framer-motion';
-import CodeApplicationProgress, { type CodeApplicationState } from '@/components/CodeApplicationProgress';
+import { type CodeApplicationState } from '@/components/CodeApplicationProgress';
 import { KanbanBoard, useKanbanBoard, KanbanTicket as KanbanTicketType, BuildPlan, TicketStatus } from '@/components/kanban';
 import { useVersioning } from '@/hooks/useVersioning';
 import { GitHubConnectButton, VersionHistoryPanel, SaveStatusIndicator } from '@/components/versioning';
 import { saveGitHubConnection } from '@/lib/versioning/github';
 import { useBuildTracker } from '@/hooks/useBuildTracker';
 import { UserMenu, LoginButton } from '@/components/auth';
-
-interface SandboxData {
-  sandboxId: string;
-  url: string;
-  [key: string]: any;
-}
-
-interface ChatMessage {
-  content: string;
-  type: 'user' | 'ai' | 'system' | 'file-update' | 'command' | 'error';
-  timestamp: Date;
-  metadata?: {
-    scrapedUrl?: string;
-    scrapedContent?: any;
-    generatedCode?: string;
-    appliedFiles?: string[];
-    commandType?: 'input' | 'output' | 'error' | 'success';
-    brandingData?: any;
-    sourceUrl?: string;
-  };
-}
-
-interface ScrapeData {
-  success: boolean;
-  content?: string;
-  url?: string;
-  title?: string;
-  source?: string;
-  screenshot?: string;
-  structured?: any;
-  metadata?: any;
-  message?: string;
-  error?: string;
-}
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/shadcn/dialog';
+import Button from '@/components/ui/shadcn/button';
 
 function AISandboxPage() {
   const [sandboxData, setSandboxData] = useState<SandboxData | null>(null);
@@ -72,8 +40,11 @@ function AISandboxPage() {
   const [responseArea, setResponseArea] = useState<string[]>([]);
   const [structureContent, setStructureContent] = useState('No sandbox created yet');
   const [promptInput, setPromptInput] = useState('');
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatMessages, setChatMessages] = useState<GenerationChatMessage[]>([]);
   const [aiChatInput, setAiChatInput] = useState('');
+  const [composerMode, setComposerMode] = useState<GenerationComposerMode>('build');
+  const [buildPromptDraft, setBuildPromptDraft] = useState('');
+  const [cloneUrlDraft, setCloneUrlDraft] = useState('');
   const [aiEnabled] = useState(true);
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -90,7 +61,7 @@ function AISandboxPage() {
   const [homeScreenFading, setHomeScreenFading] = useState(false);
   const [homeUrlInput, setHomeUrlInput] = useState('');
   const [homeContextInput, setHomeContextInput] = useState('');
-  const [activeTab, setActiveTab] = useState<'generation' | 'preview' | 'kanban'>('kanban');
+  const [activeTab, setActiveTab] = useState<'code' | 'preview' | 'kanban'>('kanban');
   const [showStyleSelector, setShowStyleSelector] = useState(false);
   const [selectedStyle, setSelectedStyle] = useState<string | null>(null);
   const [showLoadingBackground, setShowLoadingBackground] = useState(false);
@@ -112,6 +83,12 @@ function AISandboxPage() {
   const [isFullscreenPreview, setIsFullscreenPreview] = useState(false);
   const [sandboxRetryCount, setSandboxRetryCount] = useState(0);
   const [showCopiedToast, setShowCopiedToast] = useState(false);
+  const [logsOpen, setLogsOpen] = useState(false);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [logsError, setLogsError] = useState<string | null>(null);
+  const [sandboxLogs, setSandboxLogs] = useState<string[]>([]);
+  const [newBuildConfirmOpen, setNewBuildConfirmOpen] = useState(false);
+  const [newBuildBusy, setNewBuildBusy] = useState(false);
   const [fileStructure, setFileStructure] = useState<string>('');
   const [isPlanning, setIsPlanning] = useState(false);
   const [kanbanBuildActive, setKanbanBuildActive] = useState(false);
@@ -131,19 +108,20 @@ function AISandboxPage() {
   const versioning = useVersioning({ enableAutoSave: true, autoSaveInterval: 5 * 60 * 1000 });
   const [showVersionHistory, setShowVersionHistory] = useState(false);
 
-  const [conversationContext, setConversationContext] = useState<{
-    scrapedWebsites: Array<{ url: string; content: any; timestamp: Date }>;
-    generatedComponents: Array<{ name: string; path: string; content: string }>;
-    appliedCode: Array<{ files: string[]; timestamp: Date }>;
-    currentProject: string;
-    lastGeneratedCode?: string;
-  }>({
+  const [conversationContext, setConversationContext] = useState<ConversationContext>({
     scrapedWebsites: [],
     generatedComponents: [],
     appliedCode: [],
     currentProject: '',
     lastGeneratedCode: undefined
   });
+
+  // Once we have applied code, default the unified composer into Edit mode.
+  useEffect(() => {
+    if (conversationContext.appliedCode.length > 0) {
+      setComposerMode('edit');
+    }
+  }, [conversationContext.appliedCode.length]);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const chatMessagesRef = useRef<HTMLDivElement>(null);
@@ -153,21 +131,7 @@ function AISandboxPage() {
     stage: null
   });
 
-  const [generationProgress, setGenerationProgress] = useState<{
-    isGenerating: boolean;
-    status: string;
-    components: Array<{ name: string; path: string; completed: boolean }>;
-    currentComponent: number;
-    streamedCode: string;
-    isStreaming: boolean;
-    isThinking: boolean;
-    thinkingText?: string;
-    thinkingDuration?: number;
-    currentFile?: { path: string; content: string; type: string };
-    files: Array<{ path: string; content: string; type: string; completed: boolean; edited?: boolean }>;
-    lastProcessedPosition: number;
-    isEdit?: boolean;
-  }>({
+  const [generationProgress, setGenerationProgress] = useState<GenerationProgressState>({
     isGenerating: false,
     status: '',
     components: [],
@@ -606,7 +570,7 @@ Visual Features: ${uiOption.features.join(', ')}`;
     setResponseArea(prev => [...prev, `[${type}] ${message}`]);
   };
 
-  const addChatMessage = (content: string, type: ChatMessage['type'], metadata?: ChatMessage['metadata']) => {
+  const addChatMessage = (content: string, type: GenerationChatMessage['type'], metadata?: GenerationChatMessage['metadata']) => {
     setChatMessages(prev => {
       // Skip duplicate consecutive system messages
       if (type === 'system' && prev.length > 0) {
@@ -764,6 +728,7 @@ Visual Features: ${uiOption.features.join(', ')}`;
   const planBuild = async (prompt: string) => {
     setIsPlanning(true);
     kanban.setTickets([]);
+    kanban.setPlan(null);
 
     try {
       const response = await fetch('/api/plan-build', {
@@ -806,6 +771,42 @@ Visual Features: ${uiOption.features.join(', ')}`;
     } finally {
       setIsPlanning(false);
     }
+  };
+
+  const handleComposerSubmit = async (mode: GenerationComposerMode) => {
+    // Keep the UI focused on the plan as soon as a user starts a new build/clone.
+    if (mode === 'build') {
+      const prompt = buildPromptDraft.trim();
+      if (!prompt) return;
+      setHasInitialSubmission(true);
+      setComposerMode('build');
+      setActiveTab('kanban');
+      await planBuild(prompt);
+      setBuildPromptDraft('');
+      return;
+    }
+
+    if (mode === 'clone') {
+      let url = cloneUrlDraft.trim();
+      if (!url) return;
+      if (!/^https?:\/\//i.test(url)) {
+        url = `https://${url}`;
+      }
+
+      setHasInitialSubmission(true);
+      setComposerMode('clone');
+      setActiveTab('kanban');
+
+      const prompt = `Clone and recreate the website at ${url}. Style preference: Minimalist.`;
+      await planBuild(prompt);
+      setCloneUrlDraft('');
+      return;
+    }
+
+    // Edit mode – reuse the existing generation/apply pipeline.
+    if (!aiChatInput.trim()) return;
+    setHasInitialSubmission(true);
+    await sendChatMessage();
   };
 
   const handleStartKanbanBuild = async () => {
@@ -1554,6 +1555,47 @@ Tip: I automatically detect and install npm packages from your code imports (lik
     }
   };
 
+  const fetchSandboxLogs = async () => {
+    setLogsLoading(true);
+    setLogsError(null);
+    try {
+      const response = await fetch('/api/sandbox-logs', { method: 'GET' });
+      const data = await response.json();
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || `Failed to fetch logs (HTTP ${response.status})`);
+      }
+
+      setSandboxLogs(Array.isArray(data.logs) ? data.logs : []);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Unknown error';
+      setLogsError(message);
+      setSandboxLogs([]);
+    } finally {
+      setLogsLoading(false);
+    }
+  };
+
+  const openLogs = async () => {
+    setLogsOpen(true);
+    await fetchSandboxLogs();
+  };
+
+  const copyLogsToClipboard = async () => {
+    try {
+      await navigator.clipboard.writeText((sandboxLogs || []).join('\n'));
+    } catch {
+      // fallback best-effort
+      const text = (sandboxLogs || []).join('\n');
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+    }
+  };
+
   const applyCode = async () => {
     const code = promptInput.trim();
     if (!code) {
@@ -1570,7 +1612,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
   };
 
   const renderMainContent = () => {
-    if (activeTab === 'generation' && (generationProgress.isGenerating || generationProgress.files.length > 0)) {
+    if (activeTab === 'code' && (generationProgress.isGenerating || generationProgress.files.length > 0)) {
       return (
         /* Generation Tab Content */
         <div className="absolute inset-0 flex overflow-hidden">
@@ -2193,7 +2235,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
             </div>
           ) : (
             <div className="text-gray-500 text-center">
-              <p className="text-sm">Start chatting to create your first app</p>
+              <p className="text-sm">Use Build, Clone, or Edit to get started</p>
             </div>
           )}
         </div>
@@ -2800,6 +2842,93 @@ Tip: I automatically detect and install npm packages from your code imports (lik
     }]);
   };
 
+  const startNewBuild = async () => {
+    if (newBuildBusy) return;
+    setNewBuildBusy(true);
+    setNewBuildConfirmOpen(false);
+
+    try {
+      await fetch('/api/conversation-state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'reset' })
+      });
+    } catch (e) {
+      console.warn('[startNewBuild] Failed to reset server conversation state:', e);
+    }
+
+    buildTracker.stopTracking();
+
+    // Reset planner/build state
+    setHasInitialSubmission(false);
+    setIsPlanning(false);
+    setKanbanBuildActive(false);
+    setActiveTab('kanban');
+    kanban.setIsPaused(false);
+    kanban.setCurrentTicketId(null);
+    kanban.setTickets([]);
+    kanban.setPlan(null);
+
+    // Reset unified composer
+    setComposerMode('build');
+    setBuildPromptDraft('');
+    setCloneUrlDraft('');
+    setAiChatInput('');
+
+    // Reset activity + generation state
+    setChatMessages([{
+      content: 'New build started. Describe what you want to build.',
+      type: 'system',
+      timestamp: new Date()
+    }]);
+    setConversationContext({
+      scrapedWebsites: [],
+      generatedComponents: [],
+      appliedCode: [],
+      currentProject: '',
+      lastGeneratedCode: undefined
+    });
+    setPromptInput('');
+    setGenerationProgress({
+      isGenerating: false,
+      status: '',
+      components: [],
+      currentComponent: 0,
+      streamedCode: '',
+      isStreaming: false,
+      isThinking: false,
+      files: [],
+      lastProcessedPosition: 0
+    });
+    setCodeApplicationState({ stage: null });
+
+    // Reset explorer cache
+    setSandboxFiles({});
+    setFileStructure('');
+    setSelectedFile(null);
+    setExpandedFolders(new Set(['app', 'src', 'src/components']));
+
+    // Reset misc UI state
+    setLoadingStage(null);
+    setIsStartingNewGeneration(false);
+    setScreenshotError(null);
+    setIsPreparingDesign(false);
+    setUrlStatus([]);
+
+    // Clear any pending auto-start flags
+    try {
+      sessionStorage.removeItem('autoStart');
+      sessionStorage.removeItem('promptMode');
+      sessionStorage.removeItem('pendingBuildPrompt');
+      sessionStorage.removeItem('websiteScreenshot');
+      sessionStorage.removeItem('buildFromPrompt');
+      sessionStorage.removeItem('buildPrompt');
+      sessionStorage.removeItem('selectedUIOption');
+    } catch {}
+
+    setNewBuildBusy(false);
+  };
+
   const cloneWebsite = async () => {
     let url = urlInput.trim();
     if (!url) {
@@ -2841,7 +2970,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
       addChatMessage(`Scraped ${scrapeData.content.length} characters from ${url}`, 'system');
 
       setIsPreparingDesign(false);
-      setActiveTab('generation');
+      setActiveTab('code');
 
       setConversationContext(prev => ({
         ...prev,
@@ -2923,7 +3052,7 @@ Focus on the key sections and content, making it clean and modern while preservi
         lastProcessedPosition: 0
       }));
 
-      setActiveTab('generation');
+      setActiveTab('code');
 
       const aiResponse = await fetch('/api/generate-ai-code-stream', {
         method: 'POST',
@@ -3179,7 +3308,7 @@ Focus on the key sections and content, making it clean and modern while preservi
       }
 
       setLoadingStage('generating');
-      setActiveTab('generation');
+      setActiveTab('code');
 
       // Build the prompt for AI
       const prompt = `Create a complete React application based on this description:
@@ -3544,7 +3673,7 @@ IMPORTANT INSTRUCTIONS:
         // Brief pause before switching to generation tab
         setTimeout(() => {
           setLoadingStage('generating');
-          setActiveTab('generation');
+          setActiveTab('code');
         }, 1500);
 
         // Build the appropriate prompt based on mode
@@ -4069,6 +4198,22 @@ Focus on the key sections and content, making it clean and modern.`;
               ))}
             </select>
             <button
+              onClick={() => setNewBuildConfirmOpen(true)}
+              className="px-3 py-2 rounded-lg transition-colors bg-gray-50 border border-gray-200 text-gray-700 hover:bg-gray-100"
+              title="New build"
+              disabled={newBuildBusy}
+            >
+              <div className="flex items-center gap-2">
+                <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v6h6" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 20v-6h-6" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 8a8 8 0 00-14.5-3.5L4 10" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16a8 8 0 0014.5 3.5L20 14" />
+                </svg>
+                <span className="text-sm font-medium hidden sm:inline">New build</span>
+              </div>
+            </button>
+            <button
               onClick={() => createSandbox()}
               className="p-2 rounded-lg transition-colors bg-gray-50 border border-gray-200 text-gray-700 hover:bg-gray-100"
               title="Create new sandbox"
@@ -4117,628 +4262,30 @@ Focus on the key sections and content, making it clean and modern.`;
         </div>
 
         <div className="flex-1 flex overflow-hidden">
-          {/* Center Panel - AI Chat (1/3 of remaining width) */}
-          <div className="w-[320px] flex-none flex flex-col border-r border-border bg-white">
-            {/* Sidebar Input Component */}
-            {!hasInitialSubmission ? (
-              <div className="p-4 border-b border-border">
-                <SidebarInput
-                  onSubmit={async (url, style, model, instructions) => {
-                    setHasInitialSubmission(true);
-                    setAiModel(model);
-                    // Create a plan from the clone URL request
-                    const prompt = `Clone and recreate the website at ${url}. ${instructions ? `Additional instructions: ${instructions}` : ''} Style preference: ${style}`;
-                    await planBuild(prompt);
-                  }}
-                  onPromptSubmit={async (prompt, model) => {
-                    setHasInitialSubmission(true);
-                    setAiModel(model);
-                    // Create a plan from the prompt
-                    await planBuild(prompt);
-                  }}
-                  disabled={loading || generationProgress.isGenerating || isPlanning}
-                />
-              </div>
-            ) : null}
-
-            {(isPlanning || kanban.tickets.length > 0) && hasInitialSubmission && (
-              <div className="flex-1 overflow-y-auto border-b border-border">
-                <div className="p-3 border-b border-gray-100 bg-gray-50 sticky top-0 z-10">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      {isPlanning && (
-                        <div className="w-3 h-3 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
-                      )}
-                      <span className="text-xs font-semibold text-gray-700">
-                        {isPlanning ? 'Planning Build...' : `Build Plan (${kanban.tickets.length} tasks)`}
-                      </span>
-                    </div>
-                    {!isPlanning && kanban.tickets.length > 0 && !kanbanBuildActive && (
-                      <button
-                        onClick={handleStartKanbanBuild}
-                        className="px-2 py-1 text-[10px] font-medium rounded bg-orange-500 text-white hover:bg-orange-600 transition-colors"
-                      >
-                        Start Build
-                      </button>
-                    )}
-                  </div>
-                  {kanban.tickets.length > 0 && (
-                    <div className="mt-2">
-                      <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden">
-                        <div 
-                          className="h-full bg-gradient-to-r from-orange-400 to-orange-500 transition-all duration-500"
-                          style={{ width: `${kanban.tickets.length > 0 ? (kanban.tickets.filter(t => t.status === 'done').length / kanban.tickets.length) * 100 : 0}%` }}
-                        />
-                      </div>
-                    </div>
-                  )}
-                </div>
-                <div className="p-2 space-y-1.5">
-                  {kanban.tickets.map((ticket, idx) => (
-                    <motion.div
-                      key={ticket.id}
-                      initial={{ opacity: 0, x: -10 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: idx * 0.05 }}
-                      className={`p-2.5 rounded-lg border transition-all ${
-                        ticket.status === 'done' ? 'bg-green-50 border-green-200' :
-                        ticket.status === 'generating' ? 'bg-orange-50 border-orange-200' :
-                        ticket.status === 'failed' ? 'bg-red-50 border-red-200' :
-                        'bg-white border-gray-200 hover:border-gray-300'
-                      }`}
-                    >
-                      <div className="flex items-start gap-2">
-                        <span className="text-sm">
-                          {ticket.status === 'done' ? '✅' :
-                           ticket.status === 'generating' ? '⚡' :
-                           ticket.status === 'failed' ? '❌' :
-                           ticket.status === 'backlog' ? '📋' :
-                           ticket.status === 'planning' ? '🎯' : '⏳'}
-                        </span>
-                        <div className="flex-1 min-w-0">
-                          <div className="text-xs font-medium text-gray-800 truncate">{ticket.title}</div>
-                          <div className="text-[10px] text-gray-500 truncate">{ticket.description}</div>
-                          {ticket.status === 'generating' && ticket.progress !== undefined && (
-                            <div className="mt-1.5 w-full h-1 bg-gray-200 rounded-full overflow-hidden">
-                              <div 
-                                className="h-full bg-orange-400 transition-all duration-300"
-                                style={{ width: `${ticket.progress}%` }}
-                              />
-                            </div>
-                          )}
-                        </div>
-                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${
-                          ticket.type === 'component' ? 'bg-blue-100 text-blue-700' :
-                          ticket.type === 'feature' ? 'bg-green-100 text-green-700' :
-                          ticket.type === 'layout' ? 'bg-purple-100 text-purple-700' :
-                          ticket.type === 'styling' ? 'bg-pink-100 text-pink-700' :
-                          ticket.type === 'integration' ? 'bg-amber-100 text-amber-700' :
-                          'bg-gray-100 text-gray-600'
-                        }`}>
-                          {ticket.type}
-                        </span>
-                      </div>
-                    </motion.div>
-                  ))}
-                  {isPlanning && (
-                    <div className="flex items-center gap-2 p-2 text-gray-400">
-                      <div className="w-2 h-2 bg-gray-300 rounded-full animate-pulse" />
-                      <span className="text-[10px]">Analyzing requirements...</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {conversationContext.scrapedWebsites.length > 0 && !hasInitialSubmission && (
-              <div className="p-4 bg-card border-b border-gray-200">
-                <div className="flex flex-col gap-4">
-                  {conversationContext.scrapedWebsites.map((site, idx) => {
-                    // Extract favicon and site info from the scraped data
-                    const metadata = site.content?.metadata || {};
-                    const sourceURL = metadata.sourceURL || site.url;
-                    const favicon = metadata.favicon || `https://www.google.com/s2/favicons?domain=${new URL(sourceURL).hostname}&sz=128`;
-                    const siteName = metadata.ogSiteName || metadata.title || new URL(sourceURL).hostname;
-                    const screenshot = site.content?.screenshot || sessionStorage.getItem('websiteScreenshot');
-
-                    return (
-                      <div key={idx} className="flex flex-col gap-3">
-                        {/* Site info with favicon */}
-                        <div className="flex items-center gap-3 text-sm">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={favicon}
-                            alt={siteName}
-                            className="w-8 h-8 rounded"
-                            onError={(e) => {
-                              e.currentTarget.src = `https://www.google.com/s2/favicons?domain=${new URL(sourceURL).hostname}&sz=128`;
-                            }}
-                          />
-                          <a
-                            href={sourceURL}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-black hover:text-gray-700 truncate max-w-[250px] font-medium"
-                            title={sourceURL}
-                          >
-                            {siteName}
-                          </a>
-                        </div>
-
-                        {/* Pinned screenshot */}
-                        {screenshot && (
-                          <div className="w-full">
-                            <div className="flex items-center justify-between mb-2">
-                              <span className="text-xs font-medium text-gray-600">Screenshot Preview</span>
-                              <button
-                                onClick={() => setScreenshotCollapsed(!screenshotCollapsed)}
-                                className="text-gray-500 hover:text-gray-700 transition-colors p-1"
-                                aria-label={screenshotCollapsed ? 'Expand screenshot' : 'Collapse screenshot'}
-                              >
-                                <svg
-                                  width="16"
-                                  height="16"
-                                  viewBox="0 0 16 16"
-                                  fill="none"
-                                  xmlns="http://www.w3.org/2000/svg"
-                                  className={`transition-transform duration-300 ${screenshotCollapsed ? 'rotate-180' : ''}`}
-                                >
-                                  <path d="M4 6L8 10L12 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                                </svg>
-                              </button>
-                            </div>
-                            <div
-                              className="w-full rounded-lg overflow-hidden border border-gray-200 transition-all duration-300"
-                              style={{
-                                opacity: screenshotCollapsed ? 0 : 1,
-                                transform: screenshotCollapsed ? 'translateY(-20px)' : 'translateY(0)',
-                                pointerEvents: screenshotCollapsed ? 'none' : 'auto',
-                                maxHeight: screenshotCollapsed ? '0' : '200px'
-                              }}
-                            >
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img
-                                src={screenshot}
-                                alt={`${siteName} preview`}
-                                className="w-full h-auto object-cover"
-                                style={{ maxHeight: '200px' }}
-                              />
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {!hasInitialSubmission && (
-            <div
-              className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 scrollbar-hide bg-gray-50"
-              ref={chatMessagesRef}>
-              {chatMessages.map((msg, idx) => {
-                // Check if this message is from a successful generation
-                const isGenerationComplete = msg.content.includes('Successfully recreated') ||
-                  msg.content.includes('AI recreation generated!') ||
-                  msg.content.includes('Code generated!');
-
-                // Get the files from metadata if this is a completion message
-                // const completedFiles = msg.metadata?.appliedFiles || [];
-
-                return (
-                  <div key={idx} className="block">
-                    <div className={`flex ${msg.type === 'user' ? 'justify-end' : 'justify-start'}`}>
-                      <div className="block">
-                        <div className={`block rounded-lg px-3 py-2 ${msg.type === 'user' ? 'bg-[#36322F] text-white ml-auto max-w-[80%]' :
-                          msg.type === 'ai' ? 'bg-gray-100 text-gray-900 mr-auto max-w-[80%]' :
-                            msg.type === 'system' ? 'bg-[#36322F] text-white text-sm' :
-                              msg.type === 'command' ? 'bg-[#36322F] text-white font-mono text-sm' :
-                                msg.type === 'error' ? 'bg-red-900 text-red-100 text-sm border border-red-700' :
-                                  'bg-[#36322F] text-white text-sm'
-                          }`}>
-                          {msg.type === 'command' ? (
-                            <div className="flex items-start gap-2">
-                              <span className={`text-xs ${msg.metadata?.commandType === 'input' ? 'text-blue-400' :
-                                msg.metadata?.commandType === 'error' ? 'text-red-400' :
-                                  msg.metadata?.commandType === 'success' ? 'text-green-400' :
-                                    'text-gray-400'
-                                }`}>
-                                {msg.metadata?.commandType === 'input' ? '$' : '>'}
-                              </span>
-                              <span className="flex-1 whitespace-pre-wrap text-white">{msg.content}</span>
-                            </div>
-                          ) : msg.type === 'error' ? (
-                            <div className="flex items-start gap-3">
-                              <div className="flex-shrink-0">
-                                <div className="w-8 h-8 bg-red-800 rounded-full flex items-center justify-center">
-                                  <svg className="w-6 h-6 text-red-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                                  </svg>
-                                </div>
-                              </div>
-                              <div className="flex-1">
-                                <div className="font-semibold mb-1">Build Errors Detected</div>
-                                <div className="whitespace-pre-wrap text-sm">{msg.content}</div>
-                                <div className="mt-2 text-xs opacity-70">Press 'F' or click the Fix button above to resolve</div>
-                              </div>
-                            </div>
-                          ) : (
-                            <span className="text-sm">{msg.content}</span>
-                          )}
-                        </div>
-
-                        {/* Show branding data if this is a brand extraction message */}
-                        {msg.metadata?.brandingData && (
-                          <div className="mt-3 bg-gradient-to-br from-gray-50 to-white border-2 border-gray-200 rounded-xl overflow-hidden max-w-[500px] shadow-sm">
-                            <div className="bg-[#36322F] px-4 py-3">
-                              <div className="flex items-center gap-2">
-                                <Image
-                                  src={`https://www.google.com/s2/favicons?domain=${msg.metadata.sourceUrl}&sz=32`}
-                                  alt=""
-                                  width={32}
-                                  height={32}
-                                  className="w-8 h-8"
-                                />
-                                <div className="text-sm font-semibold text-white">
-                                  Brand Guidelines
-                                </div>
-                              </div>
-                            </div>
-
-                            <div className="p-4">
-                              {/* Color Scheme Mode */}
-                              {msg.metadata.brandingData.colorScheme && (
-                                <div className="mb-4">
-                                  <div className="text-sm">
-                                    <span className="text-gray-600 font-medium">Mode:</span>{' '}
-                                    <span className="font-semibold text-gray-900 capitalize">{msg.metadata.brandingData.colorScheme}</span>
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Colors */}
-                              {msg.metadata.brandingData.colors && (
-                                <div className="mb-4">
-                                  <div className="text-sm font-semibold text-gray-900 mb-2">Colors</div>
-                                  <div className="flex flex-wrap gap-3">
-                                    {msg.metadata.brandingData.colors.primary && (
-                                      <div className="flex items-center gap-2">
-                                        <div className="w-8 h-8 rounded border border-gray-300" style={{ backgroundColor: msg.metadata.brandingData.colors.primary }} />
-                                        <div className="text-sm">
-                                          <div className="font-semibold text-gray-900">Primary</div>
-                                          <div className="text-gray-600 font-mono text-xs">{msg.metadata.brandingData.colors.primary}</div>
-                                        </div>
-                                      </div>
-                                    )}
-                                    {msg.metadata.brandingData.colors.accent && (
-                                      <div className="flex items-center gap-2">
-                                        <div className="w-8 h-8 rounded border border-gray-300" style={{ backgroundColor: msg.metadata.brandingData.colors.accent }} />
-                                        <div className="text-sm">
-                                          <div className="font-semibold text-gray-900">Accent</div>
-                                          <div className="text-gray-600 font-mono text-xs">{msg.metadata.brandingData.colors.accent}</div>
-                                        </div>
-                                      </div>
-                                    )}
-                                    {msg.metadata.brandingData.colors.background && (
-                                      <div className="flex items-center gap-2">
-                                        <div className="w-8 h-8 rounded border border-gray-300" style={{ backgroundColor: msg.metadata.brandingData.colors.background }} />
-                                        <div className="text-sm">
-                                          <div className="font-semibold text-gray-900">Background</div>
-                                          <div className="text-gray-600 font-mono text-xs">{msg.metadata.brandingData.colors.background}</div>
-                                        </div>
-                                      </div>
-                                    )}
-                                    {msg.metadata.brandingData.colors.textPrimary && (
-                                      <div className="flex items-center gap-2">
-                                        <div className="w-8 h-8 rounded border border-gray-300" style={{ backgroundColor: msg.metadata.brandingData.colors.textPrimary }} />
-                                        <div className="text-sm">
-                                          <div className="font-semibold text-gray-900">Text</div>
-                                          <div className="text-gray-600 font-mono text-xs">{msg.metadata.brandingData.colors.textPrimary}</div>
-                                        </div>
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Typography */}
-                              {msg.metadata.brandingData.typography && (
-                                <div className="mb-4">
-                                  <div className="text-sm font-semibold text-gray-900 mb-2">Typography</div>
-                                  <div className="grid grid-cols-2 gap-3 text-sm">
-                                    {msg.metadata.brandingData.typography.fontFamilies?.primary && (
-                                      <div>
-                                        <span className="text-gray-600 font-medium">Primary:</span>{' '}
-                                        <span className="font-semibold text-gray-900">{msg.metadata.brandingData.typography.fontFamilies.primary}</span>
-                                      </div>
-                                    )}
-                                    {msg.metadata.brandingData.typography.fontFamilies?.heading && (
-                                      <div>
-                                        <span className="text-gray-600 font-medium">Heading:</span>{' '}
-                                        <span className="font-semibold text-gray-900">{msg.metadata.brandingData.typography.fontFamilies.heading}</span>
-                                      </div>
-                                    )}
-                                    {msg.metadata.brandingData.typography.fontSizes?.h1 && (
-                                      <div>
-                                        <span className="text-gray-600 font-medium">H1 Size:</span>{' '}
-                                        <span className="font-semibold text-gray-900">{msg.metadata.brandingData.typography.fontSizes.h1}</span>
-                                      </div>
-                                    )}
-                                    {msg.metadata.brandingData.typography.fontSizes?.h2 && (
-                                      <div>
-                                        <span className="text-gray-600 font-medium">H2 Size:</span>{' '}
-                                        <span className="font-semibold text-gray-900">{msg.metadata.brandingData.typography.fontSizes.h2}</span>
-                                      </div>
-                                    )}
-                                    {msg.metadata.brandingData.typography.fontSizes?.body && (
-                                      <div>
-                                        <span className="text-gray-600 font-medium">Body Size:</span>{' '}
-                                        <span className="font-semibold text-gray-900">{msg.metadata.brandingData.typography.fontSizes.body}</span>
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Spacing */}
-                              {msg.metadata.brandingData.spacing && (
-                                <div className="mb-4">
-                                  <div className="text-sm font-semibold text-gray-900 mb-2">Spacing</div>
-                                  <div className="flex flex-wrap gap-4 text-sm">
-                                    {msg.metadata.brandingData.spacing.baseUnit && (
-                                      <div>
-                                        <span className="text-gray-600 font-medium">Base Unit:</span>{' '}
-                                        <span className="font-semibold text-gray-900">{msg.metadata.brandingData.spacing.baseUnit}px</span>
-                                      </div>
-                                    )}
-                                    {msg.metadata.brandingData.spacing.borderRadius && (
-                                      <div>
-                                        <span className="text-gray-600 font-medium">Border Radius:</span>{' '}
-                                        <span className="font-semibold text-gray-900">{msg.metadata.brandingData.spacing.borderRadius}</span>
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Button Styles */}
-                              {msg.metadata.brandingData.components?.buttonPrimary && (
-                                <div className="mb-4">
-                                  <div className="text-sm font-semibold text-gray-900 mb-2">Button Styles</div>
-                                  <div className="flex flex-wrap gap-3">
-                                    <div>
-                                      <div className="text-xs text-gray-600 mb-1.5 font-medium">Primary Button</div>
-                                      <button
-                                        className="px-4 py-2 text-sm font-medium"
-                                        style={{
-                                          backgroundColor: msg.metadata.brandingData.components.buttonPrimary.background,
-                                          color: msg.metadata.brandingData.components.buttonPrimary.textColor,
-                                          borderRadius: msg.metadata.brandingData.components.buttonPrimary.borderRadius,
-                                          boxShadow: msg.metadata.brandingData.components.buttonPrimary.shadow
-                                        }}
-                                      >
-                                        Sample Button
-                                      </button>
-                                    </div>
-                                    {msg.metadata.brandingData.components?.buttonSecondary && (
-                                      <div>
-                                        <div className="text-xs text-gray-600 mb-1.5 font-medium">Secondary Button</div>
-                                        <button
-                                          className="px-4 py-2 text-sm font-medium"
-                                          style={{
-                                            backgroundColor: msg.metadata.brandingData.components.buttonSecondary.background,
-                                            color: msg.metadata.brandingData.components.buttonSecondary.textColor,
-                                            borderRadius: msg.metadata.brandingData.components.buttonSecondary.borderRadius,
-                                            boxShadow: msg.metadata.brandingData.components.buttonSecondary.shadow
-                                          }}
-                                        >
-                                          Sample Button
-                                        </button>
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Personality */}
-                              {msg.metadata.brandingData.personality && (
-                                <div className="text-sm">
-                                  <span className="text-gray-600 font-medium">Personality:</span>{' '}
-                                  <span className="font-semibold text-gray-900 capitalize">
-                                    {msg.metadata.brandingData.personality.tone} tone, {msg.metadata.brandingData.personality.energy} energy
-                                  </span>
-                                </div>
-                              )}
-
-                              {/* Target Audience */}
-                              {msg.metadata.brandingData.personality?.targetAudience && (
-                                <div className="text-sm mt-8">
-                                  <span className="text-gray-600 font-medium">Target:</span>{' '}
-                                  <span className="text-gray-900">{msg.metadata.brandingData.personality.targetAudience}</span>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Show applied files if this is an apply success message */}
-                        {msg.metadata?.appliedFiles && msg.metadata.appliedFiles.length > 0 && (
-                          <div className="mt-3 inline-block bg-gray-100 rounded-lg p-3">
-                            <div className="text-sm font-medium mb-3 text-gray-700">
-                              {msg.content.includes('Applied') ? 'Files Updated:' : 'Generated Files:'}
-                            </div>
-                            <div className="flex flex-wrap items-start gap-2">
-                              {msg.metadata.appliedFiles.map((filePath, fileIdx) => {
-                                const fileName = filePath.split('/').pop() || filePath;
-                                const fileExt = fileName.split('.').pop() || '';
-                                const fileType = fileExt === 'jsx' || fileExt === 'js' ? 'javascript' :
-                                  fileExt === 'css' ? 'css' :
-                                    fileExt === 'json' ? 'json' : 'text';
-
-                                return (
-                                  <div
-                                    key={`applied-${fileIdx}`}
-                                    className="inline-flex items-center gap-1.5 px-2 py-1 bg-[#36322F] text-white rounded-md text-sm animate-fade-in-up"
-                                    style={{ animationDelay: `${fileIdx * 30}ms` }}
-                                  >
-                                    <span className={`inline-block w-1.5 h-1.5 rounded-full ${fileType === 'css' ? 'bg-blue-400' :
-                                      fileType === 'javascript' ? 'bg-yellow-400' :
-                                        fileType === 'json' ? 'bg-green-400' :
-                                          'bg-gray-400'
-                                      }`} />
-                                    {fileName}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Show generated files for completion messages - but only if no appliedFiles already shown */}
-                        {isGenerationComplete && generationProgress.files.length > 0 && idx === chatMessages.length - 1 && !msg.metadata?.appliedFiles && !chatMessages.some(m => m.metadata?.appliedFiles) && (
-                          <div className="mt-2 inline-block bg-gray-100 rounded-[10px] p-3">
-                            <div className="text-xs font-medium mb-1 text-gray-700">Generated Files:</div>
-                            <div className="flex flex-wrap items-start gap-1">
-                              {generationProgress.files.map((file, fileIdx) => (
-                                <div
-                                  key={`complete-${fileIdx}`}
-                                  className="inline-flex items-center gap-1.5 px-2 py-1 bg-[#36322F] text-white rounded-md text-xs animate-fade-in-up"
-                                  style={{ animationDelay: `${fileIdx * 30}ms` }}
-                                >
-                                  <span className={`inline-block w-1.5 h-1.5 rounded-full ${file.type === 'css' ? 'bg-blue-400' :
-                                    file.type === 'javascript' ? 'bg-yellow-400' :
-                                      file.type === 'json' ? 'bg-green-400' :
-                                        'bg-gray-400'
-                                    }`} />
-                                  {file.path.split('/').pop()}
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-
-              {/* Code application progress */}
-              {codeApplicationState.stage && (
-                <CodeApplicationProgress state={codeApplicationState} />
-              )}
-
-              {/* File generation progress - inline display (during generation) */}
-              {generationProgress.isGenerating && (
-                <div className="inline-block bg-gray-100 rounded-lg p-3">
-                  <div className="text-sm font-medium mb-2 text-gray-700">
-                    {generationProgress.status}
-                  </div>
-                  <div className="flex flex-wrap items-start gap-1">
-                    {/* Show completed files */}
-                    {generationProgress.files.map((file, idx) => (
-                      <div
-                        key={`file-${idx}`}
-                        className="inline-flex items-center gap-1.5 px-2 py-1 bg-[#36322F] text-white rounded-md text-xs animate-fade-in-up"
-                        style={{ animationDelay: `${idx * 30}ms` }}
-                      >
-                        <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                        </svg>
-                        {file.path.split('/').pop()}
-                      </div>
-                    ))}
-
-                    {/* Show current file being generated */}
-                    {generationProgress.currentFile && (
-                      <div className="flex items-center gap-1 px-2 py-1 bg-[#36322F]/70 text-white rounded-[10px] text-sm animate-pulse"
-                        style={{ animationDelay: `${generationProgress.files.length * 30}ms` }}>
-                        <div className="w-16 h-16 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                        {generationProgress.currentFile.path.split('/').pop()}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Live streaming response display */}
-                  {generationProgress.streamedCode && (
-                    <motion.div
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: 'auto' }}
-                      exit={{ opacity: 0, height: 0 }}
-                      transition={{ duration: 0.3 }}
-                      className="mt-3 border-t border-gray-300 pt-3"
-                    >
-                      <div className="flex items-center gap-2 mb-2">
-                        <div className="flex items-center gap-1">
-                          <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse" />
-                          <span className="text-xs font-medium text-gray-600">AI Response Stream</span>
-                        </div>
-                        <div className="flex-1 h-px bg-gradient-to-r from-gray-300 to-transparent" />
-                      </div>
-                      <div className="bg-gray-900 border border-gray-700 rounded max-h-128 overflow-y-auto scrollbar-hide">
-                        <SyntaxHighlighter
-                          language="jsx"
-                          style={vscDarkPlus}
-                          customStyle={{
-                            margin: 0,
-                            padding: '0.75rem',
-                            fontSize: '11px',
-                            lineHeight: '1.5',
-                            background: 'transparent',
-                            maxHeight: '8rem',
-                            overflow: 'hidden'
-                          }}
-                        >
-                          {(() => {
-                            const lastContent = generationProgress.streamedCode.slice(-1000);
-                            // Show the last part of the stream, starting from a complete tag if possible
-                            const startIndex = lastContent.indexOf('<');
-                            return startIndex !== -1 ? lastContent.slice(startIndex) : lastContent;
-                          })()}
-                        </SyntaxHighlighter>
-                        <span className="inline-block w-3 h-4 bg-orange-400 ml-3 mb-3 animate-pulse" />
-                      </div>
-                    </motion.div>
-                  )}
-                </div>
-              )}
-            </div>
-            )}
-
-            {/* Suggested follow-up actions after generation */}
-            {!generationProgress.isGenerating && generationProgress.files.length > 0 && !aiChatInput && (
-              <div className="px-4 py-2 border-t border-border bg-gray-50">
-                <div className="flex flex-wrap gap-2">
-                  {[
-                    { label: 'Add dark mode', prompt: 'Add a dark mode toggle and apply dark theme styles' },
-                    { label: 'Improve animations', prompt: 'Add smooth animations and hover effects to all interactive elements' },
-                    { label: 'Make responsive', prompt: 'Ensure the layout is fully responsive for mobile, tablet, and desktop' },
-                    { label: 'Add more sections', prompt: 'Add more content sections like testimonials, FAQ, and contact form' }
-                  ].map((action) => (
-                    <button
-                      key={action.label}
-                      onClick={() => {
-                        setAiChatInput(action.prompt);
-                      }}
-                      className="px-3 py-1.5 text-xs bg-white hover:bg-gray-100 text-gray-600 border border-gray-200 rounded-full transition-all"
-                    >
-                      {action.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div className="p-4 border-t border-border bg-background-base">
-              <HeroInput
-                value={aiChatInput}
-                onChange={setAiChatInput}
-                onSubmit={sendChatMessage}
-                placeholder="Describe what you want to build..."
-                showSearchFeatures={false}
-              />
-            </div>
-          </div>
+          <GenerationLeftPanel
+            composerMode={composerMode}
+            setComposerMode={setComposerMode}
+            buildPromptDraft={buildPromptDraft}
+            setBuildPromptDraft={setBuildPromptDraft}
+            cloneUrlDraft={cloneUrlDraft}
+            setCloneUrlDraft={setCloneUrlDraft}
+            editDraft={aiChatInput}
+            setEditDraft={setAiChatInput}
+            onSubmitComposer={handleComposerSubmit}
+            composerDisabled={loading || generationProgress.isGenerating || isPlanning}
+            isPlanning={isPlanning}
+            isBuilding={kanbanBuildActive}
+            tickets={kanban.tickets}
+            onOpenKanban={() => setActiveTab('kanban')}
+            onStartBuild={handleStartKanbanBuild}
+            conversationContext={conversationContext}
+            screenshotCollapsed={screenshotCollapsed}
+            onToggleScreenshotCollapsed={() => setScreenshotCollapsed(!screenshotCollapsed)}
+            chatMessages={chatMessages}
+            chatMessagesRef={chatMessagesRef}
+            generationProgress={generationProgress}
+            codeApplicationState={codeApplicationState}
+          />
 
           {/* Right Panel - Preview or Generation (2/3 of remaining width) */}
           <div className="flex-1 flex flex-col overflow-hidden">
@@ -4747,8 +4294,8 @@ Focus on the key sections and content, making it clean and modern.`;
                 {/* Toggle-style Code/View switcher */}
                 <div className="inline-flex bg-gray-100 border border-gray-200 rounded-md p-0.5">
                   <button
-                    onClick={() => setActiveTab('generation')}
-                    className={`px-3 py-1 rounded transition-all text-xs font-medium ${activeTab === 'generation'
+                    onClick={() => setActiveTab('code')}
+                    className={`px-3 py-1 rounded transition-all text-xs font-medium ${activeTab === 'code'
                       ? 'bg-white text-gray-900 shadow-sm'
                       : 'bg-transparent text-gray-600 hover:text-gray-900'
                       }`}
@@ -4831,14 +4378,14 @@ Focus on the key sections and content, making it clean and modern.`;
                 )}
 
                 {/* Files generated count */}
-                {activeTab === 'generation' && !generationProgress.isEdit && generationProgress.files.length > 0 && (
+                {activeTab === 'code' && !generationProgress.isEdit && generationProgress.files.length > 0 && (
                   <div className="text-gray-500 text-xs font-medium">
                     {generationProgress.files.length} files generated
                   </div>
                 )}
 
                 {/* Live Code Generation Status */}
-                {activeTab === 'generation' && generationProgress.isGenerating && (
+                {activeTab === 'code' && generationProgress.isGenerating && (
                   <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-gray-100 border border-gray-200 rounded-md text-xs font-medium text-gray-700">
                     <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
                     {generationProgress.isEdit ? 'Editing code' : 'Live generation'}
@@ -4851,6 +4398,27 @@ Focus on the key sections and content, making it clean and modern.`;
                     <div className="w-1.5 h-1.5 bg-green-500 rounded-full" />
                     Sandbox active
                   </div>
+                )}
+
+                {/* Logs / troubleshooting */}
+                {sandboxData && (
+                  <button
+                    onClick={openLogs}
+                    title="Open sandbox logs"
+                    className="p-1.5 rounded-md transition-all text-gray-600 hover:text-gray-900 hover:bg-gray-100 relative"
+                  >
+                    {logsLoading ? (
+                      <div className="w-3.5 h-3.5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
+                      </svg>
+                    )}
+                    {(chatMessages.some(m => m.type === 'error') ||
+                      (generationProgress.status && generationProgress.status.toLowerCase().includes('failed'))) && (
+                      <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-red-500 rounded-full" />
+                    )}
+                  </button>
                 )}
 
                 {/* Copy URL button */}
@@ -4983,6 +4551,115 @@ Focus on the key sections and content, making it clean and modern.`;
             </div>
           </div>
         )}
+
+        {/* Sandbox Logs Modal */}
+        <Dialog
+          open={logsOpen}
+          onOpenChange={(open) => {
+            setLogsOpen(open);
+            if (open) {
+              void fetchSandboxLogs();
+            }
+          }}
+        >
+          <DialogContent className="max-w-[900px] p-0">
+            <div className="p-24 border-b border-border-faint">
+              <DialogHeader>
+                <DialogTitle>Sandbox logs</DialogTitle>
+                <DialogDescription>
+                  Vite process status and recent logs from the sandbox. Use this when preview fails to load or the build
+                  hits runtime errors.
+                </DialogDescription>
+              </DialogHeader>
+            </div>
+
+            <div className="p-24">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-12">
+                <div className="flex items-center gap-8">
+                  <button
+                    onClick={fetchSandboxLogs}
+                    disabled={logsLoading}
+                    className="px-3 py-2 text-sm rounded-10 border border-gray-200 bg-gray-50 text-gray-800 hover:bg-gray-100 disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {logsLoading ? 'Refreshing…' : 'Refresh'}
+                  </button>
+                  <button
+                    onClick={copyLogsToClipboard}
+                    disabled={logsLoading || sandboxLogs.length === 0}
+                    className="px-3 py-2 text-sm rounded-10 border border-gray-200 bg-gray-50 text-gray-800 hover:bg-gray-100 disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    Copy
+                  </button>
+                  <button
+                    onClick={restartViteServer}
+                    className="px-3 py-2 text-sm rounded-10 border border-gray-200 bg-gray-50 text-gray-800 hover:bg-gray-100"
+                  >
+                    Restart Vite
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-8">
+                  {sandboxData?.url && (
+                    <a
+                      href={sandboxData.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm text-blue-600 hover:underline"
+                    >
+                      Open preview
+                    </a>
+                  )}
+                </div>
+              </div>
+
+              {logsError && (
+                <div className="mb-12 p-10 rounded-12 border border-red-200 bg-red-50 text-sm text-red-700">
+                  {logsError}
+                </div>
+              )}
+
+              <div className="rounded-12 border border-gray-200 bg-gray-900 text-gray-100 overflow-hidden">
+                <pre className="p-12 text-[12px] leading-5 max-h-[60vh] overflow-auto whitespace-pre-wrap">
+                  {sandboxLogs.length > 0 ? sandboxLogs.join('\n') : 'No logs available.'}
+                </pre>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* New build confirmation */}
+        <Dialog open={newBuildConfirmOpen} onOpenChange={setNewBuildConfirmOpen}>
+          <DialogContent>
+            <div className="p-24 border-b border-border-faint">
+              <DialogHeader>
+                <DialogTitle>Start a new build?</DialogTitle>
+                <DialogDescription>
+                  This clears the current plan, activity log, and editor state. Your sandbox stays running.
+                </DialogDescription>
+              </DialogHeader>
+            </div>
+
+            <div className="p-24">
+              <DialogFooter className="gap-8 sm:gap-8">
+                <Button
+                  variant="secondary"
+                  onClick={() => setNewBuildConfirmOpen(false)}
+                  disabled={newBuildBusy}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="destructive"
+                  isLoading={newBuildBusy}
+                  loadingLabel="Starting new build…"
+                  onClick={startNewBuild}
+                >
+                  Start new build
+                </Button>
+              </DialogFooter>
+            </div>
+          </DialogContent>
+        </Dialog>
 
       </div>
     </HeaderProvider>
