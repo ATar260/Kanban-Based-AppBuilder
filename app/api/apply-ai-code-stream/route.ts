@@ -69,12 +69,15 @@ function parseAIResponse(response: string): ParsedResponse {
   const fileMap = new Map<string, { content: string; isComplete: boolean }>();
 
   // First pass: Find all file declarations
-  const fileRegex = /<file path="([^"]+)">([\s\S]*?)(?:<\/file>|$)/g;
+  // Robust file block parsing:
+  // - Prefer explicit `</file>` terminator when present
+  // - If a file is truncated (missing `</file>`), stop at the next `<file path="...">` instead of consuming the rest
+  const fileRegex = /<file path="([^"]+)">([\s\S]*?)(?:<\/file>|(?=<file path=")|$)/g;
   let match;
   while ((match = fileRegex.exec(response)) !== null) {
     const filePath = match[1];
     const content = match[2].trim();
-    const hasClosingTag = response.substring(match.index, match.index + match[0].length).includes('</file>');
+    const hasClosingTag = match[0].includes('</file>');
 
     // Check if this file already exists in our map
     const existing = fileMap.get(filePath);
@@ -662,7 +665,13 @@ export async function POST(request: NextRequest) {
           normalizedPathsSet.has('src/main.ts') ? '/src/main.ts' :
           null;
         const shouldPatchIndexHtml = Boolean(desiredEntry) && !normalizedPathsSet.has('index.html');
-        const shouldPatchExistingMainJsx = Boolean(appImportPath) && !normalizedPathsSet.has('src/main.jsx');
+        // Only patch the template `src/main.jsx` when we *don't* have a TS entrypoint to point `index.html` at.
+        // If we generate `src/main.tsx`, we must update `index.html` to load it; otherwise React Router context
+        // can be missing (the default template `main.jsx` renders `<App />` without a `<BrowserRouter>`).
+        const shouldPatchExistingMainJsx =
+          !desiredEntry &&
+          Boolean(appImportPath) &&
+          !normalizedPathsSet.has('src/main.jsx');
 
         // Track the final written content so we can do post-write validation/repairs (e.g. missing imports).
         const writtenFilesContent = new Map<string, string>();
@@ -701,8 +710,10 @@ export async function POST(request: NextRequest) {
 
               // If we're writing an entry file, make sure it points to the TS app when present.
               if (appImportPath && (normalizedPath === 'src/main.tsx' || normalizedPath === 'src/main.ts')) {
+                // IMPORTANT: avoid `\s*` here because it can swallow the trailing newline and break the next import line
+                // (e.g. `import App ...\nimport './index.css'` -> `import App ...import './index.css'`).
                 fileContent = fileContent.replace(
-                  /import\s+App\s+from\s+['"]\.\/App(?:\.[jt]sx?)?['"]\s*;?/g,
+                  /import\s+App\s+from\s+['"]\.\/App(?:\.[jt]sx?)?['"][ \t]*;?/g,
                   `import App from '${appImportPath}'`
                 );
                 if (!/import\s+['"]\.\/index\.css['"]/.test(fileContent)) {
@@ -768,44 +779,10 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        // Prefer patching the existing Vite template entry (src/main.jsx) to import App.tsx so we keep
-        // the CSS import (Tailwind). Fall back to patching index.html only if we can't patch main.jsx.
-        let entryPatched = false;
-
-        if (shouldPatchExistingMainJsx && appImportPath) {
-          try {
-            const existingMain = await providerInstance.readFile('src/main.jsx');
-            let patchedMain = existingMain
-              .replace(/import\s+App\s+from\s+['"]\.\/App\.jsx['"]\s*;?/g, `import App from '${appImportPath}'`)
-              .replace(/import\s+App\s+from\s+['"]\.\/App['"]\s*;?/g, `import App from '${appImportPath}'`);
-
-            if (patchedMain !== existingMain) {
-              await providerInstance.writeFile('src/main.jsx', patchedMain);
-
-              if (global.sandboxState?.fileCache) {
-                global.sandboxState.fileCache.files['src/main.jsx'] = {
-                  content: patchedMain,
-                  lastModified: Date.now()
-                };
-              }
-
-              if (global.existingFiles) global.existingFiles.add('src/main.jsx');
-              if (results.filesUpdated) results.filesUpdated.push('src/main.jsx');
-
-              await sendProgress({
-                type: 'file-complete',
-                fileName: 'src/main.jsx',
-                action: 'updated'
-              });
-
-              entryPatched = true;
-            }
-          } catch (e) {
-            console.warn('[apply-ai-code-stream] Failed to patch src/main.jsx entrypoint:', e);
-          }
-        }
-
-        if (!entryPatched && shouldPatchIndexHtml && desiredEntry) {
+        // Patch the Vite entrypoint so the sandbox boots the generated app.
+        // - If we generated `src/main.tsx`, update `index.html` to load it.
+        // - Otherwise, patch the template `src/main.jsx` to import the generated TS/TSX App.
+        if (shouldPatchIndexHtml && desiredEntry) {
           try {
             const existingIndex = await providerInstance.readFile('index.html');
             const patchedIndex = existingIndex.replace(/\/src\/main\.(jsx|js|tsx|ts)/g, desiredEntry);
@@ -834,6 +811,36 @@ export async function POST(request: NextRequest) {
             }
           } catch (e) {
             console.warn('[apply-ai-code-stream] Failed to patch index.html entrypoint:', e);
+          }
+        } else if (shouldPatchExistingMainJsx && appImportPath) {
+          try {
+            const existingMain = await providerInstance.readFile('src/main.jsx');
+            // IMPORTANT: avoid `\s*` here because it can swallow the trailing newline and concatenate imports.
+            const patchedMain = existingMain
+              .replace(/import\s+App\s+from\s+['"]\.\/App\.jsx['"][ \t]*;?/g, `import App from '${appImportPath}'`)
+              .replace(/import\s+App\s+from\s+['"]\.\/App['"][ \t]*;?/g, `import App from '${appImportPath}'`);
+
+            if (patchedMain !== existingMain) {
+              await providerInstance.writeFile('src/main.jsx', patchedMain);
+
+              if (global.sandboxState?.fileCache) {
+                global.sandboxState.fileCache.files['src/main.jsx'] = {
+                  content: patchedMain,
+                  lastModified: Date.now()
+                };
+              }
+
+              if (global.existingFiles) global.existingFiles.add('src/main.jsx');
+              if (results.filesUpdated) results.filesUpdated.push('src/main.jsx');
+
+              await sendProgress({
+                type: 'file-complete',
+                fileName: 'src/main.jsx',
+                action: 'updated'
+              });
+            }
+          } catch (e) {
+            console.warn('[apply-ai-code-stream] Failed to patch src/main.jsx entrypoint:', e);
           }
         }
 
