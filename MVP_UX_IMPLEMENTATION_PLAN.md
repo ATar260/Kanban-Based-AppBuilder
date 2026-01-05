@@ -1,11 +1,69 @@
 # Paynto A.I. - MVP UX Implementation Plan
 
 ## Overview
-This document is the comprehensive implementation plan for the "Overnight" MVP UI/UX workflows for the Paynto A.I. platform. It combines task tracking, technical specifications, and MCP (Model Context Protocol) integration details.
+This document is the comprehensive implementation plan for the "Overnight" MVP UI/UX workflows for the Paynto A.I. platform. It combines task tracking, technical specifications, upgrade roadmap, and MCP (Model Context Protocol) integration details.
+
+### Legend
+- ✅ Complete
+- 🟡 Partial
+- 🔴 Not Started
 
 ---
 
-# PART 1: USER EXPERIENCE WORKFLOWS
+# PART 1: IMPLEMENTATION STATUS SUMMARY
+
+## 1. Onboarding & Input ("Genesis" Phase)
+
+| Feature | Status | Current State |
+|---------|--------|---------------|
+| Prompt-to-Build | ✅ | AI parses prompts into structured projects |
+| GitHub Import | 🟡 | Basic GitHub integration exists, needs full repo import flow |
+| Clone a Website | ✅ | Firecrawl + screenshot scraping, brand style extraction |
+| UI Generation (Multi-Option) | 🔴 | No 3-mockup selection - generates single output |
+| Auth Integration | 🟡 | NextAuth exists, Supabase not integrated |
+| Auto Hosting/Deploy | 🔴 | Architecture documented, not implemented |
+
+## 2. Intelligent Planning Interface
+
+| Feature | Status | Current State |
+|---------|--------|---------------|
+| Auto-Planning Engine | ✅ | `/api/plan-build` converts prompts to tickets |
+| Editable Plan | ✅ | Kanban tickets are editable |
+| Plan Versioning | 🔴 | No plan iteration tracking/revert |
+| Pipeline Trigger | ✅ | "Move to Pipeline" locks plan and initializes build |
+
+## 3. Build Execution ("Command Centre")
+
+| Feature | Status | Current State |
+|---------|--------|---------------|
+| Visual Kanban Board | ✅ | 7-column board with drag-drop |
+| Auto-Build Mode | ✅ | Tickets move automatically |
+| Real-Time Visualization | ✅ | Live ticket updates |
+| Pause Capability | ✅ | Pause/Resume buttons implemented |
+| Manual Build Mode | ✅ | Step-by-step approval mode |
+| Human-in-the-Loop Stops | ✅ | Awaiting input column with modals |
+| Background Git Sync | 🔴 | GitHub export exists, no auto-commit per feature |
+
+## 4. Workflow Logic & Safety Guardrails
+
+| Feature | Status | Current State |
+|---------|--------|---------------|
+| State Restrictions | ✅ | Drag-drop validation prevents skipping |
+| Reverse-Drag Warning | ✅ | RegressionWarningModal implemented |
+| Soft Deletion | 🔴 | No code commenting on revert |
+| Auto-Refactor Agent | 🔴 | No Claude Code refactoring trigger |
+
+## 5. Quality Assurance & Output
+
+| Feature | Status | Current State |
+|---------|--------|---------------|
+| PR Review Agents ("Bugbot") | 🔴 | No automated code review agents |
+| Dual View Mode | ✅ | Kanban + App Preview toggle exists |
+| Instruction-Tuned Reviewer | 🔴 | No quality standards agent |
+
+---
+
+# PART 2: USER EXPERIENCE WORKFLOWS
 
 ## 1. Entry Points (3 Options)
 
@@ -178,7 +236,7 @@ Behavior: After ticket completion → Auto-push to selected repo
 
 ---
 
-# PART 2: IMPLEMENTATION TASKS
+# PART 3: IMPLEMENTATION TASKS
 
 ## Phase 1: Onboarding & Project Initiation
 
@@ -245,6 +303,20 @@ Behavior: After ticket completion → Auto-push to selected repo
 
 ---
 
+### 1.3 UI Multi-Option Generation (3 Mockups)
+**Status:** 🔴 Not Started  
+**Priority:** P0 - Critical  
+**Estimated Effort:** L
+
+**Tasks:**
+- [ ] Create `/api/generate-ui-options` endpoint
+- [ ] Generate 3 distinct UI mockups from single prompt
+- [ ] Build comparison/selection interface
+- [ ] Style preview thumbnails
+- [ ] User selection flow before build starts
+
+---
+
 ## Phase 2: The Planning Interface
 
 ### 2.1 Auto-Planning System
@@ -293,6 +365,19 @@ Behavior: After ticket completion → Auto-push to selected repo
 **Files Created:**
 - `components/planning/PipelineTransition.tsx` ✅
 - `components/planning/index.ts` ✅
+
+---
+
+### 2.4 Plan Versioning
+**Status:** 🔴 Not Started  
+**Priority:** P1 - Important  
+**Estimated Effort:** M
+
+**Tasks:**
+- [ ] Add plan snapshot on "Move to Pipeline"
+- [ ] Store plan versions in database
+- [ ] Plan revert capability
+- [ ] Plan comparison view between versions
 
 ---
 
@@ -351,6 +436,20 @@ Behavior: After ticket completion → Auto-push to selected repo
 
 ---
 
+### 3.5 Background Git Sync
+**Status:** 🔴 Not Started  
+**Priority:** P0 - Critical  
+**Estimated Effort:** M
+
+**Tasks:**
+- [ ] Add "Auto-commit" toggle in settings
+- [ ] Hook into ticket completion event
+- [ ] Auto-commit each completed feature to GitHub
+- [ ] Commit message generation from ticket title
+- [ ] Sync status indicator
+
+---
+
 ## Phase 4: Board Logic & Guardrails
 
 ### 4.1 Forward Movement Restrictions
@@ -378,27 +477,68 @@ Behavior: After ticket completion → Auto-push to selected repo
 - [x] Detect backward ticket movement
 - [x] Warning modal with clear messaging
 - [x] Confirmation flow before reverting
-- [ ] Auto-refactor trigger for stability (future)
-- [ ] Undo history tracking (future)
+- [ ] Soft deletion (comment out code instead of delete)
+- [ ] Auto-refactor trigger for stability
+- [ ] Undo history tracking
 
 **Files Created:**
 - `components/kanban/RegressionWarningModal.tsx` ✅
 
 ---
 
+### 4.3 Soft Deletion System
+**Status:** 🔴 Not Started  
+**Priority:** P1 - Important  
+**Estimated Effort:** M
+
+**Tasks:**
+- [ ] Track generated code per ticket
+- [ ] On revert: comment out code instead of delete
+- [ ] Maintain code history for recovery
+- [ ] Integration with version control
+
+---
+
+### 4.4 Auto-Refactor Agent
+**Status:** 🔴 Not Started  
+**Priority:** P2 - Nice-to-Have  
+**Estimated Effort:** L
+
+**Tasks:**
+- [ ] Trigger refactor after feature revert
+- [ ] Claude Code integration for linting
+- [ ] Codebase stability validation
+- [ ] Automatic fix suggestions
+
+---
+
 ## Phase 5: Quality Assurance
 
-### 5.1 PR Review Column
+### 5.1 PR Review Column & Bugbot Agent
 **Status:** 🔴 Not Started  
-**Priority:** Medium  
+**Priority:** P0 - Critical  
 **Estimated Effort:** L
 
 **Tasks:**
 - [ ] Add "PR Review" column before "Done"
-- [ ] Automated code review via AI agent
+- [ ] Build Bugbot automated code review agent
 - [ ] Status checks display on tickets
 - [ ] Approve/Request Changes actions
+- [ ] Review gate requiring agent approval
 - [ ] Auto-approve for passing checks
+
+---
+
+### 5.2 Instruction-Tuned Reviewer
+**Status:** 🔴 Not Started  
+**Priority:** P2 - Nice-to-Have  
+**Estimated Effort:** M
+
+**Tasks:**
+- [ ] Create specialized code quality agent
+- [ ] Define quality standards rules
+- [ ] Integration with review pipeline
+- [ ] Feedback loop for improvements
 
 ---
 
@@ -527,7 +667,88 @@ model Version {
 
 ---
 
-# PART 3: TECHNICAL SPECIFICATIONS
+### 6.7 Auto-Deploy Pipeline
+**Status:** 🔴 Not Started  
+**Priority:** P1 - Important  
+**Estimated Effort:** L
+
+**Tasks:**
+- [ ] Integration with Vercel deployment API
+- [ ] Netlify deployment option
+- [ ] Permanent preview URL generation
+- [ ] Custom domain support
+- [ ] Deployment status tracking
+
+---
+
+# PART 4: PRIORITY MATRIX & ROADMAP
+
+## Priority Matrix
+
+### P0 - Critical (Core UX)
+| Feature | Status | Notes |
+|---------|--------|-------|
+| UI Multi-Option Generation (3 mockups) | 🔴 Not Started | Generate 3 UI options for user selection |
+| Background Git Sync per feature | 🔴 Not Started | Auto-commit each completed ticket to GitHub |
+| PR Review Agents (Bugbot) | 🔴 Not Started | Automated code review before finalization |
+
+### P1 - Important (Safety/Polish)
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Soft deletion (comment out code on revert) | 🔴 Not Started | Comment out code instead of delete on ticket revert |
+| Plan versioning/revert | 🔴 Not Started | Snapshot plans, allow revert to previous versions |
+| Auto-deploy to Vercel/Netlify | 🔴 Not Started | Permanent preview URLs, one-click deploy |
+| Full GitHub repo import | 🟡 Partial | Needs full codebase ingestion, branch selection |
+| Supabase Integration | 🔴 Not Started | Database + auth backend |
+
+### P2 - Nice-to-Have
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Auto-Refactor Agent | 🔴 Not Started | Claude Code integration for linting after revert |
+| Instruction-Tuned Reviewer | 🔴 Not Started | Code quality standards agent |
+| Split view mode | 🔴 Not Started | Kanban + Preview side-by-side |
+| Team collaboration | 🔴 Not Started | Multi-user projects, permissions |
+
+### Partial Features Needing Completion
+| Feature | Status | What's Missing |
+|---------|--------|----------------|
+| GitHub Import | 🟡 Partial | Full repo ingestion, branch selection, codebase parsing |
+| Usage Tracking | 🟡 Partial | Per-user API tracking, tier limits, UI display |
+| Sandbox Isolation | 🟡 Partial | Cleanup on session end, timeout handling, resource limits |
+
+---
+
+## Implementation Roadmap
+
+### Phase 1: Core Safety & Git (Week 1-2)
+- Background Git Sync (auto-commit per feature)
+- Soft deletion system
+- Plan versioning
+
+### Phase 2: Multi-Option UI (Week 2-3)
+- 3-mockup generation API
+- Selection interface
+- Style comparison view
+
+### Phase 3: Quality Agents (Week 3-4)
+- Bugbot PR review agent
+- PR Review column
+- Review gate integration
+
+### Phase 4: Deployment & Import (Week 4-5)
+- Auto-deploy pipeline (Vercel/Netlify)
+- Full GitHub repo import
+- Permanent preview URLs
+
+### Phase 5: Polish (Week 5-6)
+- Auto-Refactor Agent
+- Instruction-Tuned Reviewer
+- Split view mode
+- Supabase integration
+
+---
+
+# PART 5: TECHNICAL SPECIFICATIONS
 
 ## API Endpoints
 
@@ -537,7 +758,7 @@ POST /api/plan-build ✅
   Input: { prompt: string, context?: object }
   Output: SSE stream of tickets + plan
 
-POST /api/generate-ui-options
+POST /api/generate-ui-options 🔴
   Input: { prompt: string }
   Output: { options: UIDesign[] }
 ```
@@ -565,6 +786,10 @@ POST /api/github/repos ✅ (create new repo)
 POST /api/github/commit ✅
   Input: { repoFullName: string, files: FileContent[], message: string }
   Output: { sha: string, url: string }
+
+POST /api/import-github-repo 🔴
+  Input: { repoFullName: string, branch: string }
+  Output: { files: FileContent[], structure: object }
 ```
 
 ### Projects
@@ -599,7 +824,8 @@ GET/POST /api/auth/[...nextauth] ✅
 
 ### Entry Components
 - `SidebarInput.tsx` ✅ - Prompt and URL input
-- `EntryChoice.tsx` - 3-option selector (future)
+- `EntryChoice.tsx` 🔴 - 3-option selector (future)
+- `GitHubImport.tsx` 🔴 - GitHub import flow (future)
 
 ### Planning Components
 - `TicketEditor.tsx` ✅ - Single ticket edit modal
@@ -652,7 +878,7 @@ interface AppState {
 
 ---
 
-# PART 4: SECURITY CONSIDERATIONS
+# PART 6: SECURITY CONSIDERATIONS
 
 ## Security Implementation Status
 
@@ -744,78 +970,9 @@ interface AppState {
 
 ---
 
-# PART 5: IMPLEMENTATION SCHEDULE
+# PART 7: DEPLOYMENT
 
-## Sprint 1: Core Flow (Days 1-3) ✅
-1. ✅ Plan creation from prompt
-2. ✅ Kanban display with columns
-3. ✅ Start Build button
-4. ✅ Entry options (Build/Clone)
-5. ✅ View mode toggle
-
-## Sprint 2: Build Execution (Days 4-6) ✅
-1. ✅ Auto-Build with real-time updates
-2. ✅ Pause/Resume functionality
-3. ✅ Manual Build mode toggle
-4. ✅ Human-in-the-Loop improvements
-
-## Sprint 3: Guardrails & Quality (Days 7-9) ✅
-1. ✅ Forward movement restrictions
-2. ✅ Backward regression with warnings
-3. 🔴 PR Review column (future)
-4. 🔴 Code rollback logic (future)
-
-## Sprint 4: Polish (Days 10-12) ✅
-1. ✅ GitHub export flow
-2. 🔴 "Come up with 3 UIs" feature (future)
-3. 🟡 Animations and transitions
-4. ✅ Error handling and edge cases
-
-## Sprint 5: Multi-Tenant (Days 13-18) ✅
-1. ✅ User authentication (NextAuth.js)
-2. ✅ Data isolation (Prisma + user ownership)
-3. ✅ Project dashboard
-4. 🟡 Usage tracking (rate limiting done)
-
----
-
-## Key UI Elements Checklist
-
-| Element | Status | Priority |
-|---------|--------|----------|
-| **Entry Options** | | |
-| Prompt Input Field (Build) | ✅ Done | Critical |
-| Clone URL Input | ✅ Done | Critical |
-| "Import from GitHub" Button | 🟡 Partial | High |
-| **GitHub Integration** | | |
-| GitHub Connect | ✅ Done | High |
-| "Export to GitHub" Button | ✅ Done | High |
-| Create New Repo Modal | ✅ Done | High |
-| Push to Existing Repo | ✅ Done | Medium |
-| **Planning** | | |
-| "Come up with 3 UIs" Button | 🔴 Not Started | Medium |
-| "Move to Pipeline" Button | ✅ Done | Critical |
-| Plan Edit Mode | ✅ Done | High |
-| **Build Execution** | | |
-| "Auto-Build" Button | ✅ Done | Critical |
-| Pause/Resume Buttons | ✅ Done | Critical |
-| "Manual Build" Toggle | ✅ Done | High |
-| **Views & Navigation** | | |
-| View Toggle (Kanban/Preview) | ✅ Done | Critical |
-| Split View Option | 🔴 Not Started | Low |
-| **Guardrails** | | |
-| Warning Modals (backward movement) | ✅ Done | High |
-| Drag-Drop Restrictions | ✅ Done | High |
-| **Auth & Multi-Tenant** | | |
-| Login Button | ✅ Done | Critical |
-| User Menu | ✅ Done | Critical |
-| Project Dashboard | ✅ Done | High |
-
----
-
-## Deployment Checklist
-
-### Environment Variables Required
+## Environment Variables Required
 ```env
 # Required Services
 FIRECRAWL_API_KEY=...              # Website scraping
@@ -837,7 +994,7 @@ GITHUB_CLIENT_ID=...
 GITHUB_CLIENT_SECRET=...
 ```
 
-### Pre-Launch Commands
+## Pre-Launch Commands
 ```bash
 # Generate Prisma client
 npx prisma generate
@@ -845,6 +1002,46 @@ npx prisma generate
 # Push database schema
 npx prisma db push
 ```
+
+---
+
+## Key UI Elements Checklist
+
+| Element | Status | Priority |
+|---------|--------|----------|
+| **Entry Options** | | |
+| Prompt Input Field (Build) | ✅ Done | Critical |
+| Clone URL Input | ✅ Done | Critical |
+| "Import from GitHub" Button | 🟡 Partial | High |
+| **GitHub Integration** | | |
+| GitHub Connect | ✅ Done | High |
+| "Export to GitHub" Button | ✅ Done | High |
+| Create New Repo Modal | ✅ Done | High |
+| Push to Existing Repo | ✅ Done | Medium |
+| Auto-commit Toggle | 🔴 Not Started | P0 |
+| **Planning** | | |
+| "Come up with 3 UIs" Button | 🔴 Not Started | P0 |
+| "Move to Pipeline" Button | ✅ Done | Critical |
+| Plan Edit Mode | ✅ Done | High |
+| Plan Versioning | 🔴 Not Started | P1 |
+| **Build Execution** | | |
+| "Auto-Build" Button | ✅ Done | Critical |
+| Pause/Resume Buttons | ✅ Done | Critical |
+| "Manual Build" Toggle | ✅ Done | High |
+| **Quality Assurance** | | |
+| PR Review Column | 🔴 Not Started | P0 |
+| Bugbot Agent | 🔴 Not Started | P0 |
+| **Views & Navigation** | | |
+| View Toggle (Kanban/Preview) | ✅ Done | Critical |
+| Split View Option | 🔴 Not Started | P2 |
+| **Guardrails** | | |
+| Warning Modals (backward movement) | ✅ Done | High |
+| Drag-Drop Restrictions | ✅ Done | High |
+| Soft Deletion | 🔴 Not Started | P1 |
+| **Auth & Multi-Tenant** | | |
+| Login Button | ✅ Done | Critical |
+| User Menu | ✅ Done | Critical |
+| Project Dashboard | ✅ Done | High |
 
 ---
 
@@ -857,6 +1054,10 @@ npx prisma db push
 - Focus on desktop experience first
 - Build continues when tickets require input (skips them) ✅
 - Auth is optional - users can use app without signing in ✅
+- Robust file parsing handles truncated AI responses ✅
+- TSX/TS entrypoints auto-patched for Vite compatibility ✅
+- Missing imports get placeholder modules automatically ✅
+- Write-order optimized (leaf modules first, entries last) ✅
 
 ---
 
@@ -868,3 +1069,5 @@ npx prisma db push
 | 1.1.0 | 2026-01-03 | Added multi-tenant, security, MCP specs |
 | 1.2.0 | 2026-01-03 | Updated with implementation progress - Auth, Dashboard, GitHub Export, Guardrails complete |
 | 1.3.0 | 2026-01-03 | Production hardening - Security headers, input validation (Zod), middleware auth, build skips awaiting_input tickets |
+| 1.4.0 | 2026-01-05 | Merged UPGRADE.md - Added priority matrix, roadmap, P0/P1/P2 classification, detailed upgrade tasks |
+| 1.5.0 | 2026-01-05 | Code application improvements: robust file parsing (handles truncated files, prefers complete versions), TSX/TS entrypoint patching (index.html & main.jsx auto-update), missing import placeholder generation, write-order optimization for Vite HMR stability |

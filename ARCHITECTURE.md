@@ -1,14 +1,33 @@
-# Open Lovable - Multi-Tenant Platform Architecture
+# Paynto A.I. - Multi-Tenant Platform Architecture
 
 ## Overview
 
-Transform Open Lovable from a single-user tool into a **multi-tenant SaaS platform** where users can:
-1. Sign up and create accounts
-2. Build web applications using AI
-3. Save projects persistently
-4. Deploy and host their applications
-5. Manage custom domains
-6. Collaborate with team members
+Transform Paynto A.I. from a single-user tool into a **multi-tenant SaaS platform** where users can:
+1. Sign up and create accounts ✅ Implemented
+2. Build web applications using AI ✅ Implemented
+3. Save projects persistently ✅ Implemented (localStorage + DB ready)
+4. Deploy and host their applications 🔴 Planned
+5. Manage custom domains 🔴 Planned
+6. Collaborate with team members 🔴 Planned
+
+---
+
+## Current Implementation Status
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Authentication | ✅ Complete | NextAuth.js + GitHub OAuth |
+| User Dashboard | ✅ Complete | Project listing, create, delete |
+| Project Storage | ✅ Complete | Prisma schema ready, localStorage fallback |
+| AI Code Generation | ✅ Complete | Multi-provider, streaming |
+| Sandbox System | ✅ Complete | Vercel Sandbox with auto-recovery |
+| Kanban Workflow | ✅ Complete | 7-column board, auto/manual build |
+| GitHub Export | ✅ Complete | Create repo, push files |
+| Version Control | ✅ Complete | Local versioning system |
+| Deployment Pipeline | 🔴 Not Started | Architecture defined |
+| Billing/Stripe | 🔴 Not Started | Schema defined |
+| Team Collaboration | 🔴 Not Started | Schema defined |
+| Usage Tracking | 🟡 Partial | Rate limiting done |
 
 ---
 
@@ -28,6 +47,7 @@ Transform Open Lovable from a single-user tool into a **multi-tenant SaaS platfo
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
 │  │   Static    │  │   Auth      │  │  Rate       │  │  Custom     │        │
 │  │   Assets    │  │   Middleware│  │  Limiting   │  │  Domains    │        │
+│  │     ✅      │  │     ✅      │  │     ✅      │  │     🔴      │        │
 │  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘        │
 └─────────────────────────────────────┬───────────────────────────────────────┘
                                       │
@@ -39,24 +59,28 @@ Transform Open Lovable from a single-user tool into a **multi-tenant SaaS platfo
 │  ┌──────────────────────────────────────────────────────────────────────┐  │
 │  │                         API ROUTES                                    │  │
 │  │                                                                       │  │
-│  │  /api/auth/*        - Authentication (NextAuth.js)                   │  │
-│  │  /api/projects/*    - Project CRUD                                   │  │
-│  │  /api/generate/*    - AI Code Generation                             │  │
-│  │  /api/deploy/*      - Deployment Management                          │  │
-│  │  /api/billing/*     - Stripe Integration                             │  │
-│  │  /api/teams/*       - Team Management                                │  │
+│  │  /api/auth/*           - Authentication (NextAuth.js)        ✅      │  │
+│  │  /api/projects/*       - Project CRUD                        ✅      │  │
+│  │  /api/generate/*       - AI Code Generation                  ✅      │  │
+│  │  /api/plan-build       - AI Build Planning                   ✅      │  │
+│  │  /api/apply-ai-code-stream - Code Application                ✅      │  │
+│  │  /api/github/*         - GitHub Integration                  ✅      │  │
+│  │  /api/scrape-*         - Website Scraping                    ✅      │  │
+│  │  /api/deploy/*         - Deployment Management               🔴      │  │
+│  │  /api/billing/*        - Stripe Integration                  🔴      │  │
+│  │  /api/teams/*          - Team Management                     🔴      │  │
 │  └──────────────────────────────────────────────────────────────────────┘  │
 │                                                                             │
 │  ┌──────────────────────────────────────────────────────────────────────┐  │
 │  │                         PAGES                                         │  │
 │  │                                                                       │  │
-│  │  /                  - Landing Page                                   │  │
-│  │  /login             - Authentication                                 │  │
-│  │  /dashboard         - User Dashboard                                 │  │
-│  │  /project/[id]      - Project Editor                                 │  │
-│  │  /project/[id]/deploy - Deployment Settings                          │  │
-│  │  /settings          - Account Settings                               │  │
-│  │  /billing           - Subscription Management                        │  │
+│  │  /                     - Landing Page                        ✅      │  │
+│  │  /login                - Authentication                      ✅      │  │
+│  │  /dashboard            - User Dashboard                      ✅      │  │
+│  │  /generation           - Project Editor + Kanban             ✅      │  │
+│  │  /project/[id]/deploy  - Deployment Settings                 🔴      │  │
+│  │  /settings             - Account Settings                    🔴      │  │
+│  │  /billing              - Subscription Management             🔴      │  │
 │  └──────────────────────────────────────────────────────────────────────┘  │
 └───────────┬─────────────────────┬─────────────────────┬─────────────────────┘
             │                     │                     │
@@ -64,29 +88,35 @@ Transform Open Lovable from a single-user tool into a **multi-tenant SaaS platfo
 ┌───────────────────┐ ┌───────────────────┐ ┌───────────────────────────────┐
 │    DATABASE       │ │   FILE STORAGE    │ │      EXTERNAL SERVICES        │
 │   (PostgreSQL)    │ │  (S3/R2/Supabase) │ │                               │
-│                   │ │                   │ │  ┌─────────────────────────┐  │
-│  - Users          │ │  - Project Files  │ │  │    AI PROVIDERS         │  │
-│  - Teams          │ │  - Assets         │ │  │  - OpenAI               │  │
-│  - Projects       │ │  - Screenshots    │ │  │  - Anthropic            │  │
-│  - Deployments    │ │  - Backups        │ │  │  - Groq                  │  │
-│  - Subscriptions  │ │                   │ │  └─────────────────────────┘  │
-│  - Usage          │ │                   │ │                               │
-│                   │ │                   │ │  ┌─────────────────────────┐  │
-└───────────────────┘ └───────────────────┘ │  │    SANDBOX PROVIDERS    │  │
-                                            │  │  - Vercel Sandbox       │  │
-                                            │  │  - E2B                   │  │
+│       ✅          │ │       🔴          │ │  ┌─────────────────────────┐  │
+│                   │ │                   │ │  │    AI PROVIDERS    ✅   │  │
+│  - Users     ✅   │ │  - Project Files  │ │  │  - OpenAI               │  │
+│  - Teams     🔴   │ │  - Assets         │ │  │  - Anthropic            │  │
+│  - Projects  ✅   │ │  - Screenshots    │ │  │  - Groq                 │  │
+│  - Versions  ✅   │ │  - Backups        │ │  │  - Google Gemini        │  │
+│  - Deployments 🔴 │ │                   │ │  └─────────────────────────┘  │
+│  - Subscriptions🔴│ │                   │ │                               │
+│  - Usage     🟡   │ │                   │ │  ┌─────────────────────────┐  │
+│                   │ │                   │ │  │  SANDBOX PROVIDERS ✅   │  │
+└───────────────────┘ └───────────────────┘ │  │  - Vercel Sandbox       │  │
+                                            │  │  - E2B (fallback)       │  │
                                             │  └─────────────────────────┘  │
                                             │                               │
                                             │  ┌─────────────────────────┐  │
-                                            │  │    DEPLOYMENT TARGETS   │  │
+                                            │  │  DEPLOYMENT TARGETS 🔴  │  │
                                             │  │  - Vercel               │  │
                                             │  │  - Cloudflare Pages     │  │
                                             │  │  - Netlify              │  │
                                             │  └─────────────────────────┘  │
                                             │                               │
                                             │  ┌─────────────────────────┐  │
-                                            │  │    PAYMENTS             │  │
+                                            │  │    PAYMENTS        🔴   │  │
                                             │  │  - Stripe               │  │
+                                            │  └─────────────────────────┘  │
+                                            │                               │
+                                            │  ┌─────────────────────────┐  │
+                                            │  │  WEB SCRAPING      ✅   │  │
+                                            │  │  - Firecrawl            │  │
                                             │  └─────────────────────────┘  │
                                             └───────────────────────────────┘
 ```
@@ -95,51 +125,21 @@ Transform Open Lovable from a single-user tool into a **multi-tenant SaaS platfo
 
 ## Database Schema (PostgreSQL + Prisma)
 
+### Currently Implemented ✅
+
 ```prisma
-// prisma/schema.prisma
-
-generator client {
-  provider = "prisma-client-js"
-}
-
-datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-}
-
-// ============================================
-// AUTHENTICATION & USERS
-// ============================================
-
 model User {
   id            String    @id @default(cuid())
   email         String    @unique
   emailVerified DateTime?
   name          String?
   image         String?
-  password      String?   // For email/password auth
-  
-  // OAuth connections
-  accounts      Account[]
-  sessions      Session[]
-  
-  // Platform data
-  teams         TeamMember[]
-  projects      Project[]
-  
-  // Billing
-  stripeCustomerId String?   @unique
-  subscription     Subscription?
-  
-  // Metadata
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
-  lastLoginAt   DateTime?
   
-  // Usage tracking
-  usage         Usage[]
-  
-  @@map("users")
+  accounts      Account[]
+  sessions      Session[]
+  projects      Project[]
 }
 
 model Account {
@@ -159,7 +159,6 @@ model Account {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([provider, providerAccountId])
-  @@map("accounts")
 }
 
 model Session {
@@ -168,45 +167,59 @@ model Session {
   userId       String
   expires      DateTime
   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@map("sessions")
 }
 
-model VerificationToken {
-  identifier String
-  token      String   @unique
-  expires    DateTime
-
-  @@unique([identifier, token])
-  @@map("verification_tokens")
+model Project {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  description String?
+  sandboxId   String?
+  sandboxUrl  String?
+  mode        String   @default("build")
+  sourceUrl   String?
+  githubRepo  String?
+  githubBranch String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  versions    Version[]
 }
 
-// ============================================
+model Version {
+  id            String   @id @default(cuid())
+  projectId     String
+  versionNumber Int
+  name          String?
+  description   String?
+  trigger       String?
+  filesJson     String?  @db.Text
+  packagesJson  String?
+  kanbanJson    String?  @db.Text
+  fileCount     Int      @default(0)
+  totalSize     Int      @default(0)
+  gitCommitSha  String?
+  createdAt     DateTime @default(now())
+  
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, versionNumber])
+}
+```
+
+### Planned Schema (Future) 🔴
+
+```prisma
 // TEAMS & COLLABORATION
-// ============================================
-
 model Team {
   id          String   @id @default(cuid())
   name        String
   slug        String   @unique
-  image       String?
-  
-  // Team settings
-  settings    Json     @default("{}")
-  
-  // Relations
   members     TeamMember[]
   projects    Project[]
-  invitations TeamInvitation[]
-  
-  // Billing (team-level)
-  stripeCustomerId String?   @unique
-  subscription     TeamSubscription?
-  
+  subscription TeamSubscription?
   createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  @@map("teams")
 }
 
 model TeamMember {
@@ -214,30 +227,9 @@ model TeamMember {
   teamId    String
   userId    String
   role      TeamRole @default(MEMBER)
-  
-  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
+  team      Team     @relation(fields: [teamId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
   @@unique([teamId, userId])
-  @@map("team_members")
-}
-
-model TeamInvitation {
-  id        String   @id @default(cuid())
-  teamId    String
-  email     String
-  role      TeamRole @default(MEMBER)
-  token     String   @unique
-  expiresAt DateTime
-  
-  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  
-  createdAt DateTime @default(now())
-
-  @@map("team_invitations")
 }
 
 enum TeamRole {
@@ -247,136 +239,24 @@ enum TeamRole {
   VIEWER
 }
 
-// ============================================
-// PROJECTS
-// ============================================
-
-model Project {
-  id          String   @id @default(cuid())
-  name        String
-  slug        String
-  description String?
-  
-  // Ownership (either user or team)
-  userId      String?
-  teamId      String?
-  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  team        Team?    @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  
-  // Project settings
-  framework   Framework @default(REACT_VITE)
-  settings    Json      @default("{}")
-  
-  // Current state
-  files       ProjectFile[]
-  versions    ProjectVersion[]
-  
-  // Deployment
-  deployments Deployment[]
-  customDomain String?
-  
-  // AI context
-  conversationHistory Json @default("[]")
-  
-  // Metadata
-  isPublic    Boolean  @default(false)
-  thumbnail   String?
-  
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  lastEditedAt DateTime?
-
-  @@unique([userId, slug])
-  @@unique([teamId, slug])
-  @@map("projects")
-}
-
-model ProjectFile {
-  id        String   @id @default(cuid())
-  projectId String
-  path      String   // e.g., "src/components/Header.jsx"
-  content   String   @db.Text
-  
-  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([projectId, path])
-  @@map("project_files")
-}
-
-model ProjectVersion {
-  id          String   @id @default(cuid())
-  projectId   String
-  version     Int
-  name        String?  // Optional version name
-  description String?
-  
-  // Snapshot of files at this version
-  files       Json     // { path: content } map
-  
-  // Who created this version
-  createdBy   String?
-  
-  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  
-  createdAt   DateTime @default(now())
-
-  @@unique([projectId, version])
-  @@map("project_versions")
-}
-
-enum Framework {
-  REACT_VITE
-  NEXT_JS
-  VUE_VITE
-  SVELTE
-  ASTRO
-}
-
-// ============================================
 // DEPLOYMENTS
-// ============================================
-
 model Deployment {
   id          String   @id @default(cuid())
   projectId   String
-  
-  // Deployment target
   provider    DeploymentProvider
-  providerId  String?  // ID from the deployment provider
-  
-  // Status
   status      DeploymentStatus @default(PENDING)
   url         String?
-  
-  // Version deployed
-  versionId   String?
-  
-  // Build info
-  buildLogs   String?  @db.Text
-  buildTime   Int?     // seconds
-  
-  // Domain
   customDomain String?
-  sslStatus   SSLStatus @default(PENDING)
-  
-  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  
+  buildLogs   String?  @db.Text
+  project     Project  @relation(fields: [projectId], references: [id])
   createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
   deployedAt  DateTime?
-
-  @@map("deployments")
 }
 
 enum DeploymentProvider {
   VERCEL
   CLOUDFLARE
   NETLIFY
-  RAILWAY
-  SELF_HOSTED
 }
 
 enum DeploymentStatus {
@@ -385,74 +265,18 @@ enum DeploymentStatus {
   DEPLOYING
   READY
   FAILED
-  CANCELLED
 }
 
-enum SSLStatus {
-  PENDING
-  PROVISIONING
-  ACTIVE
-  FAILED
-}
-
-// ============================================
-// BILLING & SUBSCRIPTIONS
-// ============================================
-
+// BILLING
 model Subscription {
   id                   String   @id @default(cuid())
   userId               String   @unique
-  
   stripeSubscriptionId String   @unique
-  stripePriceId        String
-  stripeStatus         String
-  
   plan                 Plan     @default(FREE)
-  
-  // Limits based on plan
   projectLimit         Int      @default(3)
-  deploymentLimit      Int      @default(1)
   aiRequestsLimit      Int      @default(100)
-  teamMemberLimit      Int      @default(1)
-  
-  currentPeriodStart   DateTime
   currentPeriodEnd     DateTime
-  cancelAtPeriodEnd    Boolean  @default(false)
-  
-  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
-
-  @@map("subscriptions")
-}
-
-model TeamSubscription {
-  id                   String   @id @default(cuid())
-  teamId               String   @unique
-  
-  stripeSubscriptionId String   @unique
-  stripePriceId        String
-  stripeStatus         String
-  
-  plan                 Plan     @default(TEAM)
-  
-  // Team limits
-  projectLimit         Int      @default(50)
-  deploymentLimit      Int      @default(20)
-  aiRequestsLimit      Int      @default(5000)
-  teamMemberLimit      Int      @default(10)
-  
-  currentPeriodStart   DateTime
-  currentPeriodEnd     DateTime
-  cancelAtPeriodEnd    Boolean  @default(false)
-  
-  team                 Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
-
-  @@map("team_subscriptions")
+  user                 User     @relation(fields: [userId], references: [id])
 }
 
 enum Plan {
@@ -462,144 +286,109 @@ enum Plan {
   ENTERPRISE
 }
 
-// ============================================
 // USAGE TRACKING
-// ============================================
-
 model Usage {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
-  
-  // What was used
   type      UsageType
-  amount    Int      @default(1)
-  
-  // Context
+  amount    Int       @default(1)
   projectId String?
-  metadata  Json     @default("{}")
-  
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
-  createdAt DateTime @default(now())
-
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id])
   @@index([userId, type, createdAt])
-  @@map("usage")
 }
 
 enum UsageType {
   AI_REQUEST
   SANDBOX_MINUTE
   DEPLOYMENT
-  STORAGE_GB
-  BANDWIDTH_GB
 }
 ```
 
 ---
 
-## Authentication System
+## Authentication System ✅ Implemented
 
-### Tech Stack
-- **NextAuth.js v5** (Auth.js) - Authentication framework
-- **Prisma Adapter** - Database integration
-- **Providers**: Email/Password, Google, GitHub
+### Current Implementation
 
-### Implementation
+- **NextAuth.js** with Prisma Adapter
+- **GitHub OAuth** provider
+- **Database sessions** for security
+- **Protected routes** via middleware
 
-```typescript
-// lib/auth.ts
-import NextAuth from "next-auth"
-import { PrismaAdapter } from "@auth/prisma-adapter"
-import { prisma } from "@/lib/prisma"
-import Google from "next-auth/providers/google"
-import GitHub from "next-auth/providers/github"
-import Credentials from "next-auth/providers/credentials"
-import bcrypt from "bcryptjs"
+### Key Files
 
-export const { handlers, auth, signIn, signOut } = NextAuth({
-  adapter: PrismaAdapter(prisma),
-  providers: [
-    Google({
-      clientId: process.env.GOOGLE_CLIENT_ID,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    }),
-    GitHub({
-      clientId: process.env.GITHUB_CLIENT_ID,
-      clientSecret: process.env.GITHUB_CLIENT_SECRET,
-    }),
-    Credentials({
-      credentials: {
-        email: { label: "Email", type: "email" },
-        password: { label: "Password", type: "password" }
-      },
-      async authorize(credentials) {
-        const user = await prisma.user.findUnique({
-          where: { email: credentials.email }
-        })
-        
-        if (!user || !user.password) return null
-        
-        const isValid = await bcrypt.compare(
-          credentials.password, 
-          user.password
-        )
-        
-        if (!isValid) return null
-        
-        return user
-      }
-    })
-  ],
-  callbacks: {
-    async session({ session, user }) {
-      session.user.id = user.id
-      return session
-    }
-  },
-  pages: {
-    signIn: '/login',
-    error: '/login',
-  }
-})
-```
-
-### Middleware
-
-```typescript
-// middleware.ts
-import { auth } from "@/lib/auth"
-
-export default auth((req) => {
-  const isLoggedIn = !!req.auth
-  const isAuthPage = req.nextUrl.pathname.startsWith('/login')
-  const isPublicPage = ['/', '/pricing', '/about'].includes(req.nextUrl.pathname)
-  const isApiRoute = req.nextUrl.pathname.startsWith('/api')
-  const isPublicApi = req.nextUrl.pathname.startsWith('/api/auth')
-
-  // Allow public pages and auth API
-  if (isPublicPage || isPublicApi) return
-
-  // Redirect logged-in users away from auth pages
-  if (isAuthPage && isLoggedIn) {
-    return Response.redirect(new URL('/dashboard', req.nextUrl))
-  }
-
-  // Protect dashboard and API routes
-  if (!isLoggedIn && !isAuthPage) {
-    return Response.redirect(new URL('/login', req.nextUrl))
-  }
-})
-
-export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)']
-}
-```
+| File | Purpose |
+|------|---------|
+| `app/api/auth/[...nextauth]/route.ts` | Auth API handler |
+| `lib/auth-config.ts` | NextAuth configuration |
+| `middleware.ts` | Route protection |
+| `components/auth/LoginButton.tsx` | Login UI |
+| `components/auth/UserMenu.tsx` | User dropdown |
+| `components/auth/SessionProvider.tsx` | Session context |
 
 ---
 
-## Deployment Pipeline
+## Sandbox System ✅ Implemented
 
-### Flow
+### Features
+
+- **Vercel Sandbox** as primary provider
+- **E2B** as fallback option
+- **Sandbox pooling** for performance
+- **Auto-recovery** on 410 expiration
+- **Keep-alive** pings to prevent timeout
+- **Package caching** per sandbox session
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `lib/sandbox/sandbox-manager.ts` | Lifecycle management |
+| `lib/sandbox/factory.ts` | Provider abstraction |
+| `lib/sandbox/providers/vercel-provider.ts` | Vercel implementation |
+| `lib/sandbox/providers/e2b-provider.ts` | E2B implementation |
+
+### Recent Improvements (v1.5.0)
+
+- Robust file parsing (handles truncated AI responses)
+- TSX/TS entrypoint auto-patching
+- Missing import placeholder generation
+- Write-order optimization for Vite HMR stability
+
+---
+
+## Kanban Build System ✅ Implemented
+
+### Workflow Columns
+
+```
+Planning → Backlog → Awaiting Input → Generating → Applying → Testing → Done
+```
+
+### Features
+
+- **Auto-Build Mode**: Tickets move automatically
+- **Manual Build Mode**: User approves each step
+- **Human-in-the-Loop**: Pauses for user input
+- **Drag-drop validation**: Prevents skipping columns
+- **Regression warnings**: Alert on backward movement
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `components/kanban/KanbanBoard.tsx` | Main board |
+| `components/kanban/KanbanColumn.tsx` | Column container |
+| `components/kanban/KanbanTicket.tsx` | Ticket card |
+| `components/kanban/types.ts` | Type definitions |
+| `hooks/useTicketMovement.ts` | Movement validation |
+
+---
+
+## Deployment Pipeline 🔴 Planned
+
+### Target Flow
 
 ```
 User clicks "Deploy"
@@ -624,349 +413,131 @@ User clicks "Deploy"
           │
           ▼
 ┌───────────────────┐
-│  4. Upload        │ - Upload build artifacts to provider
-│     Artifacts     │ - Vercel / Cloudflare / Netlify
+│  4. Upload        │ - Upload to Vercel/Cloudflare/Netlify
+│     Artifacts     │ - Configure environment
 └─────────┬─────────┘
           │
           ▼
 ┌───────────────────┐
-│  5. Configure     │ - Set environment variables
-│     Deployment    │ - Configure custom domain (if any)
+│  5. Deploy        │ - Trigger deployment
+│                   │ - Generate preview URL
 └─────────┬─────────┘
           │
           ▼
 ┌───────────────────┐
-│  6. Deploy        │ - Trigger deployment
-│                   │ - Wait for completion
-└─────────┬─────────┘
-          │
-          ▼
-┌───────────────────┐
-│  7. Update        │ - Save deployment URL
-│     Database      │ - Update project status
+│  6. Update DB     │ - Save deployment URL
+│                   │ - Track usage
 └───────────────────┘
 ```
 
-### Deployment Service
-
-```typescript
-// lib/deployment/deploy.ts
-
-import { prisma } from '@/lib/prisma'
-import { VercelDeployer } from './providers/vercel'
-import { CloudflareDeployer } from './providers/cloudflare'
-
-interface DeployOptions {
-  projectId: string
-  userId: string
-  provider: 'VERCEL' | 'CLOUDFLARE'
-  customDomain?: string
-}
-
-export async function deployProject(options: DeployOptions) {
-  const { projectId, userId, provider } = options
-  
-  // 1. Check permissions & quota
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    include: { subscription: true }
-  })
-  
-  const deploymentCount = await prisma.deployment.count({
-    where: { 
-      project: { userId },
-      status: 'READY'
-    }
-  })
-  
-  if (deploymentCount >= (user?.subscription?.deploymentLimit || 1)) {
-    throw new Error('Deployment limit reached. Upgrade your plan.')
-  }
-  
-  // 2. Get project files
-  const project = await prisma.project.findUnique({
-    where: { id: projectId },
-    include: { files: true }
-  })
-  
-  if (!project) throw new Error('Project not found')
-  
-  // 3. Create deployment record
-  const deployment = await prisma.deployment.create({
-    data: {
-      projectId,
-      provider,
-      status: 'BUILDING'
-    }
-  })
-  
-  try {
-    // 4. Build project in sandbox
-    const buildResult = await buildInSandbox(project.files)
-    
-    // 5. Deploy to provider
-    const deployer = provider === 'VERCEL' 
-      ? new VercelDeployer() 
-      : new CloudflareDeployer()
-    
-    const result = await deployer.deploy({
-      files: buildResult.outputFiles,
-      projectName: project.slug,
-      customDomain: options.customDomain
-    })
-    
-    // 6. Update deployment record
-    await prisma.deployment.update({
-      where: { id: deployment.id },
-      data: {
-        status: 'READY',
-        url: result.url,
-        providerId: result.deploymentId,
-        deployedAt: new Date()
-      }
-    })
-    
-    // 7. Track usage
-    await prisma.usage.create({
-      data: {
-        userId,
-        type: 'DEPLOYMENT',
-        projectId
-      }
-    })
-    
-    return { success: true, url: result.url }
-    
-  } catch (error) {
-    await prisma.deployment.update({
-      where: { id: deployment.id },
-      data: {
-        status: 'FAILED',
-        buildLogs: error.message
-      }
-    })
-    throw error
-  }
-}
-```
-
 ---
 
-## Billing System (Stripe)
+## Billing System 🔴 Planned
 
 ### Plans
 
-| Plan | Price | Projects | Deployments | AI Requests | Team Members |
-|------|-------|----------|-------------|-------------|--------------|
-| Free | $0/mo | 3 | 1 | 100/mo | 1 |
-| Pro | $20/mo | 20 | 10 | 2,000/mo | 1 |
-| Team | $50/mo | 50 | 25 | 5,000/mo | 10 |
-| Enterprise | Custom | Unlimited | Unlimited | Unlimited | Unlimited |
-
-### Stripe Integration
-
-```typescript
-// app/api/billing/webhook/route.ts
-
-import { headers } from 'next/headers'
-import Stripe from 'stripe'
-import { prisma } from '@/lib/prisma'
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!)
-
-export async function POST(req: Request) {
-  const body = await req.text()
-  const signature = headers().get('stripe-signature')!
-  
-  const event = stripe.webhooks.constructEvent(
-    body,
-    signature,
-    process.env.STRIPE_WEBHOOK_SECRET!
-  )
-  
-  switch (event.type) {
-    case 'checkout.session.completed': {
-      const session = event.data.object
-      await handleCheckoutComplete(session)
-      break
-    }
-    
-    case 'customer.subscription.updated': {
-      const subscription = event.data.object
-      await handleSubscriptionUpdate(subscription)
-      break
-    }
-    
-    case 'customer.subscription.deleted': {
-      const subscription = event.data.object
-      await handleSubscriptionCancel(subscription)
-      break
-    }
-  }
-  
-  return Response.json({ received: true })
-}
-
-async function handleCheckoutComplete(session: Stripe.Checkout.Session) {
-  const userId = session.metadata?.userId
-  const plan = session.metadata?.plan as Plan
-  
-  const limits = getPlanLimits(plan)
-  
-  await prisma.subscription.upsert({
-    where: { userId },
-    create: {
-      userId,
-      stripeSubscriptionId: session.subscription as string,
-      stripePriceId: session.metadata?.priceId!,
-      stripeStatus: 'active',
-      plan,
-      ...limits,
-      currentPeriodStart: new Date(),
-      currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
-    },
-    update: {
-      stripeSubscriptionId: session.subscription as string,
-      stripePriceId: session.metadata?.priceId!,
-      stripeStatus: 'active',
-      plan,
-      ...limits
-    }
-  })
-}
-```
-
----
-
-## File Storage
-
-### Options
-
-1. **Supabase Storage** - Easy, integrated with Postgres
-2. **Cloudflare R2** - Cheap, S3-compatible
-3. **AWS S3** - Industry standard
-4. **Vercel Blob** - Simple, Vercel-native
-
-### Recommended: Cloudflare R2
-
-```typescript
-// lib/storage/r2.ts
-
-import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3'
-
-const r2 = new S3Client({
-  region: 'auto',
-  endpoint: process.env.R2_ENDPOINT,
-  credentials: {
-    accessKeyId: process.env.R2_ACCESS_KEY_ID!,
-    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!
-  }
-})
-
-export async function uploadProjectFiles(
-  projectId: string, 
-  files: Record<string, string>
-) {
-  const uploads = Object.entries(files).map(([path, content]) => {
-    return r2.send(new PutObjectCommand({
-      Bucket: process.env.R2_BUCKET,
-      Key: `projects/${projectId}/${path}`,
-      Body: content,
-      ContentType: getContentType(path)
-    }))
-  })
-  
-  await Promise.all(uploads)
-}
-
-export async function getProjectFiles(projectId: string) {
-  // List and retrieve all files for a project
-  // ...
-}
-```
+| Plan | Price | Projects | AI Requests | Deployments |
+|------|-------|----------|-------------|-------------|
+| Free | $0/mo | 3 | 100/mo | 1 |
+| Pro | $20/mo | 20 | 2,000/mo | 10 |
+| Team | $50/mo | 50 | 5,000/mo | 25 |
+| Enterprise | Custom | Unlimited | Unlimited | Unlimited |
 
 ---
 
 ## Implementation Phases
 
-### Phase 1: Foundation (Week 1-2)
-- [ ] Set up PostgreSQL database (Supabase/Neon/PlanetScale)
-- [ ] Configure Prisma with schema
-- [ ] Implement NextAuth.js authentication
-- [ ] Create auth middleware
-- [ ] Basic user dashboard
+### Phase 1: Foundation ✅ Complete
+- [x] PostgreSQL database (Prisma schema)
+- [x] NextAuth.js authentication
+- [x] Auth middleware
+- [x] User dashboard
+- [x] Project CRUD
 
-### Phase 2: Project Management (Week 3-4)
-- [ ] Project CRUD API
-- [ ] File storage integration
-- [ ] Project versioning
-- [ ] Convert existing generation page to use database
+### Phase 2: Core Build System ✅ Complete
+- [x] AI code generation (multi-provider)
+- [x] Sandbox management
+- [x] Kanban workflow
+- [x] File application with error recovery
+- [x] GitHub export
 
-### Phase 3: Deployment System (Week 5-6)
+### Phase 3: Safety & Quality 🟡 In Progress
+- [x] Drag-drop validation
+- [x] Regression warnings
+- [ ] Soft deletion (code commenting)
+- [ ] PR Review agents (Bugbot)
+- [ ] Background Git sync
+
+### Phase 4: Deployment System 🔴 Not Started
 - [ ] Vercel deployment integration
 - [ ] Build pipeline
 - [ ] Deployment status tracking
 - [ ] Custom domain support
+- [ ] Permanent preview URLs
 
-### Phase 4: Billing (Week 7-8)
+### Phase 5: Billing 🔴 Not Started
 - [ ] Stripe integration
 - [ ] Subscription management
-- [ ] Usage tracking
+- [ ] Usage tracking per user
 - [ ] Plan limits enforcement
 
-### Phase 5: Teams & Collaboration (Week 9-10)
+### Phase 6: Teams & Collaboration 🔴 Not Started
 - [ ] Team creation/management
 - [ ] Team invitations
 - [ ] Role-based permissions
 - [ ] Shared projects
 
-### Phase 6: Polish & Scale (Week 11-12)
-- [ ] Performance optimization
-- [ ] Error handling
-- [ ] Monitoring & analytics
-- [ ] Documentation
-
 ---
 
-## Environment Variables (Production)
+## Environment Variables
+
+### Currently Required
 
 ```env
-# Database
-DATABASE_URL="postgresql://..."
+# Sandbox
+SANDBOX_PROVIDER=vercel
+VERCEL_TOKEN=xxx
+VERCEL_TEAM_ID=team_xxx
+VERCEL_PROJECT_ID=prj_xxx
 
-# Auth
-NEXTAUTH_SECRET="..."
-NEXTAUTH_URL="https://your-domain.com"
-GOOGLE_CLIENT_ID="..."
-GOOGLE_CLIENT_SECRET="..."
-GITHUB_CLIENT_ID="..."
-GITHUB_CLIENT_SECRET="..."
+# AI Providers (at least one)
+OPENAI_API_KEY=xxx
+ANTHROPIC_API_KEY=xxx
+GROQ_API_KEY=xxx
+GEMINI_API_KEY=xxx
+
+# Website Scraping
+FIRECRAWL_API_KEY=xxx
+
+# Authentication (optional)
+DATABASE_URL=postgresql://...
+NEXTAUTH_SECRET=xxx
+NEXTAUTH_URL=https://your-domain.com
+GITHUB_CLIENT_ID=xxx
+GITHUB_CLIENT_SECRET=xxx
+
+# Fast Edits (optional)
+MORPH_API_KEY=xxx
+```
+
+### Future (Deployment & Billing)
+
+```env
+# Deployment Providers
+VERCEL_DEPLOY_TOKEN=xxx
+CLOUDFLARE_API_TOKEN=xxx
+NETLIFY_AUTH_TOKEN=xxx
 
 # Stripe
-STRIPE_SECRET_KEY="sk_live_..."
-STRIPE_WEBHOOK_SECRET="whsec_..."
-NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY="pk_live_..."
+STRIPE_SECRET_KEY=sk_live_xxx
+STRIPE_WEBHOOK_SECRET=whsec_xxx
+NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_live_xxx
 
-# Storage
-R2_ENDPOINT="https://..."
-R2_ACCESS_KEY_ID="..."
-R2_SECRET_ACCESS_KEY="..."
-R2_BUCKET="open-lovable-projects"
-
-# Deployment Providers
-VERCEL_TOKEN="..."
-VERCEL_TEAM_ID="..."
-CLOUDFLARE_API_TOKEN="..."
-CLOUDFLARE_ACCOUNT_ID="..."
-
-# AI Providers (existing)
-OPENAI_API_KEY="..."
-ANTHROPIC_API_KEY="..."
-GROQ_API_KEY="..."
-
-# Sandbox (existing)
-SANDBOX_PROVIDER="vercel"
-VERCEL_OIDC_TOKEN="..."
+# File Storage
+R2_ENDPOINT=https://xxx
+R2_ACCESS_KEY_ID=xxx
+R2_SECRET_ACCESS_KEY=xxx
+R2_BUCKET=paynto-projects
 ```
 
 ---
@@ -994,16 +565,8 @@ VERCEL_OIDC_TOKEN="..."
 
 ---
 
-## Next Steps
+## Related Documentation
 
-1. **Choose your stack:**
-   - Database: Supabase (easiest) or Neon (best DX)
-   - Storage: Cloudflare R2 (cheapest) or Supabase Storage
-   - Deployment: Start with Vercel only
-
-2. **Start with Phase 1:**
-   - Run `npx prisma init`
-   - Copy the schema above
-   - Set up NextAuth.js
-
-3. **Need help implementing?** I can create the actual code files for any phase.
+- `MVP_UX_IMPLEMENTATION_PLAN.md` - Feature status and roadmap
+- `DEPLOYMENT.md` - Production deployment guide
+- `config/app.config.ts` - Application configuration

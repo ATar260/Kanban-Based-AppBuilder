@@ -1,13 +1,14 @@
-# Open Lovable - Production Deployment Guide
+# Paynto A.I. - Production Deployment Guide
 
 ## Architecture Overview
 
-**Open Lovable** is a Lovable/Bolt-style AI app builder built with:
+**Paynto A.I.** is an AI-powered website builder with:
 - **Frontend**: Next.js 15 + React 19 + Tailwind CSS
 - **AI Providers**: OpenAI, Anthropic, Google Gemini, Groq (via Vercel AI SDK)
-- **Sandboxes**: Vercel Sandbox or E2B (cloud code execution environments)
+- **Sandboxes**: Vercel Sandbox (primary) or E2B (alternative)
 - **Web Scraping**: Firecrawl (for cloning websites)
-- **Version Control**: GitHub OAuth integration (optional)
+- **Auth**: NextAuth.js with GitHub OAuth
+- **Database**: PostgreSQL via Prisma (optional for multi-user)
 
 ---
 
@@ -22,7 +23,7 @@
 | └─ E2B | Alternative sandbox | https://e2b.dev |
 | **AI Provider** (need at least one) | | |
 | └─ Vercel AI Gateway | Multi-model access | https://vercel.com/dashboard/ai-gateway |
-| └─ OpenAI | GPT-4 | https://platform.openai.com |
+| └─ OpenAI | GPT-4/GPT-5 | https://platform.openai.com |
 | └─ Anthropic | Claude | https://console.anthropic.com |
 | └─ Groq | Fast inference (Kimi K2) | https://console.groq.com |
 
@@ -33,6 +34,7 @@
 | Firecrawl | Website scraping/cloning | https://firecrawl.dev |
 | GitHub OAuth | Save to GitHub repos | https://github.com/settings/developers |
 | Morph | Fast code edits | https://morphllm.com |
+| PostgreSQL | Multi-user persistence | Supabase/Neon/Railway |
 
 ---
 
@@ -42,8 +44,8 @@
 
 ```bash
 # 1. Fork/clone the repo
-git clone https://github.com/your-org/open-lovable
-cd open-lovable
+git clone https://github.com/your-org/paynto-ai
+cd paynto-ai
 
 # 2. Install dependencies
 npm install
@@ -67,8 +69,8 @@ vercel --prod
 
 ```bash
 # 1. Clone and build
-git clone https://github.com/your-org/open-lovable
-cd open-lovable
+git clone https://github.com/your-org/paynto-ai
+cd paynto-ai
 npm install
 npm run build
 
@@ -115,8 +117,8 @@ CMD ["npm", "start"]
 ```
 
 ```bash
-docker build -t open-lovable .
-docker run -p 3000:3000 --env-file .env open-lovable
+docker build -t paynto-ai .
+docker run -p 3000:3000 --env-file .env paynto-ai
 ```
 
 ---
@@ -149,9 +151,13 @@ GROQ_API_KEY=xxx
 # OPTIONAL FEATURES
 FIRECRAWL_API_KEY=xxx          # Website cloning
 MORPH_API_KEY=xxx              # Fast edits
-GITHUB_CLIENT_ID=xxx           # GitHub integration
+
+# AUTHENTICATION (Optional - for multi-user)
+DATABASE_URL=postgresql://...
+NEXTAUTH_SECRET=xxx            # Generate: openssl rand -base64 32
+NEXTAUTH_URL=https://your-domain.com
+GITHUB_CLIENT_ID=xxx
 GITHUB_CLIENT_SECRET=xxx
-NEXT_PUBLIC_GITHUB_CLIENT_ID=xxx
 ```
 
 ---
@@ -173,25 +179,30 @@ NEXT_PUBLIC_GITHUB_CLIENT_ID=xxx
 
 ## Security Checklist
 
-- [ ] Never expose API keys in frontend code
-- [ ] All keys should be server-side only (no `NEXT_PUBLIC_` prefix except GitHub Client ID)
-- [ ] Enable CORS restrictions in production
-- [ ] Rate limit API endpoints
-- [ ] Sandbox code runs in isolated environments (Vercel/E2B handle this)
-- [ ] GitHub OAuth uses state parameter validation (implemented)
+- [x] All AI API calls server-side only
+- [x] Environment variables for secrets
+- [x] Sandbox isolation (Vercel/E2B)
+- [x] NextAuth session security
+- [x] GitHub token storage in DB
+- [x] Rate limiting utility
+- [x] Zod input validation
+- [x] Security headers configured
+- [ ] CORS restrictions (partial)
+- [ ] Prompt injection hardening (planned)
 
 ---
 
-## Key Files to Understand
+## Key Files Reference
 
 | File | Purpose |
 |------|---------|
 | `app/generation/page.tsx` | Main UI for code generation |
 | `app/api/generate-ai-code-stream/route.ts` | AI code generation endpoint |
 | `app/api/apply-ai-code-stream/route.ts` | Write code to sandbox |
+| `app/api/plan-build/route.ts` | AI build planning |
 | `lib/sandbox/factory.ts` | Sandbox provider selection |
-| `lib/sandbox/providers/vercel-provider.ts` | Vercel Sandbox implementation |
-| `lib/sandbox/providers/e2b-provider.ts` | E2B Sandbox implementation |
+| `lib/sandbox/sandbox-manager.ts` | Sandbox pooling & lifecycle |
+| `components/kanban/` | Kanban board system |
 | `config/app.config.ts` | App configuration |
 
 ---
@@ -209,10 +220,12 @@ NEXT_PUBLIC_GITHUB_CLIENT_ID=xxx
 
 ## Scaling Considerations
 
-- **Sandbox pooling**: Already implemented in `sandbox-manager.ts` - reuses sandboxes
-- **Pre-warming**: Sandboxes can be pre-warmed for faster UX (automatic)
+- **Sandbox pooling**: Implemented in `sandbox-manager.ts` - reuses sandboxes
+- **Keep-alive**: Auto-ping to prevent sandbox expiration
+- **Auto-recovery**: Sandbox recreation on 410 expiration errors
+- **Package caching**: Per-sandbox package installation cache
 - **Model routing**: Use Groq for simple edits, Claude/GPT-4 for complex generation
-- **Caching**: Package installation cache per sandbox session (automatic)
+- **Write-order optimization**: Leaf modules first for Vite HMR stability
 
 ---
 
@@ -236,7 +249,11 @@ NEXT_PUBLIC_GITHUB_CLIENT_ID=xxx
 ### GitHub integration issues
 - Verify OAuth callback URL matches your domain
 - Check both `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` are set
-- Ensure `NEXT_PUBLIC_GITHUB_CLIENT_ID` matches `GITHUB_CLIENT_ID`
+
+### Preview not updating
+- TSX/TS entrypoints auto-patched (index.html & main.jsx)
+- Missing imports get placeholder modules automatically
+- Check browser console for Vite errors
 
 ---
 
@@ -244,14 +261,31 @@ NEXT_PUBLIC_GITHUB_CLIENT_ID=xxx
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/api/create-ai-sandbox` | POST | Create new sandbox |
+| `/api/create-ai-sandbox-v2` | POST | Create new sandbox |
 | `/api/generate-ai-code-stream` | POST | Generate code with AI |
 | `/api/apply-ai-code-stream` | POST | Apply code to sandbox |
+| `/api/plan-build` | POST | Generate build plan |
 | `/api/install-packages` | POST | Install npm packages |
 | `/api/scrape-website` | POST | Scrape URL with Firecrawl |
-| `/api/github/auth` | GET | GitHub OAuth callback |
 | `/api/github/repos` | GET/POST | List/create repos |
 | `/api/github/commit` | POST | Commit files to repo |
+| `/api/projects` | GET/POST | Project CRUD |
+| `/api/auth/[...nextauth]` | * | Authentication |
+
+---
+
+## Implementation Status
+
+See `MVP_UX_IMPLEMENTATION_PLAN.md` for full feature status and roadmap.
+
+**Current Status:**
+- ✅ Core build system complete
+- ✅ Kanban workflow complete
+- ✅ GitHub export complete
+- ✅ Auth system complete
+- 🔴 Auto-deploy pipeline (planned)
+- 🔴 Background Git sync (planned)
+- 🔴 PR review agents (planned)
 
 ---
 
