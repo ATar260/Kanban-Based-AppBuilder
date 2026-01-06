@@ -37,6 +37,7 @@ import { useBugbot, ReviewResult } from '@/hooks/useBugbot';
 import { CodeReviewPanel, RegressionWarningModal } from '@/components/kanban';
 import { useSoftDelete } from '@/hooks/useSoftDelete';
 import { useAutoRefactor } from '@/hooks/useAutoRefactor';
+import { useGitHubImport } from '@/hooks/useGitHubImport';
 
 interface SandboxData {
   sandboxId: string;
@@ -129,6 +130,7 @@ function AISandboxPage() {
   const [showUIOptions, setShowUIOptions] = useState(false);
   const [uiOptions, setUIOptions] = useState<UIOption[]>([]);
   const [isLoadingUIOptions, setIsLoadingUIOptions] = useState(false);
+  const [isImportingRepo, setIsImportingRepo] = useState(false);
   const [selectedUIOption, setSelectedUIOption] = useState<UIOption | null>(null);
   const [pendingPrompt, setPendingPrompt] = useState<string>('');
 
@@ -143,6 +145,7 @@ function AISandboxPage() {
   const bugbot = useBugbot();
   const softDelete = useSoftDelete();
   const autoRefactor = useAutoRefactor();
+  const githubImport = useGitHubImport();
 
   // Regression warning state
   const [regressionWarning, setRegressionWarning] = useState<{
@@ -1004,7 +1007,7 @@ Apply these design specifications consistently across all components.`;
     setRegressionWarning(null);
   };
 
-  const planBuild = async (prompt: string, uiStyle?: UIOption) => {
+  const planBuild = async (prompt: string, uiStyle?: UIOption, context?: any) => {
     setIsPlanning(true);
     kanban.setTickets([]);
 
@@ -1014,6 +1017,7 @@ Apply these design specifications consistently across all components.`;
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           prompt,
+          context,
           uiStyle: uiStyle ? {
             name: uiStyle.name,
             style: uiStyle.style,
@@ -1057,6 +1061,100 @@ Apply these design specifications consistently across all components.`;
       addChatMessage(`Failed to create build plan: ${error.message}`, 'system');
     } finally {
       setIsPlanning(false);
+    }
+  };
+
+  const truncateForPrompt = (content: string, maxChars: number) => {
+    if (!content) return '';
+    if (content.length <= maxChars) return content;
+    return `${content.slice(0, maxChars)}\n\n// ... truncated ...`;
+  };
+
+  const buildGitHubImportPlanningContext = (files: Array<{ path: string; content: string }>) => {
+    const filePaths = files.map(f => f.path).sort();
+
+    const fileList = filePaths
+      .slice(0, 200)
+      .map(p => `- ${p}`)
+      .join('\n');
+
+    const find = (path: string) => files.find(f => f.path === path);
+    const keyPaths = [
+      'package.json',
+      'README.md',
+      'README.mdx',
+      'src/main.tsx',
+      'src/main.jsx',
+      'src/App.tsx',
+      'src/App.jsx',
+      'vite.config.ts',
+      'vite.config.js',
+      'next.config.js',
+    ];
+
+    const keySnippets = keyPaths
+      .map(path => {
+        const file = find(path);
+        if (!file) return null;
+        return `// FILE: ${path}\n${truncateForPrompt(file.content, 2500)}`;
+      })
+      .filter(Boolean)
+      .join('\n\n---\n\n');
+
+    const contextText = `Repo files (showing ${Math.min(filePaths.length, 200)} of ${filePaths.length}):\n${fileList}\n\nKey files:\n${keySnippets || '(none found)'}`;
+    return { filePaths, contextText };
+  };
+
+  const handleGitHubImportAndPlan = async (
+    repoFullName: string,
+    branch: string,
+    maxFiles: number,
+    model: string,
+    goalPrompt?: string
+  ) => {
+    setIsImportingRepo(true);
+    setHasInitialSubmission(true);
+    setAiModel(model);
+    setActiveTab('kanban');
+
+    try {
+      addChatMessage(`🐙 Importing GitHub repo ${repoFullName}@${branch} (up to ${maxFiles} files)...`, 'system');
+
+      const result = await githubImport.importRepo(repoFullName, branch, maxFiles);
+      if (!result?.success) {
+        throw new Error(githubImport.error || 'Import failed');
+      }
+
+      addChatMessage(`✅ Imported ${result.importedFiles} file(s) from ${repoFullName}@${branch}`, 'system');
+
+      const { filePaths, contextText } = buildGitHubImportPlanningContext(result.files);
+      const goal =
+        goalPrompt?.trim() ||
+        'Analyze this codebase and propose a safe, incremental plan to improve it and implement missing MVP features.';
+
+      const prompt = `You are planning changes for an existing codebase imported from GitHub.
+
+Repo: ${repoFullName}
+Branch: ${branch}
+
+User goal:
+${goal}
+
+Context:
+${contextText}
+
+Requirements:
+- Prefer modifying existing files over creating new ones.
+- Keep changes incremental, testable, and dependency-aware.
+- Include a ticket to verify build/run if the repo appears to be a React/Vite app.`;
+
+      await planBuild(prompt, undefined, { existingFiles: filePaths, github: { repoFullName, branch } });
+    } catch (error: any) {
+      console.error('[GitHub Import] Failed:', error);
+      addChatMessage(`❌ GitHub import failed: ${error.message}`, 'error');
+      setHasInitialSubmission(false);
+    } finally {
+      setIsImportingRepo(false);
     }
   };
 
@@ -4529,7 +4627,10 @@ Focus on the key sections and content, making it clean and modern.`;
                     // Generate 3 UI options for user to choose from
                     await generateUIOptions(prompt);
                   }}
-                  disabled={loading || generationProgress.isGenerating || isPlanning || isLoadingUIOptions}
+                  onImportSubmit={async (repoFullName, branch, maxFiles, model, goalPrompt) => {
+                    await handleGitHubImportAndPlan(repoFullName, branch, maxFiles, model, goalPrompt);
+                  }}
+                  disabled={loading || generationProgress.isGenerating || isPlanning || isLoadingUIOptions || isImportingRepo}
                 />
               </div>
             ) : null}
