@@ -17,9 +17,9 @@ This document is the comprehensive implementation plan for the "Overnight" MVP U
 | Feature | Status | Current State |
 |---------|--------|---------------|
 | Prompt-to-Build | ✅ | AI parses prompts into structured projects |
-| GitHub Import | 🟡 | Basic GitHub integration exists, needs full repo import flow |
+| GitHub Import | ✅ | Import repo files → generate plan → optionally load repo into sandbox |
 | Clone a Website | ✅ | Firecrawl + screenshot scraping, brand style extraction |
-| UI Generation (Multi-Option) | 🔴 | No 3-mockup selection - generates single output |
+| UI Generation (Multi-Option) | ✅ | Generates 3 UI options and supports user selection before planning/build |
 | Auth Integration | 🟡 | NextAuth exists, Supabase not integrated |
 | Auto Hosting/Deploy | 🔴 | Architecture documented, not implemented |
 
@@ -42,7 +42,7 @@ This document is the comprehensive implementation plan for the "Overnight" MVP U
 | Pause Capability | ✅ | Pause/Resume buttons implemented |
 | Manual Build Mode | ✅ | Step-by-step approval mode |
 | Human-in-the-Loop Stops | ✅ | Awaiting input column with modals |
-| Background Git Sync | 🔴 | GitHub export exists, no auto-commit per feature |
+| Background Git Sync | ✅ | Auto-sync (optional) commits changes to GitHub after build completion |
 
 ## 4. Workflow Logic & Safety Guardrails
 
@@ -50,14 +50,14 @@ This document is the comprehensive implementation plan for the "Overnight" MVP U
 |---------|--------|---------------|
 | State Restrictions | ✅ | Drag-drop validation prevents skipping |
 | Reverse-Drag Warning | ✅ | RegressionWarningModal implemented |
-| Soft Deletion | 🔴 | No code commenting on revert |
-| Auto-Refactor Agent | 🔴 | No Claude Code refactoring trigger |
+| Soft Deletion | ✅ | Reverting tickets soft-deletes (comments out) affected code instead of deleting |
+| Auto-Refactor Agent | ✅ | Optional refactor pass after soft-delete to keep codebase stable |
 
 ## 5. Quality Assurance & Output
 
 | Feature | Status | Current State |
 |---------|--------|---------------|
-| PR Review Agents ("Bugbot") | 🔴 | No automated code review agents |
+| PR Review Agents ("Bugbot") | ✅ | Automated code review gate before completion (PR Review column) |
 | Dual View Mode | ✅ | Kanban + App Preview toggle exists |
 | Instruction-Tuned Reviewer | 🔴 | No quality standards agent |
 
@@ -241,14 +241,14 @@ Behavior: After ticket completion → Auto-push to selected repo
 ## Phase 1: Onboarding & Project Initiation
 
 ### 1.1 Entry Choice Screen (3 Options)
-**Status:** 🟡 Partially Complete  
+**Status:** ✅ Complete  
 **Priority:** Critical  
 **Estimated Effort:** M
 
 **Current State:** Build and Clone exist in SidebarInput
 
 **Tasks:**
-- [ ] Create unified entry component with three distinct paths
+- [x] Create unified entry component with three distinct paths
 - [x] **Option A (Build from Prompt):** ✅ Done
   - Natural language prompt input
   - Template suggestions (Landing Page, Dashboard, E-commerce, etc.)
@@ -258,7 +258,7 @@ Behavior: After ticket completion → Auto-push to selected repo
   - Style preferences
   - Quick clone examples (Stripe, Linear, Vercel)
   - "Clone Website" button → Creates plan based on scraped site
-- [ ] **Option C (Import from GitHub):**
+- [x] **Option C (Import from GitHub):**
   - "Import from GitHub" button
   - GitHub OAuth flow (already implemented)
   - Repository selection modal with search
@@ -291,7 +291,7 @@ Behavior: After ticket completion → Auto-push to selected repo
   - Select from connected repos
   - Branch selection/creation
   - Commit message input
-- [ ] Automatic commit after each ticket completion (optional toggle)
+- [x] Automatic commit after each ticket completion (optional toggle)
 - [x] View repository link after export
 - [x] Push status indicator
 
@@ -304,16 +304,16 @@ Behavior: After ticket completion → Auto-push to selected repo
 ---
 
 ### 1.3 UI Multi-Option Generation (3 Mockups)
-**Status:** 🔴 Not Started  
+**Status:** ✅ Complete  
 **Priority:** P0 - Critical  
 **Estimated Effort:** L
 
 **Tasks:**
-- [ ] Create `/api/generate-ui-options` endpoint
-- [ ] Generate 3 distinct UI mockups from single prompt
-- [ ] Build comparison/selection interface
-- [ ] Style preview thumbnails
-- [ ] User selection flow before build starts
+- [x] Create `/api/generate-ui-options` endpoint
+- [x] Generate 3 distinct UI mockups from single prompt
+- [x] Build comparison/selection interface
+- [x] Style preview thumbnails
+- [x] User selection flow before build starts
 
 ---
 
@@ -393,7 +393,7 @@ Behavior: After ticket completion → Auto-push to selected repo
 **Tasks:**
 - [x] Toggle between Kanban Board and App Preview
 - [x] Persist view preference
-- [ ] Add split-view option (both views side-by-side)
+- [x] Add split-view option (both views side-by-side)
 
 ---
 
@@ -437,16 +437,16 @@ Behavior: After ticket completion → Auto-push to selected repo
 ---
 
 ### 3.5 Background Git Sync
-**Status:** 🔴 Not Started  
+**Status:** ✅ Complete  
 **Priority:** P0 - Critical  
 **Estimated Effort:** M
 
 **Tasks:**
-- [ ] Add "Auto-commit" toggle in settings
-- [ ] Hook into ticket completion event
-- [ ] Auto-commit each completed feature to GitHub
-- [ ] Commit message generation from ticket title
-- [ ] Sync status indicator
+- [x] Add "Auto-commit" toggle in settings
+- [x] Hook into ticket completion event
+- [x] Auto-commit each completed feature to GitHub
+- [x] Commit message generation from ticket title
+- [x] Sync status indicator
 
 ---
 
@@ -477,8 +477,8 @@ Behavior: After ticket completion → Auto-push to selected repo
 - [x] Detect backward ticket movement
 - [x] Warning modal with clear messaging
 - [x] Confirmation flow before reverting
-- [ ] Soft deletion (comment out code instead of delete)
-- [ ] Auto-refactor trigger for stability
+- [x] Soft deletion (comment out code instead of delete)
+- [x] Auto-refactor trigger for stability
 - [ ] Undo history tracking
 
 **Files Created:**
@@ -487,45 +487,45 @@ Behavior: After ticket completion → Auto-push to selected repo
 ---
 
 ### 4.3 Soft Deletion System
-**Status:** 🔴 Not Started  
+**Status:** ✅ Complete  
 **Priority:** P1 - Important  
 **Estimated Effort:** M
 
 **Tasks:**
-- [ ] Track generated code per ticket
-- [ ] On revert: comment out code instead of delete
-- [ ] Maintain code history for recovery
+- [x] Track generated code per ticket
+- [x] On revert: comment out code instead of delete
+- [x] Maintain code history for recovery
 - [ ] Integration with version control
 
 ---
 
 ### 4.4 Auto-Refactor Agent
-**Status:** 🔴 Not Started  
+**Status:** ✅ Complete  
 **Priority:** P2 - Nice-to-Have  
 **Estimated Effort:** L
 
 **Tasks:**
-- [ ] Trigger refactor after feature revert
+- [x] Trigger refactor after feature revert
 - [ ] Claude Code integration for linting
-- [ ] Codebase stability validation
-- [ ] Automatic fix suggestions
+- [x] Codebase stability validation
+- [x] Automatic fix suggestions
 
 ---
 
 ## Phase 5: Quality Assurance
 
 ### 5.1 PR Review Column & Bugbot Agent
-**Status:** 🔴 Not Started  
+**Status:** ✅ Complete  
 **Priority:** P0 - Critical  
 **Estimated Effort:** L
 
 **Tasks:**
-- [ ] Add "PR Review" column before "Done"
-- [ ] Build Bugbot automated code review agent
-- [ ] Status checks display on tickets
-- [ ] Approve/Request Changes actions
-- [ ] Review gate requiring agent approval
-- [ ] Auto-approve for passing checks
+- [x] Add "PR Review" column before "Done"
+- [x] Build Bugbot automated code review agent
+- [x] Status checks display on tickets
+- [x] Approve/Request Changes actions
+- [x] Review gate requiring agent approval
+- [x] Auto-approve for passing checks
 
 ---
 
@@ -688,31 +688,31 @@ model Version {
 ### P0 - Critical (Core UX)
 | Feature | Status | Notes |
 |---------|--------|-------|
-| UI Multi-Option Generation (3 mockups) | 🔴 Not Started | Generate 3 UI options for user selection |
-| Background Git Sync per feature | 🔴 Not Started | Auto-commit each completed ticket to GitHub |
-| PR Review Agents (Bugbot) | 🔴 Not Started | Automated code review before finalization |
+| UI Multi-Option Generation (3 mockups) | ✅ Complete | Generate 3 UI options for user selection |
+| Background Git Sync per feature | ✅ Complete | Auto-commit each completed ticket to GitHub |
+| PR Review Agents (Bugbot) | ✅ Complete | Automated code review before finalization |
 
 ### P1 - Important (Safety/Polish)
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Soft deletion (comment out code on revert) | 🔴 Not Started | Comment out code instead of delete on ticket revert |
+| Soft deletion (comment out code on revert) | ✅ Complete | Comment out code instead of delete on ticket revert |
 | Plan versioning/revert | 🔴 Not Started | Snapshot plans, allow revert to previous versions |
 | Auto-deploy to Vercel/Netlify | 🔴 Not Started | Permanent preview URLs, one-click deploy |
-| Full GitHub repo import | 🟡 Partial | Needs full codebase ingestion, branch selection |
+| Full GitHub repo import | ✅ Complete | Full codebase ingestion, branch selection, and planning |
 | Supabase Integration | 🔴 Not Started | Database + auth backend |
 
 ### P2 - Nice-to-Have
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Auto-Refactor Agent | 🔴 Not Started | Claude Code integration for linting after revert |
+| Auto-Refactor Agent | ✅ Complete | Refactor pass after revert/soft-delete to keep codebase stable |
 | Instruction-Tuned Reviewer | 🔴 Not Started | Code quality standards agent |
-| Split view mode | 🔴 Not Started | Kanban + Preview side-by-side |
+| Split view mode | ✅ Complete | Kanban + Preview side-by-side |
 | Team collaboration | 🔴 Not Started | Multi-user projects, permissions |
 
 ### Partial Features Needing Completion
 | Feature | Status | What's Missing |
 |---------|--------|----------------|
-| GitHub Import | 🟡 Partial | Full repo ingestion, branch selection, codebase parsing |
+| GitHub Import | ✅ Complete | Full repo ingestion, branch selection, codebase parsing |
 | Usage Tracking | 🟡 Partial | Per-user API tracking, tier limits, UI display |
 | Sandbox Isolation | 🟡 Partial | Cleanup on session end, timeout handling, resource limits |
 
@@ -758,9 +758,10 @@ POST /api/plan-build ✅
   Input: { prompt: string, context?: object }
   Output: SSE stream of tickets + plan
 
-POST /api/generate-ui-options 🔴
+POST /api/generate-ui-options ✅
   Input: { prompt: string }
   Output: { options: UIDesign[] }
+  
 ```
 
 ### Execution
