@@ -131,6 +131,8 @@ function AISandboxPage() {
   const [uiOptions, setUIOptions] = useState<UIOption[]>([]);
   const [isLoadingUIOptions, setIsLoadingUIOptions] = useState(false);
   const [isImportingRepo, setIsImportingRepo] = useState(false);
+  const [lastImportedRepo, setLastImportedRepo] = useState<{ repoFullName: string; branch: string } | null>(null);
+  const [isLoadingRepoIntoSandbox, setIsLoadingRepoIntoSandbox] = useState(false);
   const [selectedUIOption, setSelectedUIOption] = useState<UIOption | null>(null);
   const [pendingPrompt, setPendingPrompt] = useState<string>('');
 
@@ -1126,6 +1128,7 @@ Apply these design specifications consistently across all components.`;
       }
 
       addChatMessage(`✅ Imported ${result.importedFiles} file(s) from ${repoFullName}@${branch}`, 'system');
+      setLastImportedRepo({ repoFullName, branch });
 
       const { filePaths, contextText } = buildGitHubImportPlanningContext(result.files);
       const goal =
@@ -1152,9 +1155,59 @@ Requirements:
     } catch (error: any) {
       console.error('[GitHub Import] Failed:', error);
       addChatMessage(`❌ GitHub import failed: ${error.message}`, 'error');
+      setLastImportedRepo(null);
       setHasInitialSubmission(false);
     } finally {
       setIsImportingRepo(false);
+    }
+  };
+
+  const handleLoadImportedRepoIntoSandbox = async () => {
+    if (!sandboxData) {
+      addChatMessage('❌ No active sandbox to load into. Create a sandbox first.', 'error');
+      return;
+    }
+
+    if (!lastImportedRepo) {
+      addChatMessage('❌ No imported repo found. Import a repo first.', 'error');
+      return;
+    }
+
+    setIsLoadingRepoIntoSandbox(true);
+    try {
+      addChatMessage(
+        `⬇️ Loading ${lastImportedRepo.repoFullName}@${lastImportedRepo.branch} into sandbox...`,
+        'system'
+      );
+
+      const response = await fetch('/api/github/load-into-sandbox', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sandboxId: sandboxData.sandboxId,
+          repoFullName: lastImportedRepo.repoFullName,
+          branch: lastImportedRepo.branch,
+        }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || `Failed to load repo into sandbox (HTTP ${response.status})`);
+      }
+
+      addChatMessage('✅ Repo loaded into sandbox. Restarted dev server.', 'system');
+
+      // Force refresh the preview iframe (if mounted)
+      if (iframeRef.current && sandboxData.url) {
+        iframeRef.current.src = `${sandboxData.url}?t=${Date.now()}`;
+      }
+      setIsPreviewRefreshing(true);
+      setTimeout(() => setIsPreviewRefreshing(false), 1000);
+    } catch (error: any) {
+      console.error('[GitHub Load Into Sandbox] Failed:', error);
+      addChatMessage(`❌ Failed to load repo into sandbox: ${error.message}`, 'error');
+    } finally {
+      setIsLoadingRepoIntoSandbox(false);
     }
   };
 
@@ -4638,7 +4691,7 @@ Focus on the key sections and content, making it clean and modern.`;
             {(isPlanning || kanban.tickets.length > 0) && hasInitialSubmission && (
               <div className="flex-1 overflow-y-auto border-b border-border">
                 <div className="p-3 border-b border-gray-100 bg-gray-50 sticky top-0 z-10">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                       {isPlanning && (
                         <div className="w-3 h-3 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
@@ -4647,14 +4700,31 @@ Focus on the key sections and content, making it clean and modern.`;
                         {isPlanning ? 'Planning Build...' : `Build Plan (${kanban.tickets.length} tasks)`}
                       </span>
                     </div>
-                    {!isPlanning && kanban.tickets.length > 0 && !kanbanBuildActive && (
-                      <button
-                        onClick={handleStartKanbanBuild}
-                        className="px-2 py-1 text-[10px] font-medium rounded bg-orange-500 text-white hover:bg-orange-600 transition-colors"
-                      >
-                        Start Build
-                      </button>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {!isPlanning && kanban.tickets.length > 0 && lastImportedRepo && sandboxData && (
+                        <button
+                          onClick={handleLoadImportedRepoIntoSandbox}
+                          disabled={isLoadingRepoIntoSandbox || kanbanBuildActive}
+                          className={`px-2 py-1 text-[10px] font-medium rounded transition-colors ${
+                            isLoadingRepoIntoSandbox || kanbanBuildActive
+                              ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                              : 'bg-blue-600 text-white hover:bg-blue-700'
+                          }`}
+                          title="Replace sandbox files with the imported repo and restart dev server"
+                        >
+                          {isLoadingRepoIntoSandbox ? 'Loading…' : 'Load to sandbox'}
+                        </button>
+                      )}
+
+                      {!isPlanning && kanban.tickets.length > 0 && !kanbanBuildActive && (
+                        <button
+                          onClick={handleStartKanbanBuild}
+                          className="px-2 py-1 text-[10px] font-medium rounded bg-orange-500 text-white hover:bg-orange-600 transition-colors"
+                        >
+                          Start Build
+                        </button>
+                      )}
+                    </div>
                   </div>
                   {kanban.tickets.length > 0 && (
                     <div className="mt-2">
