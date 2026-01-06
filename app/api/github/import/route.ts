@@ -87,20 +87,19 @@ function shouldIncludeFile(path: string, size?: number): boolean {
 }
 
 async function fetchFileContent(
-  token: string,
+  token: string | null,
   owner: string,
   repo: string,
   path: string
 ): Promise<string | null> {
-  const response = await fetch(
-    `https://api.github.com/repos/${owner}/${repo}/contents/${path}`,
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/vnd.github.v3+json',
-      },
-    }
-  );
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github.v3+json',
+  };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path}`, { headers });
 
   if (!response.ok) return null;
 
@@ -113,20 +112,19 @@ async function fetchFileContent(
 }
 
 async function fetchRepoTree(
-  token: string,
+  token: string | null,
   owner: string,
   repo: string,
   branch: string
 ): Promise<TreeItem[]> {
-  const response = await fetch(
-    `https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`,
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/vnd.github.v3+json',
-      },
-    }
-  );
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github.v3+json',
+  };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`, { headers });
 
   if (!response.ok) {
     throw new Error(`Failed to fetch tree: ${response.status}`);
@@ -138,10 +136,6 @@ async function fetchRepoTree(
 
 export async function POST(request: NextRequest) {
   const token = await getToken(request);
-
-  if (!token) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
 
   try {
     const body = await request.json();
@@ -156,11 +150,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid repository format' }, { status: 400 });
     }
 
+    const effectiveMaxFiles = token ? maxFiles : Math.min(maxFiles, 50);
     const tree = await fetchRepoTree(token, owner, repo, branch);
 
     const filesToFetch = tree
       .filter(item => item.type === 'blob' && shouldIncludeFile(item.path, item.size))
-      .slice(0, maxFiles);
+      .slice(0, effectiveMaxFiles);
 
     const files: RepoFile[] = [];
     const errors: string[] = [];
@@ -195,6 +190,7 @@ export async function POST(request: NextRequest) {
       branch,
       totalFilesInRepo: tree.filter(i => i.type === 'blob').length,
       importedFiles: files.length,
+      unauthenticated: !token,
       files,
       errors: errors.length > 0 ? errors : undefined,
     });
@@ -206,10 +202,6 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   const token = await getToken(request);
-
-  if (!token) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
 
   const { searchParams } = new URL(request.url);
   const repoFullName = searchParams.get('repo');
@@ -235,6 +227,7 @@ export async function GET(request: NextRequest) {
       branch,
       totalFiles: allFiles.length,
       importableFiles: importableFiles.length,
+      unauthenticated: !token,
       files: importableFiles.map(f => ({
         path: f.path,
         size: f.size,
