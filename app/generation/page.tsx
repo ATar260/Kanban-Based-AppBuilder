@@ -4630,7 +4630,7 @@ Focus on the key sections and content, making it clean and modern.`;
                   onImportSubmit={async (repoFullName, branch, maxFiles, model, goalPrompt) => {
                     await handleGitHubImportAndPlan(repoFullName, branch, maxFiles, model, goalPrompt);
                   }}
-                  disabled={loading || generationProgress.isGenerating || isPlanning || isLoadingUIOptions || isImportingRepo}
+                  disabled={generationProgress.isGenerating || isPlanning || isLoadingUIOptions || isImportingRepo}
                 />
               </div>
             ) : null}
