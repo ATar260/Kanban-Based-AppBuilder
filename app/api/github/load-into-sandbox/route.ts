@@ -76,47 +76,110 @@ export async function POST(request: NextRequest) {
       provider = exact;
     }
 
-    // Best-effort: stop existing Vite so we can replace files safely
-    await ensureCommandSuccess(provider, 'pkill -f vite', { allowFailure: true });
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        const send = (payload: any) => {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+        };
 
-    // Clear current project (including node_modules) to avoid conflicts
-    await ensureCommandSuccess(provider, 'find /vercel/sandbox -mindepth 1 -maxdepth 1 -exec rm -rf {} +');
+        const stepStart = (step: string, label: string) => {
+          send({ type: 'step', step, status: 'running', label });
+        };
+        const stepDone = (step: string, detail?: string) => {
+          send({ type: 'step', step, status: 'done', detail });
+        };
+        const stepError = (step: string, message: string) => {
+          send({ type: 'step', step, status: 'error', message });
+        };
 
-    // Download tarball from GitHub codeload and extract into sandbox root
-    const tarRef = encodeURIComponent(branch);
-    const tarUrl = `https://codeload.github.com/${repoFullName}/tar.gz/${tarRef}`;
+        const tailLines = (text: string, lines: number) => {
+          const parts = text.split('\n').filter(Boolean);
+          return parts.slice(-lines).join('\n');
+        };
 
-    const hasCurl = (await ensureCommandSuccess(provider, 'curl --version', { allowFailure: true }))?.success;
-    const hasWget = (await ensureCommandSuccess(provider, 'wget --version', { allowFailure: true }))?.success;
+        const run = async (step: string, label: string, command: string, opts?: { allowFailure?: boolean }) => {
+          stepStart(step, label);
+          try {
+            const res = await ensureCommandSuccess(provider, command, opts);
+            const out = [res?.stdout, res?.stderr].filter(Boolean).join('\n').trim();
+            if (out) {
+              send({ type: 'log', step, message: tailLines(out, 20) });
+            }
+            stepDone(step);
+            return res;
+          } catch (err: any) {
+            stepError(step, err?.message || 'Step failed');
+            throw err;
+          }
+        };
 
-    if (!hasCurl && !hasWget) {
-      return NextResponse.json(
-        { success: false, error: 'Sandbox is missing curl/wget, cannot download repository archive.' },
-        { status: 500 }
-      );
-    }
+        try {
+          send({ type: 'start', repoFullName, branch });
 
-    if (hasCurl) {
-      await ensureCommandSuccess(provider, `curl -L ${tarUrl} -o /tmp/repo.tgz`);
-    } else {
-      await ensureCommandSuccess(provider, `wget -O /tmp/repo.tgz ${tarUrl}`);
-    }
+          await run('stop_vite', 'Stopping dev server', 'pkill -f vite', { allowFailure: true });
+          await run('clear_sandbox', 'Clearing sandbox files', 'find /vercel/sandbox -mindepth 1 -maxdepth 1 -exec rm -rf {} +');
 
-    await ensureCommandSuccess(provider, 'tar -xzf /tmp/repo.tgz --strip-components=1 -C /vercel/sandbox');
-    await ensureCommandSuccess(provider, 'rm -f /tmp/repo.tgz', { allowFailure: true });
+          const tarRef = encodeURIComponent(branch);
+          const tarUrl = `https://codeload.github.com/${repoFullName}/tar.gz/${tarRef}`;
 
-    // Install dependencies and restart dev server
-    await ensureCommandSuccess(provider, 'npm install');
+          const hasCurl = (await ensureCommandSuccess(provider, 'curl --version', { allowFailure: true }))?.success;
+          const hasWget = (await ensureCommandSuccess(provider, 'wget --version', { allowFailure: true }))?.success;
 
-    if (typeof provider.restartViteServer === 'function') {
-      await provider.restartViteServer();
-    }
+          if (!hasCurl && !hasWget) {
+            throw new Error('Sandbox is missing curl/wget, cannot download repository archive.');
+          }
 
-    return NextResponse.json({
-      success: true,
-      repoFullName,
-      branch,
-      message: 'Repository loaded into sandbox and dev server restarted',
+          if (hasCurl) {
+            await run('download', 'Downloading repository archive', `curl -L ${tarUrl} -o /tmp/repo.tgz`);
+          } else {
+            await run('download', 'Downloading repository archive', `wget -O /tmp/repo.tgz ${tarUrl}`);
+          }
+
+          await run('extract', 'Extracting repository', 'tar -xzf /tmp/repo.tgz --strip-components=1 -C /vercel/sandbox');
+          await run('cleanup', 'Cleaning up temporary files', 'rm -f /tmp/repo.tgz', { allowFailure: true });
+
+          // npm install output is large; emit a start/done without logs
+          stepStart('npm_install', 'Installing dependencies (npm install)');
+          try {
+            const res = await ensureCommandSuccess(provider, 'npm install');
+            if (!res?.success) {
+              throw new Error(res?.stderr || res?.stdout || 'npm install failed');
+            }
+            stepDone('npm_install');
+          } catch (err: any) {
+            stepError('npm_install', err?.message || 'npm install failed');
+            throw err;
+          }
+
+          stepStart('restart_vite', 'Restarting dev server');
+          try {
+            if (typeof provider.restartViteServer === 'function') {
+              await provider.restartViteServer();
+            } else {
+              await ensureCommandSuccess(provider, 'sh -c "nohup npm run dev > /tmp/vite.log 2>&1 &"');
+            }
+            stepDone('restart_vite');
+          } catch (err: any) {
+            stepError('restart_vite', err?.message || 'Failed to restart dev server');
+            throw err;
+          }
+
+          send({ type: 'complete', success: true, message: 'Repository loaded into sandbox and dev server restarted' });
+        } catch (error: any) {
+          send({ type: 'error', success: false, message: error?.message || 'Failed to load repository into sandbox' });
+        } finally {
+          controller.close();
+        }
+      }
+    });
+
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+      }
     });
   } catch (error: any) {
     console.error('[github/load-into-sandbox] Error:', error);

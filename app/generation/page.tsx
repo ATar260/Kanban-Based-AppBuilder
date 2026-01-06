@@ -133,6 +133,13 @@ function AISandboxPage() {
   const [isImportingRepo, setIsImportingRepo] = useState(false);
   const [lastImportedRepo, setLastImportedRepo] = useState<{ repoFullName: string; branch: string } | null>(null);
   const [isLoadingRepoIntoSandbox, setIsLoadingRepoIntoSandbox] = useState(false);
+  const [repoLoadModalOpen, setRepoLoadModalOpen] = useState(false);
+  const [repoLoadStatus, setRepoLoadStatus] = useState<'idle' | 'running' | 'success' | 'error'>('idle');
+  const [repoLoadError, setRepoLoadError] = useState<string | null>(null);
+  const [repoLoadSteps, setRepoLoadSteps] = useState<
+    Array<{ id: string; label: string; status: 'pending' | 'running' | 'done' | 'error'; detail?: string }>
+  >([]);
+  const [repoLoadLogs, setRepoLoadLogs] = useState<string[]>([]);
   const [selectedUIOption, setSelectedUIOption] = useState<UIOption | null>(null);
   const [pendingPrompt, setPendingPrompt] = useState<string>('');
 
@@ -1180,6 +1187,20 @@ Requirements:
         'system'
       );
 
+      setRepoLoadModalOpen(true);
+      setRepoLoadStatus('running');
+      setRepoLoadError(null);
+      setRepoLoadLogs([]);
+      setRepoLoadSteps([
+        { id: 'stop_vite', label: 'Stopping dev server', status: 'pending' },
+        { id: 'clear_sandbox', label: 'Clearing sandbox files', status: 'pending' },
+        { id: 'download', label: 'Downloading repository', status: 'pending' },
+        { id: 'extract', label: 'Extracting repository', status: 'pending' },
+        { id: 'cleanup', label: 'Cleaning up', status: 'pending' },
+        { id: 'npm_install', label: 'Installing dependencies', status: 'pending' },
+        { id: 'restart_vite', label: 'Restarting dev server', status: 'pending' },
+      ]);
+
       const response = await fetch('/api/github/load-into-sandbox', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1190,12 +1211,93 @@ Requirements:
         }),
       });
 
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data?.success) {
+      // If server returned a non-stream error, handle it
+      if (!response.ok || !response.body) {
+        const data = await response.json().catch(() => ({}));
         throw new Error(data?.error || `Failed to load repo into sandbox (HTTP ${response.status})`);
       }
 
-      addChatMessage('✅ Repo loaded into sandbox. Restarted dev server.', 'system');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let sawComplete = false;
+      let sawError = false;
+      let errorMessage: string | null = null;
+
+      const updateStep = (stepId: string, status: 'pending' | 'running' | 'done' | 'error', detail?: string) => {
+        setRepoLoadSteps(prev =>
+          prev.map(s => (s.id === stepId ? { ...s, status, detail: detail ?? s.detail } : s))
+        );
+      };
+
+      const appendLog = (line: string) => {
+        const trimmed = line?.trim();
+        if (!trimmed) return;
+        setRepoLoadLogs(prev => [...prev, trimmed].slice(-200));
+      };
+
+      const handleEvent = (evt: any) => {
+        if (!evt || typeof evt !== 'object') return;
+        if (evt.type === 'step' && typeof evt.step === 'string') {
+          const status = evt.status as any;
+          if (status === 'running' || status === 'done' || status === 'error') {
+            updateStep(evt.step, status, evt.detail || evt.message);
+          }
+          return;
+        }
+
+        if (evt.type === 'log') {
+          appendLog(`[${evt.step || 'log'}]\n${evt.message || ''}`.trim());
+          return;
+        }
+
+        if (evt.type === 'error') {
+          sawError = true;
+          errorMessage = evt.message || 'Failed to load repo into sandbox';
+          setRepoLoadStatus('error');
+          setRepoLoadError(errorMessage);
+          return;
+        }
+
+        if (evt.type === 'complete') {
+          sawComplete = true;
+          setRepoLoadStatus('success');
+          return;
+        }
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() ?? '';
+        for (const part of parts) {
+          const lines = part.split('\n');
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const raw = line.slice(6);
+            try {
+              const evt = JSON.parse(raw);
+              handleEvent(evt);
+            } catch {
+              // ignore malformed chunks
+            }
+          }
+        }
+      }
+
+      if (sawError) {
+        throw new Error(errorMessage || 'Failed to load repo into sandbox');
+      }
+
+      // If we didn't get an explicit complete event, treat stream end as success
+      if (!sawComplete) {
+        setRepoLoadStatus(prev => (prev === 'running' ? 'success' : prev));
+      }
+
+      addChatMessage('✅ Repo loaded into sandbox. Dev server restarted.', 'system');
 
       // Force refresh the preview iframe (if mounted)
       if (iframeRef.current && sandboxData.url) {
@@ -1206,6 +1308,8 @@ Requirements:
     } catch (error: any) {
       console.error('[GitHub Load Into Sandbox] Failed:', error);
       addChatMessage(`❌ Failed to load repo into sandbox: ${error.message}`, 'error');
+      setRepoLoadStatus('error');
+      setRepoLoadError(error.message || 'Failed to load repo into sandbox');
     } finally {
       setIsLoadingRepoIntoSandbox(false);
     }
@@ -1443,6 +1547,133 @@ Requirements:
       setGenerationProgress(prev => ({ ...prev, isGenerating: false, status: `Failed: ${error.message}` }));
       addChatMessage(`❌ Build failed: ${error.message}`, 'error');
     }
+  };
+
+  const renderRepoLoadModal = () => {
+    if (!repoLoadModalOpen) return null;
+
+    const titleRepo = lastImportedRepo ? `${lastImportedRepo.repoFullName}@${lastImportedRepo.branch}` : 'Imported repo';
+    const canClose = repoLoadStatus !== 'running';
+    const statusLabel =
+      repoLoadStatus === 'running'
+        ? 'Working…'
+        : repoLoadStatus === 'success'
+          ? 'Done'
+          : repoLoadStatus === 'error'
+            ? 'Failed'
+            : 'Idle';
+
+    const statusClass =
+      repoLoadStatus === 'running'
+        ? 'bg-blue-50 text-blue-700 border-blue-200'
+        : repoLoadStatus === 'success'
+          ? 'bg-green-50 text-green-700 border-green-200'
+          : repoLoadStatus === 'error'
+            ? 'bg-red-50 text-red-700 border-red-200'
+            : 'bg-gray-50 text-gray-700 border-gray-200';
+
+    return (
+      <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4">
+        <div className="w-full max-w-lg rounded-xl bg-white shadow-xl border border-gray-200 overflow-hidden">
+          <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-sm font-semibold text-gray-900 truncate">Loading repo into sandbox</div>
+              <div className="text-xs text-gray-500 truncate">{titleRepo}</div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className={`text-[10px] px-2 py-1 rounded-full border ${statusClass}`}>{statusLabel}</span>
+              <button
+                onClick={() => canClose && setRepoLoadModalOpen(false)}
+                disabled={!canClose}
+                className={`h-8 w-8 rounded-md border flex items-center justify-center ${
+                  canClose ? 'border-gray-200 hover:bg-gray-50 text-gray-700' : 'border-gray-100 text-gray-300 cursor-not-allowed'
+                }`}
+                title={canClose ? 'Close' : 'Working…'}
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+
+          <div className="px-4 py-3">
+            <div className="text-xs text-gray-600">
+              This can take a couple minutes (especially during <span className="font-medium">npm install</span>).
+            </div>
+          </div>
+
+          <div className="px-4 pb-3 space-y-2">
+            {repoLoadSteps.length === 0 ? (
+              <div className="text-xs text-gray-500">Preparing…</div>
+            ) : (
+              <div className="space-y-1.5">
+                {repoLoadSteps.map(step => {
+                  const icon =
+                    step.status === 'done'
+                      ? '✅'
+                      : step.status === 'running'
+                        ? '⏳'
+                        : step.status === 'error'
+                          ? '❌'
+                          : '•';
+
+                  const rowClass =
+                    step.status === 'running'
+                      ? 'border-blue-200 bg-blue-50'
+                      : step.status === 'done'
+                        ? 'border-green-200 bg-green-50'
+                        : step.status === 'error'
+                          ? 'border-red-200 bg-red-50'
+                          : 'border-gray-200 bg-white';
+
+                  return (
+                    <div key={step.id} className={`rounded-lg border px-3 py-2 ${rowClass}`}>
+                      <div className="flex items-start gap-2">
+                        <span className="text-sm leading-5">{icon}</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-medium text-gray-900">{step.label}</div>
+                          {step.detail ? (
+                            <div className="mt-0.5 text-[11px] text-gray-600 whitespace-pre-wrap break-words">
+                              {step.detail}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {repoLoadStatus === 'error' && repoLoadError ? (
+              <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 whitespace-pre-wrap">
+                {repoLoadError}
+              </div>
+            ) : null}
+
+            {repoLoadLogs.length > 0 ? (
+              <div className="mt-2">
+                <div className="text-[10px] font-semibold text-gray-500 mb-1">Logs (tail)</div>
+                <pre className="max-h-40 overflow-auto rounded-lg border border-gray-200 bg-gray-50 p-2 text-[10px] text-gray-700 whitespace-pre-wrap break-words">
+{repoLoadLogs.slice(-20).join('\n\n')}
+                </pre>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="px-4 py-3 border-t border-gray-100 flex items-center justify-end gap-2">
+            <button
+              onClick={() => setRepoLoadModalOpen(false)}
+              disabled={!canClose}
+              className={`px-3 py-2 text-xs font-medium rounded-lg border transition-colors ${
+                canClose ? 'border-gray-200 hover:bg-gray-50 text-gray-700' : 'border-gray-100 text-gray-300 cursor-not-allowed'
+              }`}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   const sandboxCreationRef = useRef<boolean>(false);
@@ -5545,6 +5776,9 @@ Focus on the key sections and content, making it clean and modern.`;
             onCancel={handleRegressionCancel}
           />
         )}
+
+        {/* Load Repo Into Sandbox Progress Modal */}
+        {renderRepoLoadModal()}
 
         {/* Fullscreen Preview Modal */}
         {isFullscreenPreview && sandboxData?.url && (
