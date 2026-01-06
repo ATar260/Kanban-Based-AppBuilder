@@ -18,13 +18,17 @@ function isValidBranch(value: string): boolean {
 
 function patchViteConfigAllowAllHosts(contents: string): { patched: string; changed: boolean } {
   if (!contents) return { patched: contents, changed: false };
-  if (/\ballowedHosts\b/.test(contents)) return { patched: contents, changed: false };
+  // If allowedHosts already exists, normalize it to `true` (allow all) for sandbox previews.
+  if (/\ballowedHosts\b/.test(contents)) {
+    const replaced = contents.replace(/allowedHosts\s*:\s*(['"]?all['"]?|['"][^'"]+['"]|[^\s,}]+)/m, 'allowedHosts: true');
+    return { patched: replaced, changed: replaced !== contents };
+  }
 
   // If there's an existing server block, inject allowedHosts inside it.
   const serverBlock = /(server\s*:\s*\{\s*)/m;
   if (serverBlock.test(contents)) {
     return {
-      patched: contents.replace(serverBlock, `$1allowedHosts: 'all', `),
+      patched: contents.replace(serverBlock, `$1allowedHosts: true, `),
       changed: true,
     };
   }
@@ -35,7 +39,7 @@ function patchViteConfigAllowAllHosts(contents: string): { patched: string; chan
     return {
       patched: contents.replace(
         defineConfigBlock,
-        `$1\n  server: { allowedHosts: 'all' },\n  `
+        `$1\n  server: { allowedHosts: true },\n  `
       ),
       changed: true,
     };
@@ -45,7 +49,7 @@ function patchViteConfigAllowAllHosts(contents: string): { patched: string; chan
   const exportDefaultObject = /(export\s+default\s+\{\s*)/m;
   if (exportDefaultObject.test(contents)) {
     return {
-      patched: contents.replace(exportDefaultObject, `$1\n  server: { allowedHosts: 'all' },\n  `),
+      patched: contents.replace(exportDefaultObject, `$1\n  server: { allowedHosts: true },\n  `),
       changed: true,
     };
   }
@@ -221,15 +225,15 @@ export async function POST(request: NextRequest) {
               if (!chosenConfigPath) {
                 // If no config exists, create a minimal one at root (Vite will pick it up).
                 chosenConfigPath = 'vite.config.ts';
-                chosenConfigContent = `import { defineConfig } from 'vite';\n\nexport default defineConfig({\n  server: {\n    allowedHosts: 'all',\n  },\n});\n`;
+                chosenConfigContent = `import { defineConfig } from 'vite';\n\nexport default defineConfig({\n  server: {\n    allowedHosts: true,\n  },\n});\n`;
                 await provider.writeFile(chosenConfigPath, chosenConfigContent);
-                send({ type: 'log', step: 'vite_config', message: `Created ${chosenConfigPath} with server.allowedHosts='all'.` });
+                send({ type: 'log', step: 'vite_config', message: `Created ${chosenConfigPath} with server.allowedHosts=true.` });
                 stepDone('vite_config');
               } else if (chosenConfigContent != null) {
                 const { patched, changed } = patchViteConfigAllowAllHosts(chosenConfigContent);
                 if (changed) {
                   await provider.writeFile(chosenConfigPath, patched);
-                  send({ type: 'log', step: 'vite_config', message: `Patched ${chosenConfigPath}: server.allowedHosts='all'.` });
+                  send({ type: 'log', step: 'vite_config', message: `Patched ${chosenConfigPath}: server.allowedHosts=true.` });
                 } else {
                   send({ type: 'log', step: 'vite_config', message: `No changes needed for ${chosenConfigPath}.` });
                 }
