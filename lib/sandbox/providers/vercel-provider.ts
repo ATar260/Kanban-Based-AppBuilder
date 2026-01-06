@@ -524,10 +524,10 @@ body {
       cwd: '/'
     });
 
-    // Start Vite in background
+    // Start Vite in background (force port 5173 so it matches exposed sandbox port)
     await this.sandbox.runCommand({
       cmd: 'sh',
-      args: ['-c', 'nohup npm run dev > /tmp/vite.log 2>&1 &'],
+      args: ['-c', 'nohup npm run dev -- --host 0.0.0.0 --port 5173 --strictPort > /tmp/vite.log 2>&1 &'],
       cwd: '/vercel/sandbox'
     });
 
@@ -564,10 +564,10 @@ body {
     // Wait a moment
     await new Promise(resolve => setTimeout(resolve, 2000));
 
-    // Start Vite in background
+    // Start Vite in background (force port 5173 so it matches exposed sandbox port)
     await this.sandbox.runCommand({
       cmd: 'sh',
-      args: ['-c', 'nohup npm run dev > /tmp/vite.log 2>&1 &'],
+      args: ['-c', 'nohup npm run dev -- --host 0.0.0.0 --port 5173 --strictPort > /tmp/vite.log 2>&1 &'],
       cwd: '/vercel/sandbox'
     });
 
