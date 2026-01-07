@@ -13,10 +13,9 @@ const colors = Object.keys(colorsJson).reduce(
   {} as Record<string, string>
 );
 
-const sizes = Array.from({ length: 1000 }, (_, i) => i).reduce(
+const sizes = [0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64, 72, 80, 96, 100, 112, 128, 144, 160, 176, 192, 208, 224, 240, 256, 288, 320, 360, 384, 400, 416, 448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800, 832, 864, 896, 928, 960, 992, 1024, 1080, 1152, 1200, 1280, 1440, 1536, 1920].reduce(
   (acc, curr) => {
     acc[curr] = `${curr}px`;
-
     return acc;
   },
   {
@@ -36,19 +35,17 @@ const sizes = Array.from({ length: 1000 }, (_, i) => i).reduce(
   } as Record<string, string>
 );
 
-const opacities = Array.from({ length: 100 }, (_, i) => i).reduce(
+const opacities = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100].reduce(
   (acc, curr) => {
     acc[curr] = curr / 100 + "";
-
     return acc;
   },
   {} as Record<string, string>
 );
 
-const transitionDurations = Array.from({ length: 60 }, (_, i) => i).reduce(
+const transitionDurations = [0, 50, 75, 100, 150, 200, 250, 300, 400, 500, 600, 700, 800, 1000, 1500, 2000].reduce(
   (acc, curr) => {
-    acc[curr] = curr * 50 + "";
-
+    acc[curr] = curr + "";
     return acc;
   },
   {} as Record<string, string>
@@ -332,6 +329,28 @@ const themeConfig: Config = {
       addUtilities, matchUtilities
     }: any) => {
       addUtilities({
+        '.scrollbar-thin': {
+          'scrollbar-width': 'thin',
+          '&::-webkit-scrollbar': {
+            width: '8px',
+            height: '8px',
+          },
+        },
+        '.scrollbar-thumb-gray-300': {
+          '&::-webkit-scrollbar-thumb': {
+            backgroundColor: '#d1d5db',
+            borderRadius: '4px',
+          },
+          '&::-webkit-scrollbar-thumb:hover': {
+            backgroundColor: '#9ca3af',
+          },
+        },
+        '.scrollbar-track-gray-100': {
+          '&::-webkit-scrollbar-track': {
+            backgroundColor: '#f3f4f6',
+            borderRadius: '4px',
+          },
+        },
         // Inside-border utilities are defined in inside-border-fix.css to avoid Tailwind variant conflicts
         '.mask-border': {
           "mask": "linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)",

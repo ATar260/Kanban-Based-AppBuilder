@@ -397,7 +397,7 @@ Visual Features: ${uiOption.features.join(', ')}`;
           newParams.delete('sandbox');
           window.history.replaceState({}, '', `/generation?${newParams.toString()}`);
         }
-        
+
         console.log('[home] Creating new sandbox...');
         sandboxCreated = true;
         await createSandbox(true);
@@ -610,7 +610,7 @@ Visual Features: ${uiOption.features.join(', ')}`;
       try {
         const response = await fetch('/api/sandbox-status');
         const data = await response.json();
-        
+
         if (data.sandboxStopped) {
           console.log('[keep-alive] Sandbox expired during build');
           setSandboxExpired(true);
@@ -622,7 +622,7 @@ Visual Features: ${uiOption.features.join(', ')}`;
 
     // Ping every 2 minutes to keep sandbox alive
     const interval = setInterval(keepAlive, 2 * 60 * 1000);
-    
+
     // Also ping immediately
     keepAlive();
 
@@ -637,7 +637,7 @@ Visual Features: ${uiOption.features.join(', ')}`;
       console.log('[sandbox-expired] Detected expired sandbox, attempting to recreate...');
       setSandboxData(null);
       setSandboxExpired(false);
-      
+
       // Create new sandbox
       const newSandbox = await createSandbox(true);
       if (newSandbox) {
@@ -768,12 +768,12 @@ Visual Features: ${uiOption.features.join(', ')}`;
         console.log('[checkSandboxStatus] Sandbox stopped, clearing state and creating new one');
         setSandboxData(null);
         updateStatus('Sandbox stopped - creating new one...', false);
-        
+
         // Clear old sandbox ID from URL
         const newParams = new URLSearchParams(searchParams.toString());
         newParams.delete('sandbox');
         router.replace(`/generation?${newParams.toString()}`, { scroll: false });
-        
+
         await createSandbox(true);
         return;
       }
@@ -872,7 +872,7 @@ Apply these design specifications consistently across all components.`;
 
   const handleCodeReviewApprove = () => {
     if (!pendingReviewData) return;
-    
+
     pendingReviewData.tickets.forEach(ticket => {
       kanban.updateTicketStatus(ticket.id, 'done');
       kanban.updateTicketProgress(ticket.id, 100);
@@ -1018,7 +1018,7 @@ Apply these design specifications consistently across all components.`;
       const response = await fetch('/api/plan-build', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           prompt,
           uiStyle: uiStyle ? {
             name: uiStyle.name,
@@ -1186,7 +1186,7 @@ Requirements:
                   const ext = filePath.split('.').pop() || '';
                   const hasClosingTag = match[0].includes('</file>');
                   parsedFiles.push({ path: filePath, content, type: ext, completed: hasClosingTag });
-                  
+
                   // Mark tickets as progressing based on file types
                   if (hasClosingTag && !completedFiles.has(filePath)) {
                     completedFiles.add(filePath);
@@ -1221,7 +1221,7 @@ Requirements:
       // Extract files for review and sync
       buildTracker.markCompleted();
       const allFiles = Array.from(generatedCode.matchAll(/<file path="([^"]+)">/g)).map(m => m[1]);
-      
+
       const fileContents: Array<{ path: string; content: string }> = [];
       const fileRegex = /<file path="([^"]+)">([\s\S]*?)(?:<\/file>|(?=<file path="|$))/g;
       let fileMatch;
@@ -1237,7 +1237,7 @@ Requirements:
       // Run Bugbot code review
       setGenerationProgress(prev => ({ ...prev, status: 'Running code review...' }));
       addChatMessage('🔍 Running Bugbot code review...', 'system');
-      
+
       const reviewResult = await bugbot.reviewCode({
         ticketId: backlogTickets.map(t => t.id).join('-'),
         ticketTitle: backlogTickets.map(t => t.title).join(', '),
@@ -1246,15 +1246,15 @@ Requirements:
 
       if (reviewResult && !reviewResult.passed) {
         setPendingReviewData({ tickets: backlogTickets, fileContents });
-        setShowCodeReview(true);
+        // Don't auto-popup - user can click the Review button to see issues
         setKanbanBuildActive(false);
-        setGenerationProgress(prev => ({ 
-          ...prev, 
-          isGenerating: false, 
-          status: `Review: ${reviewResult.issues.filter(i => i.severity === 'error').length} issues found` 
+        setGenerationProgress(prev => ({
+          ...prev,
+          isGenerating: false,
+          status: `Review: ${reviewResult.issues.filter(i => i.severity === 'error').length} issues found`
         }));
-        addChatMessage(`⚠️ Code review found ${reviewResult.issues.length} issues. Please review.`, 'system');
-        return;
+        addChatMessage(`⚠️ Code review found ${reviewResult.issues.length} issues. Click the Review button to see details.`, 'system');
+        // Continue with the build - don't return early
       }
 
       // Review passed - mark all as done
@@ -1762,7 +1762,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
 
             setIsPreviewRefreshing(true);
             setActiveTab('preview');
-            
+
             setTimeout(async () => {
               if (iframeRef.current && currentSandboxData?.url) {
                 console.log('[applyGeneratedCode] Starting iframe refresh sequence...');
@@ -1778,7 +1778,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
                     setIsPreviewRefreshing(false);
                   };
                   iframeRef.current.src = urlWithTimestamp;
-                  
+
                   // Fallback timeout to hide loading state
                   setTimeout(() => setIsPreviewRefreshing(false), 5000);
                 } catch (e) {
@@ -4504,8 +4504,8 @@ Focus on the key sections and content, making it clean and modern.`;
             />
             <button
               onClick={() => setAutoFixEnabled(!autoFixEnabled)}
-              className={`p-2 rounded-lg transition-colors border ${autoFixEnabled 
-                ? 'bg-green-50 border-green-200 text-green-700' 
+              className={`p-2 rounded-lg transition-colors border ${autoFixEnabled
+                ? 'bg-green-50 border-green-200 text-green-700'
                 : 'bg-gray-50 border-gray-200 text-gray-400'}`}
               title={autoFixEnabled ? 'Auto-fix enabled (click to disable)' : 'Auto-fix disabled (click to enable)'}
             >
@@ -4573,7 +4573,7 @@ Focus on the key sections and content, making it clean and modern.`;
                   {kanban.tickets.length > 0 && (
                     <div className="mt-2">
                       <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden">
-                        <div 
+                        <div
                           className="h-full bg-gradient-to-r from-orange-400 to-orange-500 transition-all duration-500"
                           style={{ width: `${kanban.tickets.length > 0 ? (kanban.tickets.filter(t => t.status === 'done').length / kanban.tickets.length) * 100 : 0}%` }}
                         />
@@ -4588,41 +4588,39 @@ Focus on the key sections and content, making it clean and modern.`;
                       initial={{ opacity: 0, x: -10 }}
                       animate={{ opacity: 1, x: 0 }}
                       transition={{ delay: idx * 0.05 }}
-                      className={`p-2.5 rounded-lg border transition-all ${
-                        ticket.status === 'done' ? 'bg-green-50 border-green-200' :
-                        ticket.status === 'generating' ? 'bg-orange-50 border-orange-200' :
-                        ticket.status === 'failed' ? 'bg-red-50 border-red-200' :
-                        'bg-white border-gray-200 hover:border-gray-300'
-                      }`}
+                      className={`p-2.5 rounded-lg border transition-all ${ticket.status === 'done' ? 'bg-green-50 border-green-200' :
+                          ticket.status === 'generating' ? 'bg-orange-50 border-orange-200' :
+                            ticket.status === 'failed' ? 'bg-red-50 border-red-200' :
+                              'bg-white border-gray-200 hover:border-gray-300'
+                        }`}
                     >
                       <div className="flex items-start gap-2">
                         <span className="text-sm">
                           {ticket.status === 'done' ? '✅' :
-                           ticket.status === 'generating' ? '⚡' :
-                           ticket.status === 'failed' ? '❌' :
-                           ticket.status === 'backlog' ? '📋' :
-                           ticket.status === 'planning' ? '🎯' : '⏳'}
+                            ticket.status === 'generating' ? '⚡' :
+                              ticket.status === 'failed' ? '❌' :
+                                ticket.status === 'backlog' ? '📋' :
+                                  ticket.status === 'planning' ? '🎯' : '⏳'}
                         </span>
                         <div className="flex-1 min-w-0">
                           <div className="text-xs font-medium text-gray-800 truncate">{ticket.title}</div>
                           <div className="text-[10px] text-gray-500 truncate">{ticket.description}</div>
                           {ticket.status === 'generating' && ticket.progress !== undefined && (
                             <div className="mt-1.5 w-full h-1 bg-gray-200 rounded-full overflow-hidden">
-                              <div 
+                              <div
                                 className="h-full bg-orange-400 transition-all duration-300"
                                 style={{ width: `${ticket.progress}%` }}
                               />
                             </div>
                           )}
                         </div>
-                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${
-                          ticket.type === 'component' ? 'bg-blue-100 text-blue-700' :
-                          ticket.type === 'feature' ? 'bg-green-100 text-green-700' :
-                          ticket.type === 'layout' ? 'bg-purple-100 text-purple-700' :
-                          ticket.type === 'styling' ? 'bg-pink-100 text-pink-700' :
-                          ticket.type === 'integration' ? 'bg-amber-100 text-amber-700' :
-                          'bg-gray-100 text-gray-600'
-                        }`}>
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${ticket.type === 'component' ? 'bg-blue-100 text-blue-700' :
+                            ticket.type === 'feature' ? 'bg-green-100 text-green-700' :
+                              ticket.type === 'layout' ? 'bg-purple-100 text-purple-700' :
+                                ticket.type === 'styling' ? 'bg-pink-100 text-pink-700' :
+                                  ticket.type === 'integration' ? 'bg-amber-100 text-amber-700' :
+                                    'bg-gray-100 text-gray-600'
+                          }`}>
                           {ticket.type}
                         </span>
                       </div>
@@ -4722,395 +4720,395 @@ Focus on the key sections and content, making it clean and modern.`;
             )}
 
             {!hasInitialSubmission && (
-            <div
-              className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 scrollbar-hide bg-gray-50"
-              ref={chatMessagesRef}>
-              {chatMessages.map((msg, idx) => {
-                // Check if this message is from a successful generation
-                const isGenerationComplete = msg.content.includes('Successfully recreated') ||
-                  msg.content.includes('AI recreation generated!') ||
-                  msg.content.includes('Code generated!');
+              <div
+                className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 scrollbar-hide bg-gray-50"
+                ref={chatMessagesRef}>
+                {chatMessages.map((msg, idx) => {
+                  // Check if this message is from a successful generation
+                  const isGenerationComplete = msg.content.includes('Successfully recreated') ||
+                    msg.content.includes('AI recreation generated!') ||
+                    msg.content.includes('Code generated!');
 
-                // Get the files from metadata if this is a completion message
-                // const completedFiles = msg.metadata?.appliedFiles || [];
+                  // Get the files from metadata if this is a completion message
+                  // const completedFiles = msg.metadata?.appliedFiles || [];
 
-                return (
-                  <div key={idx} className="block">
-                    <div className={`flex ${msg.type === 'user' ? 'justify-end' : 'justify-start'}`}>
-                      <div className="block">
-                        <div className={`block rounded-lg px-3 py-2 ${msg.type === 'user' ? 'bg-[#36322F] text-white ml-auto max-w-[80%]' :
-                          msg.type === 'ai' ? 'bg-gray-100 text-gray-900 mr-auto max-w-[80%]' :
-                            msg.type === 'system' ? 'bg-[#36322F] text-white text-sm' :
-                              msg.type === 'command' ? 'bg-[#36322F] text-white font-mono text-sm' :
-                                msg.type === 'error' ? 'bg-red-900 text-red-100 text-sm border border-red-700' :
-                                  'bg-[#36322F] text-white text-sm'
-                          }`}>
-                          {msg.type === 'command' ? (
-                            <div className="flex items-start gap-2">
-                              <span className={`text-xs ${msg.metadata?.commandType === 'input' ? 'text-blue-400' :
-                                msg.metadata?.commandType === 'error' ? 'text-red-400' :
-                                  msg.metadata?.commandType === 'success' ? 'text-green-400' :
-                                    'text-gray-400'
-                                }`}>
-                                {msg.metadata?.commandType === 'input' ? '$' : '>'}
-                              </span>
-                              <span className="flex-1 whitespace-pre-wrap text-white">{msg.content}</span>
-                            </div>
-                          ) : msg.type === 'error' ? (
-                            <div className="flex items-start gap-3">
-                              <div className="flex-shrink-0">
-                                <div className="w-8 h-8 bg-red-800 rounded-full flex items-center justify-center">
-                                  <svg className="w-6 h-6 text-red-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                                  </svg>
+                  return (
+                    <div key={idx} className="block">
+                      <div className={`flex ${msg.type === 'user' ? 'justify-end' : 'justify-start'}`}>
+                        <div className="block">
+                          <div className={`block rounded-lg px-3 py-2 ${msg.type === 'user' ? 'bg-[#36322F] text-white ml-auto max-w-[80%]' :
+                            msg.type === 'ai' ? 'bg-gray-100 text-gray-900 mr-auto max-w-[80%]' :
+                              msg.type === 'system' ? 'bg-[#36322F] text-white text-sm' :
+                                msg.type === 'command' ? 'bg-[#36322F] text-white font-mono text-sm' :
+                                  msg.type === 'error' ? 'bg-red-900 text-red-100 text-sm border border-red-700' :
+                                    'bg-[#36322F] text-white text-sm'
+                            }`}>
+                            {msg.type === 'command' ? (
+                              <div className="flex items-start gap-2">
+                                <span className={`text-xs ${msg.metadata?.commandType === 'input' ? 'text-blue-400' :
+                                  msg.metadata?.commandType === 'error' ? 'text-red-400' :
+                                    msg.metadata?.commandType === 'success' ? 'text-green-400' :
+                                      'text-gray-400'
+                                  }`}>
+                                  {msg.metadata?.commandType === 'input' ? '$' : '>'}
+                                </span>
+                                <span className="flex-1 whitespace-pre-wrap text-white">{msg.content}</span>
+                              </div>
+                            ) : msg.type === 'error' ? (
+                              <div className="flex items-start gap-3">
+                                <div className="flex-shrink-0">
+                                  <div className="w-8 h-8 bg-red-800 rounded-full flex items-center justify-center">
+                                    <svg className="w-6 h-6 text-red-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                    </svg>
+                                  </div>
+                                </div>
+                                <div className="flex-1">
+                                  <div className="font-semibold mb-1">Build Errors Detected</div>
+                                  <div className="whitespace-pre-wrap text-sm">{msg.content}</div>
+                                  <div className="mt-2 text-xs opacity-70">Press 'F' or click the Fix button above to resolve</div>
                                 </div>
                               </div>
-                              <div className="flex-1">
-                                <div className="font-semibold mb-1">Build Errors Detected</div>
-                                <div className="whitespace-pre-wrap text-sm">{msg.content}</div>
-                                <div className="mt-2 text-xs opacity-70">Press 'F' or click the Fix button above to resolve</div>
-                              </div>
-                            </div>
-                          ) : (
-                            <span className="text-sm">{msg.content}</span>
-                          )}
-                        </div>
+                            ) : (
+                              <span className="text-sm">{msg.content}</span>
+                            )}
+                          </div>
 
-                        {/* Show branding data if this is a brand extraction message */}
-                        {msg.metadata?.brandingData && (
-                          <div className="mt-3 bg-gradient-to-br from-gray-50 to-white border-2 border-gray-200 rounded-xl overflow-hidden max-w-[500px] shadow-sm">
-                            <div className="bg-[#36322F] px-4 py-3">
-                              <div className="flex items-center gap-2">
-                                <Image
-                                  src={`https://www.google.com/s2/favicons?domain=${msg.metadata.sourceUrl}&sz=32`}
-                                  alt=""
-                                  width={32}
-                                  height={32}
-                                  className="w-8 h-8"
-                                />
-                                <div className="text-sm font-semibold text-white">
-                                  Brand Guidelines
+                          {/* Show branding data if this is a brand extraction message */}
+                          {msg.metadata?.brandingData && (
+                            <div className="mt-3 bg-gradient-to-br from-gray-50 to-white border-2 border-gray-200 rounded-xl overflow-hidden max-w-[500px] shadow-sm">
+                              <div className="bg-[#36322F] px-4 py-3">
+                                <div className="flex items-center gap-2">
+                                  <Image
+                                    src={`https://www.google.com/s2/favicons?domain=${msg.metadata.sourceUrl}&sz=32`}
+                                    alt=""
+                                    width={32}
+                                    height={32}
+                                    className="w-8 h-8"
+                                  />
+                                  <div className="text-sm font-semibold text-white">
+                                    Brand Guidelines
+                                  </div>
                                 </div>
                               </div>
-                            </div>
 
-                            <div className="p-4">
-                              {/* Color Scheme Mode */}
-                              {msg.metadata.brandingData.colorScheme && (
-                                <div className="mb-4">
-                                  <div className="text-sm">
-                                    <span className="text-gray-600 font-medium">Mode:</span>{' '}
-                                    <span className="font-semibold text-gray-900 capitalize">{msg.metadata.brandingData.colorScheme}</span>
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Colors */}
-                              {msg.metadata.brandingData.colors && (
-                                <div className="mb-4">
-                                  <div className="text-sm font-semibold text-gray-900 mb-2">Colors</div>
-                                  <div className="flex flex-wrap gap-3">
-                                    {msg.metadata.brandingData.colors.primary && (
-                                      <div className="flex items-center gap-2">
-                                        <div className="w-8 h-8 rounded border border-gray-300" style={{ backgroundColor: msg.metadata.brandingData.colors.primary }} />
-                                        <div className="text-sm">
-                                          <div className="font-semibold text-gray-900">Primary</div>
-                                          <div className="text-gray-600 font-mono text-xs">{msg.metadata.brandingData.colors.primary}</div>
-                                        </div>
-                                      </div>
-                                    )}
-                                    {msg.metadata.brandingData.colors.accent && (
-                                      <div className="flex items-center gap-2">
-                                        <div className="w-8 h-8 rounded border border-gray-300" style={{ backgroundColor: msg.metadata.brandingData.colors.accent }} />
-                                        <div className="text-sm">
-                                          <div className="font-semibold text-gray-900">Accent</div>
-                                          <div className="text-gray-600 font-mono text-xs">{msg.metadata.brandingData.colors.accent}</div>
-                                        </div>
-                                      </div>
-                                    )}
-                                    {msg.metadata.brandingData.colors.background && (
-                                      <div className="flex items-center gap-2">
-                                        <div className="w-8 h-8 rounded border border-gray-300" style={{ backgroundColor: msg.metadata.brandingData.colors.background }} />
-                                        <div className="text-sm">
-                                          <div className="font-semibold text-gray-900">Background</div>
-                                          <div className="text-gray-600 font-mono text-xs">{msg.metadata.brandingData.colors.background}</div>
-                                        </div>
-                                      </div>
-                                    )}
-                                    {msg.metadata.brandingData.colors.textPrimary && (
-                                      <div className="flex items-center gap-2">
-                                        <div className="w-8 h-8 rounded border border-gray-300" style={{ backgroundColor: msg.metadata.brandingData.colors.textPrimary }} />
-                                        <div className="text-sm">
-                                          <div className="font-semibold text-gray-900">Text</div>
-                                          <div className="text-gray-600 font-mono text-xs">{msg.metadata.brandingData.colors.textPrimary}</div>
-                                        </div>
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Typography */}
-                              {msg.metadata.brandingData.typography && (
-                                <div className="mb-4">
-                                  <div className="text-sm font-semibold text-gray-900 mb-2">Typography</div>
-                                  <div className="grid grid-cols-2 gap-3 text-sm">
-                                    {msg.metadata.brandingData.typography.fontFamilies?.primary && (
-                                      <div>
-                                        <span className="text-gray-600 font-medium">Primary:</span>{' '}
-                                        <span className="font-semibold text-gray-900">{msg.metadata.brandingData.typography.fontFamilies.primary}</span>
-                                      </div>
-                                    )}
-                                    {msg.metadata.brandingData.typography.fontFamilies?.heading && (
-                                      <div>
-                                        <span className="text-gray-600 font-medium">Heading:</span>{' '}
-                                        <span className="font-semibold text-gray-900">{msg.metadata.brandingData.typography.fontFamilies.heading}</span>
-                                      </div>
-                                    )}
-                                    {msg.metadata.brandingData.typography.fontSizes?.h1 && (
-                                      <div>
-                                        <span className="text-gray-600 font-medium">H1 Size:</span>{' '}
-                                        <span className="font-semibold text-gray-900">{msg.metadata.brandingData.typography.fontSizes.h1}</span>
-                                      </div>
-                                    )}
-                                    {msg.metadata.brandingData.typography.fontSizes?.h2 && (
-                                      <div>
-                                        <span className="text-gray-600 font-medium">H2 Size:</span>{' '}
-                                        <span className="font-semibold text-gray-900">{msg.metadata.brandingData.typography.fontSizes.h2}</span>
-                                      </div>
-                                    )}
-                                    {msg.metadata.brandingData.typography.fontSizes?.body && (
-                                      <div>
-                                        <span className="text-gray-600 font-medium">Body Size:</span>{' '}
-                                        <span className="font-semibold text-gray-900">{msg.metadata.brandingData.typography.fontSizes.body}</span>
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Spacing */}
-                              {msg.metadata.brandingData.spacing && (
-                                <div className="mb-4">
-                                  <div className="text-sm font-semibold text-gray-900 mb-2">Spacing</div>
-                                  <div className="flex flex-wrap gap-4 text-sm">
-                                    {msg.metadata.brandingData.spacing.baseUnit && (
-                                      <div>
-                                        <span className="text-gray-600 font-medium">Base Unit:</span>{' '}
-                                        <span className="font-semibold text-gray-900">{msg.metadata.brandingData.spacing.baseUnit}px</span>
-                                      </div>
-                                    )}
-                                    {msg.metadata.brandingData.spacing.borderRadius && (
-                                      <div>
-                                        <span className="text-gray-600 font-medium">Border Radius:</span>{' '}
-                                        <span className="font-semibold text-gray-900">{msg.metadata.brandingData.spacing.borderRadius}</span>
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Button Styles */}
-                              {msg.metadata.brandingData.components?.buttonPrimary && (
-                                <div className="mb-4">
-                                  <div className="text-sm font-semibold text-gray-900 mb-2">Button Styles</div>
-                                  <div className="flex flex-wrap gap-3">
-                                    <div>
-                                      <div className="text-xs text-gray-600 mb-1.5 font-medium">Primary Button</div>
-                                      <button
-                                        className="px-4 py-2 text-sm font-medium"
-                                        style={{
-                                          backgroundColor: msg.metadata.brandingData.components.buttonPrimary.background,
-                                          color: msg.metadata.brandingData.components.buttonPrimary.textColor,
-                                          borderRadius: msg.metadata.brandingData.components.buttonPrimary.borderRadius,
-                                          boxShadow: msg.metadata.brandingData.components.buttonPrimary.shadow
-                                        }}
-                                      >
-                                        Sample Button
-                                      </button>
+                              <div className="p-4">
+                                {/* Color Scheme Mode */}
+                                {msg.metadata.brandingData.colorScheme && (
+                                  <div className="mb-4">
+                                    <div className="text-sm">
+                                      <span className="text-gray-600 font-medium">Mode:</span>{' '}
+                                      <span className="font-semibold text-gray-900 capitalize">{msg.metadata.brandingData.colorScheme}</span>
                                     </div>
-                                    {msg.metadata.brandingData.components?.buttonSecondary && (
+                                  </div>
+                                )}
+
+                                {/* Colors */}
+                                {msg.metadata.brandingData.colors && (
+                                  <div className="mb-4">
+                                    <div className="text-sm font-semibold text-gray-900 mb-2">Colors</div>
+                                    <div className="flex flex-wrap gap-3">
+                                      {msg.metadata.brandingData.colors.primary && (
+                                        <div className="flex items-center gap-2">
+                                          <div className="w-8 h-8 rounded border border-gray-300" style={{ backgroundColor: msg.metadata.brandingData.colors.primary }} />
+                                          <div className="text-sm">
+                                            <div className="font-semibold text-gray-900">Primary</div>
+                                            <div className="text-gray-600 font-mono text-xs">{msg.metadata.brandingData.colors.primary}</div>
+                                          </div>
+                                        </div>
+                                      )}
+                                      {msg.metadata.brandingData.colors.accent && (
+                                        <div className="flex items-center gap-2">
+                                          <div className="w-8 h-8 rounded border border-gray-300" style={{ backgroundColor: msg.metadata.brandingData.colors.accent }} />
+                                          <div className="text-sm">
+                                            <div className="font-semibold text-gray-900">Accent</div>
+                                            <div className="text-gray-600 font-mono text-xs">{msg.metadata.brandingData.colors.accent}</div>
+                                          </div>
+                                        </div>
+                                      )}
+                                      {msg.metadata.brandingData.colors.background && (
+                                        <div className="flex items-center gap-2">
+                                          <div className="w-8 h-8 rounded border border-gray-300" style={{ backgroundColor: msg.metadata.brandingData.colors.background }} />
+                                          <div className="text-sm">
+                                            <div className="font-semibold text-gray-900">Background</div>
+                                            <div className="text-gray-600 font-mono text-xs">{msg.metadata.brandingData.colors.background}</div>
+                                          </div>
+                                        </div>
+                                      )}
+                                      {msg.metadata.brandingData.colors.textPrimary && (
+                                        <div className="flex items-center gap-2">
+                                          <div className="w-8 h-8 rounded border border-gray-300" style={{ backgroundColor: msg.metadata.brandingData.colors.textPrimary }} />
+                                          <div className="text-sm">
+                                            <div className="font-semibold text-gray-900">Text</div>
+                                            <div className="text-gray-600 font-mono text-xs">{msg.metadata.brandingData.colors.textPrimary}</div>
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Typography */}
+                                {msg.metadata.brandingData.typography && (
+                                  <div className="mb-4">
+                                    <div className="text-sm font-semibold text-gray-900 mb-2">Typography</div>
+                                    <div className="grid grid-cols-2 gap-3 text-sm">
+                                      {msg.metadata.brandingData.typography.fontFamilies?.primary && (
+                                        <div>
+                                          <span className="text-gray-600 font-medium">Primary:</span>{' '}
+                                          <span className="font-semibold text-gray-900">{msg.metadata.brandingData.typography.fontFamilies.primary}</span>
+                                        </div>
+                                      )}
+                                      {msg.metadata.brandingData.typography.fontFamilies?.heading && (
+                                        <div>
+                                          <span className="text-gray-600 font-medium">Heading:</span>{' '}
+                                          <span className="font-semibold text-gray-900">{msg.metadata.brandingData.typography.fontFamilies.heading}</span>
+                                        </div>
+                                      )}
+                                      {msg.metadata.brandingData.typography.fontSizes?.h1 && (
+                                        <div>
+                                          <span className="text-gray-600 font-medium">H1 Size:</span>{' '}
+                                          <span className="font-semibold text-gray-900">{msg.metadata.brandingData.typography.fontSizes.h1}</span>
+                                        </div>
+                                      )}
+                                      {msg.metadata.brandingData.typography.fontSizes?.h2 && (
+                                        <div>
+                                          <span className="text-gray-600 font-medium">H2 Size:</span>{' '}
+                                          <span className="font-semibold text-gray-900">{msg.metadata.brandingData.typography.fontSizes.h2}</span>
+                                        </div>
+                                      )}
+                                      {msg.metadata.brandingData.typography.fontSizes?.body && (
+                                        <div>
+                                          <span className="text-gray-600 font-medium">Body Size:</span>{' '}
+                                          <span className="font-semibold text-gray-900">{msg.metadata.brandingData.typography.fontSizes.body}</span>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Spacing */}
+                                {msg.metadata.brandingData.spacing && (
+                                  <div className="mb-4">
+                                    <div className="text-sm font-semibold text-gray-900 mb-2">Spacing</div>
+                                    <div className="flex flex-wrap gap-4 text-sm">
+                                      {msg.metadata.brandingData.spacing.baseUnit && (
+                                        <div>
+                                          <span className="text-gray-600 font-medium">Base Unit:</span>{' '}
+                                          <span className="font-semibold text-gray-900">{msg.metadata.brandingData.spacing.baseUnit}px</span>
+                                        </div>
+                                      )}
+                                      {msg.metadata.brandingData.spacing.borderRadius && (
+                                        <div>
+                                          <span className="text-gray-600 font-medium">Border Radius:</span>{' '}
+                                          <span className="font-semibold text-gray-900">{msg.metadata.brandingData.spacing.borderRadius}</span>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Button Styles */}
+                                {msg.metadata.brandingData.components?.buttonPrimary && (
+                                  <div className="mb-4">
+                                    <div className="text-sm font-semibold text-gray-900 mb-2">Button Styles</div>
+                                    <div className="flex flex-wrap gap-3">
                                       <div>
-                                        <div className="text-xs text-gray-600 mb-1.5 font-medium">Secondary Button</div>
+                                        <div className="text-xs text-gray-600 mb-1.5 font-medium">Primary Button</div>
                                         <button
                                           className="px-4 py-2 text-sm font-medium"
                                           style={{
-                                            backgroundColor: msg.metadata.brandingData.components.buttonSecondary.background,
-                                            color: msg.metadata.brandingData.components.buttonSecondary.textColor,
-                                            borderRadius: msg.metadata.brandingData.components.buttonSecondary.borderRadius,
-                                            boxShadow: msg.metadata.brandingData.components.buttonSecondary.shadow
+                                            backgroundColor: msg.metadata.brandingData.components.buttonPrimary.background,
+                                            color: msg.metadata.brandingData.components.buttonPrimary.textColor,
+                                            borderRadius: msg.metadata.brandingData.components.buttonPrimary.borderRadius,
+                                            boxShadow: msg.metadata.brandingData.components.buttonPrimary.shadow
                                           }}
                                         >
                                           Sample Button
                                         </button>
                                       </div>
-                                    )}
+                                      {msg.metadata.brandingData.components?.buttonSecondary && (
+                                        <div>
+                                          <div className="text-xs text-gray-600 mb-1.5 font-medium">Secondary Button</div>
+                                          <button
+                                            className="px-4 py-2 text-sm font-medium"
+                                            style={{
+                                              backgroundColor: msg.metadata.brandingData.components.buttonSecondary.background,
+                                              color: msg.metadata.brandingData.components.buttonSecondary.textColor,
+                                              borderRadius: msg.metadata.brandingData.components.buttonSecondary.borderRadius,
+                                              boxShadow: msg.metadata.brandingData.components.buttonSecondary.shadow
+                                            }}
+                                          >
+                                            Sample Button
+                                          </button>
+                                        </div>
+                                      )}
+                                    </div>
                                   </div>
-                                </div>
-                              )}
+                                )}
 
-                              {/* Personality */}
-                              {msg.metadata.brandingData.personality && (
-                                <div className="text-sm">
-                                  <span className="text-gray-600 font-medium">Personality:</span>{' '}
-                                  <span className="font-semibold text-gray-900 capitalize">
-                                    {msg.metadata.brandingData.personality.tone} tone, {msg.metadata.brandingData.personality.energy} energy
-                                  </span>
-                                </div>
-                              )}
+                                {/* Personality */}
+                                {msg.metadata.brandingData.personality && (
+                                  <div className="text-sm">
+                                    <span className="text-gray-600 font-medium">Personality:</span>{' '}
+                                    <span className="font-semibold text-gray-900 capitalize">
+                                      {msg.metadata.brandingData.personality.tone} tone, {msg.metadata.brandingData.personality.energy} energy
+                                    </span>
+                                  </div>
+                                )}
 
-                              {/* Target Audience */}
-                              {msg.metadata.brandingData.personality?.targetAudience && (
-                                <div className="text-sm mt-8">
-                                  <span className="text-gray-600 font-medium">Target:</span>{' '}
-                                  <span className="text-gray-900">{msg.metadata.brandingData.personality.targetAudience}</span>
-                                </div>
-                              )}
+                                {/* Target Audience */}
+                                {msg.metadata.brandingData.personality?.targetAudience && (
+                                  <div className="text-sm mt-8">
+                                    <span className="text-gray-600 font-medium">Target:</span>{' '}
+                                    <span className="text-gray-900">{msg.metadata.brandingData.personality.targetAudience}</span>
+                                  </div>
+                                )}
+                              </div>
                             </div>
-                          </div>
-                        )}
+                          )}
 
-                        {/* Show applied files if this is an apply success message */}
-                        {msg.metadata?.appliedFiles && msg.metadata.appliedFiles.length > 0 && (
-                          <div className="mt-3 inline-block bg-gray-100 rounded-lg p-3">
-                            <div className="text-sm font-medium mb-3 text-gray-700">
-                              {msg.content.includes('Applied') ? 'Files Updated:' : 'Generated Files:'}
+                          {/* Show applied files if this is an apply success message */}
+                          {msg.metadata?.appliedFiles && msg.metadata.appliedFiles.length > 0 && (
+                            <div className="mt-3 inline-block bg-gray-100 rounded-lg p-3">
+                              <div className="text-sm font-medium mb-3 text-gray-700">
+                                {msg.content.includes('Applied') ? 'Files Updated:' : 'Generated Files:'}
+                              </div>
+                              <div className="flex flex-wrap items-start gap-2">
+                                {msg.metadata.appliedFiles.map((filePath, fileIdx) => {
+                                  const fileName = filePath.split('/').pop() || filePath;
+                                  const fileExt = fileName.split('.').pop() || '';
+                                  const fileType = fileExt === 'jsx' || fileExt === 'js' ? 'javascript' :
+                                    fileExt === 'css' ? 'css' :
+                                      fileExt === 'json' ? 'json' : 'text';
+
+                                  return (
+                                    <div
+                                      key={`applied-${fileIdx}`}
+                                      className="inline-flex items-center gap-1.5 px-2 py-1 bg-[#36322F] text-white rounded-md text-sm animate-fade-in-up"
+                                      style={{ animationDelay: `${fileIdx * 30}ms` }}
+                                    >
+                                      <span className={`inline-block w-1.5 h-1.5 rounded-full ${fileType === 'css' ? 'bg-blue-400' :
+                                        fileType === 'javascript' ? 'bg-yellow-400' :
+                                          fileType === 'json' ? 'bg-green-400' :
+                                            'bg-gray-400'
+                                        }`} />
+                                      {fileName}
+                                    </div>
+                                  );
+                                })}
+                              </div>
                             </div>
-                            <div className="flex flex-wrap items-start gap-2">
-                              {msg.metadata.appliedFiles.map((filePath, fileIdx) => {
-                                const fileName = filePath.split('/').pop() || filePath;
-                                const fileExt = fileName.split('.').pop() || '';
-                                const fileType = fileExt === 'jsx' || fileExt === 'js' ? 'javascript' :
-                                  fileExt === 'css' ? 'css' :
-                                    fileExt === 'json' ? 'json' : 'text';
+                          )}
 
-                                return (
+                          {/* Show generated files for completion messages - but only if no appliedFiles already shown */}
+                          {isGenerationComplete && generationProgress.files.length > 0 && idx === chatMessages.length - 1 && !msg.metadata?.appliedFiles && !chatMessages.some(m => m.metadata?.appliedFiles) && (
+                            <div className="mt-2 inline-block bg-gray-100 rounded-[10px] p-3">
+                              <div className="text-xs font-medium mb-1 text-gray-700">Generated Files:</div>
+                              <div className="flex flex-wrap items-start gap-1">
+                                {generationProgress.files.map((file, fileIdx) => (
                                   <div
-                                    key={`applied-${fileIdx}`}
-                                    className="inline-flex items-center gap-1.5 px-2 py-1 bg-[#36322F] text-white rounded-md text-sm animate-fade-in-up"
+                                    key={`complete-${fileIdx}`}
+                                    className="inline-flex items-center gap-1.5 px-2 py-1 bg-[#36322F] text-white rounded-md text-xs animate-fade-in-up"
                                     style={{ animationDelay: `${fileIdx * 30}ms` }}
                                   >
-                                    <span className={`inline-block w-1.5 h-1.5 rounded-full ${fileType === 'css' ? 'bg-blue-400' :
-                                      fileType === 'javascript' ? 'bg-yellow-400' :
-                                        fileType === 'json' ? 'bg-green-400' :
+                                    <span className={`inline-block w-1.5 h-1.5 rounded-full ${file.type === 'css' ? 'bg-blue-400' :
+                                      file.type === 'javascript' ? 'bg-yellow-400' :
+                                        file.type === 'json' ? 'bg-green-400' :
                                           'bg-gray-400'
                                       }`} />
-                                    {fileName}
+                                    {file.path.split('/').pop()}
                                   </div>
-                                );
-                              })}
+                                ))}
+                              </div>
                             </div>
-                          </div>
-                        )}
-
-                        {/* Show generated files for completion messages - but only if no appliedFiles already shown */}
-                        {isGenerationComplete && generationProgress.files.length > 0 && idx === chatMessages.length - 1 && !msg.metadata?.appliedFiles && !chatMessages.some(m => m.metadata?.appliedFiles) && (
-                          <div className="mt-2 inline-block bg-gray-100 rounded-[10px] p-3">
-                            <div className="text-xs font-medium mb-1 text-gray-700">Generated Files:</div>
-                            <div className="flex flex-wrap items-start gap-1">
-                              {generationProgress.files.map((file, fileIdx) => (
-                                <div
-                                  key={`complete-${fileIdx}`}
-                                  className="inline-flex items-center gap-1.5 px-2 py-1 bg-[#36322F] text-white rounded-md text-xs animate-fade-in-up"
-                                  style={{ animationDelay: `${fileIdx * 30}ms` }}
-                                >
-                                  <span className={`inline-block w-1.5 h-1.5 rounded-full ${file.type === 'css' ? 'bg-blue-400' :
-                                    file.type === 'javascript' ? 'bg-yellow-400' :
-                                      file.type === 'json' ? 'bg-green-400' :
-                                        'bg-gray-400'
-                                    }`} />
-                                  {file.path.split('/').pop()}
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
 
-              {/* Code application progress */}
-              {codeApplicationState.stage && (
-                <CodeApplicationProgress state={codeApplicationState} />
-              )}
+                {/* Code application progress */}
+                {codeApplicationState.stage && (
+                  <CodeApplicationProgress state={codeApplicationState} />
+                )}
 
-              {/* File generation progress - inline display (during generation) */}
-              {generationProgress.isGenerating && (
-                <div className="inline-block bg-gray-100 rounded-lg p-3">
-                  <div className="text-sm font-medium mb-2 text-gray-700">
-                    {generationProgress.status}
-                  </div>
-                  <div className="flex flex-wrap items-start gap-1">
-                    {/* Show completed files */}
-                    {generationProgress.files.map((file, idx) => (
-                      <div
-                        key={`file-${idx}`}
-                        className="inline-flex items-center gap-1.5 px-2 py-1 bg-[#36322F] text-white rounded-md text-xs animate-fade-in-up"
-                        style={{ animationDelay: `${idx * 30}ms` }}
+                {/* File generation progress - inline display (during generation) */}
+                {generationProgress.isGenerating && (
+                  <div className="inline-block bg-gray-100 rounded-lg p-3">
+                    <div className="text-sm font-medium mb-2 text-gray-700">
+                      {generationProgress.status}
+                    </div>
+                    <div className="flex flex-wrap items-start gap-1">
+                      {/* Show completed files */}
+                      {generationProgress.files.map((file, idx) => (
+                        <div
+                          key={`file-${idx}`}
+                          className="inline-flex items-center gap-1.5 px-2 py-1 bg-[#36322F] text-white rounded-md text-xs animate-fade-in-up"
+                          style={{ animationDelay: `${idx * 30}ms` }}
+                        >
+                          <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                          </svg>
+                          {file.path.split('/').pop()}
+                        </div>
+                      ))}
+
+                      {/* Show current file being generated */}
+                      {generationProgress.currentFile && (
+                        <div className="flex items-center gap-1 px-2 py-1 bg-[#36322F]/70 text-white rounded-[10px] text-sm animate-pulse"
+                          style={{ animationDelay: `${generationProgress.files.length * 30}ms` }}>
+                          <div className="w-16 h-16 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          {generationProgress.currentFile.path.split('/').pop()}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Live streaming response display */}
+                    {generationProgress.streamedCode && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        transition={{ duration: 0.3 }}
+                        className="mt-3 border-t border-gray-300 pt-3"
                       >
-                        <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                        </svg>
-                        {file.path.split('/').pop()}
-                      </div>
-                    ))}
-
-                    {/* Show current file being generated */}
-                    {generationProgress.currentFile && (
-                      <div className="flex items-center gap-1 px-2 py-1 bg-[#36322F]/70 text-white rounded-[10px] text-sm animate-pulse"
-                        style={{ animationDelay: `${generationProgress.files.length * 30}ms` }}>
-                        <div className="w-16 h-16 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                        {generationProgress.currentFile.path.split('/').pop()}
-                      </div>
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="flex items-center gap-1">
+                            <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse" />
+                            <span className="text-xs font-medium text-gray-600">AI Response Stream</span>
+                          </div>
+                          <div className="flex-1 h-px bg-gradient-to-r from-gray-300 to-transparent" />
+                        </div>
+                        <div className="bg-gray-900 border border-gray-700 rounded max-h-128 overflow-y-auto scrollbar-hide">
+                          <SyntaxHighlighter
+                            language="jsx"
+                            style={vscDarkPlus}
+                            customStyle={{
+                              margin: 0,
+                              padding: '0.75rem',
+                              fontSize: '11px',
+                              lineHeight: '1.5',
+                              background: 'transparent',
+                              maxHeight: '8rem',
+                              overflow: 'hidden'
+                            }}
+                          >
+                            {(() => {
+                              const lastContent = generationProgress.streamedCode.slice(-1000);
+                              // Show the last part of the stream, starting from a complete tag if possible
+                              const startIndex = lastContent.indexOf('<');
+                              return startIndex !== -1 ? lastContent.slice(startIndex) : lastContent;
+                            })()}
+                          </SyntaxHighlighter>
+                          <span className="inline-block w-3 h-4 bg-orange-400 ml-3 mb-3 animate-pulse" />
+                        </div>
+                      </motion.div>
                     )}
                   </div>
-
-                  {/* Live streaming response display */}
-                  {generationProgress.streamedCode && (
-                    <motion.div
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: 'auto' }}
-                      exit={{ opacity: 0, height: 0 }}
-                      transition={{ duration: 0.3 }}
-                      className="mt-3 border-t border-gray-300 pt-3"
-                    >
-                      <div className="flex items-center gap-2 mb-2">
-                        <div className="flex items-center gap-1">
-                          <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse" />
-                          <span className="text-xs font-medium text-gray-600">AI Response Stream</span>
-                        </div>
-                        <div className="flex-1 h-px bg-gradient-to-r from-gray-300 to-transparent" />
-                      </div>
-                      <div className="bg-gray-900 border border-gray-700 rounded max-h-128 overflow-y-auto scrollbar-hide">
-                        <SyntaxHighlighter
-                          language="jsx"
-                          style={vscDarkPlus}
-                          customStyle={{
-                            margin: 0,
-                            padding: '0.75rem',
-                            fontSize: '11px',
-                            lineHeight: '1.5',
-                            background: 'transparent',
-                            maxHeight: '8rem',
-                            overflow: 'hidden'
-                          }}
-                        >
-                          {(() => {
-                            const lastContent = generationProgress.streamedCode.slice(-1000);
-                            // Show the last part of the stream, starting from a complete tag if possible
-                            const startIndex = lastContent.indexOf('<');
-                            return startIndex !== -1 ? lastContent.slice(startIndex) : lastContent;
-                          })()}
-                        </SyntaxHighlighter>
-                        <span className="inline-block w-3 h-4 bg-orange-400 ml-3 mb-3 animate-pulse" />
-                      </div>
-                    </motion.div>
-                  )}
-                </div>
-              )}
-            </div>
+                )}
+              </div>
             )}
 
             {/* Suggested follow-up actions after generation */}
@@ -5266,6 +5264,28 @@ Focus on the key sections and content, making it clean and modern.`;
                     <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
                     {generationProgress.isEdit ? 'Editing code' : 'Live generation'}
                   </div>
+                )}
+
+                {/* Code Review Button - shows when review is available */}
+                {bugbot.lastReview && (
+                  <button
+                    onClick={() => setShowCodeReview(true)}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all ${bugbot.lastReview.passed
+                        ? 'bg-green-100 border border-green-200 text-green-700 hover:bg-green-200'
+                        : 'bg-amber-100 border border-amber-200 text-amber-700 hover:bg-amber-200'
+                      }`}
+                    title="View code review results"
+                  >
+                    <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    Review
+                    {!bugbot.lastReview.passed && (
+                      <span className="px-1.5 py-0.5 text-[10px] bg-amber-200 text-amber-800 rounded-full">
+                        {bugbot.lastReview.issues.length}
+                      </span>
+                    )}
+                  </button>
                 )}
 
                 {/* Sandbox Status Indicator */}

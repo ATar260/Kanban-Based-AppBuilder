@@ -120,33 +120,6 @@ export default function KanbanBoard({
         </div>
 
         <div className="flex items-center gap-1.5 sm:gap-2">
-          {tickets.length > 0 && !isPlanning && (
-            <>
-              {!isBuilding ? (
-                <button
-                  onClick={onStartBuild}
-                  className="px-2 sm:px-3 py-1 sm:py-1.5 text-[10px] sm:text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-all"
-                >
-                  <span className="hidden sm:inline">▶ </span>Start
-                </button>
-              ) : isPaused ? (
-                <button
-                  onClick={onResumeBuild}
-                  className="px-2 sm:px-3 py-1 sm:py-1.5 text-[10px] sm:text-xs font-medium rounded-md bg-green-600 text-white hover:bg-green-700 transition-all"
-                >
-                  <span className="hidden sm:inline">▶ </span>Resume
-                </button>
-              ) : (
-                <button
-                  onClick={onPauseBuild}
-                  className="px-2 sm:px-3 py-1 sm:py-1.5 text-[10px] sm:text-xs font-medium rounded-md bg-gray-600 text-white hover:bg-gray-700 transition-all"
-                >
-                  <span className="hidden sm:inline">⏸ </span>Pause
-                </button>
-              )}
-            </>
-          )}
-
           {isPlanning && (
             <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-purple-100 text-purple-700">
               <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 border-2 border-purple-600 border-t-transparent rounded-full animate-spin" />
@@ -295,7 +268,7 @@ export default function KanbanBoard({
             </div>
 
             {/* Desktop View - All Columns */}
-            <div className="hidden sm:flex gap-3 h-full overflow-x-auto" style={{ minWidth: 'max-content' }}>
+            <div className="hidden sm:flex gap-3 h-full overflow-x-scroll pb-3 scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100">
               {displayColumns.map((column, index) => {
                 const filteredTickets = activeFilter
                   ? ticketsByColumn[column.id].filter(t => t.type === activeFilter)
