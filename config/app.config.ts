@@ -71,6 +71,18 @@ export const appConfig = {
     maxTruncationRecoveryAttempts: 1,
   },
 
+  // Build System Feature Flags (rollout control)
+  buildSystem: {
+    // Enables blueprint-driven planning/scaffolding/execution for Kanban builds
+    enableBlueprintBuilds: true,
+
+    // Enables Next.js template sandboxes (in addition to Vite)
+    enableNextTemplate: true,
+
+    // Enables stricter quality gates beyond render checks (future expansion)
+    enableStrictQualityGates: false,
+  },
+
   // UI Configuration
   ui: {
     // Show/hide certain UI elements

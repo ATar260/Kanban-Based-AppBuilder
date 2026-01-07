@@ -9,9 +9,13 @@ export interface BuildValidation {
  * Validates that the sandbox build was successful
  * Checks compilation status and verifies app is rendering
  */
-export async function validateBuild(sandboxUrl: string, sandboxId: string): Promise<BuildValidation> {
+export async function validateBuild(
+  sandboxUrl: string,
+  sandboxId: string,
+  templateTarget: 'vite' | 'next' = 'vite'
+): Promise<BuildValidation> {
   try {
-    // Step 1: Wait for Vite to process files (give it time to compile)
+    // Step 1: Wait for the dev server to process files (give it time to compile)
     await new Promise(resolve => setTimeout(resolve, 3000));
 
     // Step 2: Check if the sandbox is actually serving content
@@ -32,12 +36,20 @@ export async function validateBuild(sandboxUrl: string, sandboxId: string): Prom
 
     const html = await response.text();
 
-    // Step 3: Check if it's the default page or actual app
-    const isDefaultPage =
-      html.includes('Vercel Sandbox Ready') ||
-      html.includes('Start building your React app with Vite') ||
-      html.includes('Vite + React') ||
-      !html.includes('id="root"');
+    // Step 3: Template-aware render checks
+    const hasExpectedRoot =
+      templateTarget === 'next'
+        ? (html.includes('id="__next"') || html.includes('__NEXT_DATA__'))
+        : html.includes('id="root"');
+
+    const isDefaultPage = templateTarget === 'next'
+      ? (html.includes('Next sandbox ready') || !hasExpectedRoot)
+      : (
+          html.includes('Vercel Sandbox Ready') ||
+          html.includes('Start building your React app with Vite') ||
+          html.includes('Vite + React') ||
+          !hasExpectedRoot
+        );
 
     if (isDefaultPage) {
       return {
@@ -47,20 +59,30 @@ export async function validateBuild(sandboxUrl: string, sandboxId: string): Prom
       };
     }
 
-    // Step 4: Check for Vite error overlay in HTML
-    const hasViteError = html.includes('vite-error-overlay');
-    if (hasViteError) {
-      // Try to extract error message
-      const errorMatch = html.match(/Failed to resolve import "([^"]+)"/);
-      const error = errorMatch
-        ? `Missing package: ${errorMatch[1]}`
-        : 'Vite compilation error detected';
+    // Step 4: Detect template-specific error overlays/pages
+    if (templateTarget === 'vite') {
+      const hasViteError = html.includes('vite-error-overlay');
+      if (hasViteError) {
+        const errorMatch = html.match(/Failed to resolve import "([^"]+)"/);
+        const error = errorMatch
+          ? `Missing package: ${errorMatch[1]}`
+          : 'Vite compilation error detected';
 
-      return {
-        success: false,
-        errors: [error],
-        isRendering: false
-      };
+        return {
+          success: false,
+          errors: [error],
+          isRendering: false
+        };
+      }
+    } else {
+      // Next.js: detect common runtime error marker
+      if (html.toLowerCase().includes('application error') || html.toLowerCase().includes('runtime error')) {
+        return {
+          success: false,
+          errors: ['Next.js runtime error detected'],
+          isRendering: false
+        };
+      }
     }
 
     // Success! App is rendering

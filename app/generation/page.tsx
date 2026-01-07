@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, Suspense } from 'react';
+import { useState, useEffect, useRef, useMemo, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { appConfig } from '@/config/app.config';
@@ -152,6 +152,7 @@ function AISandboxPage() {
     tickets: KanbanTicketType[];
     fileContents: Array<{ path: string; content: string }>;
   } | null>(null);
+  const [resumeAfterReview, setResumeAfterReview] = useState(false);
 
   const kanban = useKanbanBoard();
   const bugbot = useBugbot();
@@ -496,6 +497,9 @@ Visual Features: ${uiOption.features.join(', ')}`;
   // Ref to prevent double-triggering of auto-generation (race condition fix)
   const autoGenerationTriggeredRef = useRef<boolean>(false);
 
+  // Track whether we've already applied Supabase env vars for the current sandbox (avoid repeated restarts).
+  const supabaseEnvAppliedRef = useRef<string | null>(null);
+
   // CONSOLIDATED: Single auto-start generation effect to prevent race conditions
   // Previously there were two effects that could both trigger generation
   useEffect(() => {
@@ -616,9 +620,16 @@ Visual Features: ${uiOption.features.join(', ')}`;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shouldAutoGenerate, homeUrlInput, showHomeScreen]);
 
-  // Keep-alive effect: ping sandbox periodically during active builds to prevent timeout
+  const hasTestingOrReviewTickets = useMemo(() => {
+    return kanban.tickets.some(t => t.status === 'testing' || t.status === 'pr_review');
+  }, [kanban.tickets]);
+
+  // Keep-alive effect: ping sandbox periodically during active builds AND during human gates
+  // (code review / testing) so the sandbox doesn't expire while the user is inspecting.
   useEffect(() => {
-    if (!kanbanBuildActive && !generationProgress.isGenerating) return;
+    const hasHumanGate = showCodeReview || hasTestingOrReviewTickets;
+
+    if (!kanbanBuildActive && !generationProgress.isGenerating && !hasHumanGate) return;
     if (!sandboxData?.sandboxId) return;
 
     const keepAlive = async () => {
@@ -642,7 +653,7 @@ Visual Features: ${uiOption.features.join(', ')}`;
     keepAlive();
 
     return () => clearInterval(interval);
-  }, [kanbanBuildActive, generationProgress.isGenerating, sandboxData?.sandboxId]);
+  }, [kanbanBuildActive, generationProgress.isGenerating, sandboxData?.sandboxId, showCodeReview, hasTestingOrReviewTickets]);
 
   // Handle sandbox expiration - auto-recreate if needed
   useEffect(() => {
@@ -652,16 +663,26 @@ Visual Features: ${uiOption.features.join(', ')}`;
       console.log('[sandbox-expired] Detected expired sandbox, attempting to recreate...');
       setSandboxData(null);
       setSandboxExpired(false);
-      
-      // Create new sandbox
-      const newSandbox = await createSandbox(true);
+
+      // Create new sandbox (match the current plan template if available)
+      const planBlueprint: any = (kanban.plan as any)?.blueprint || null;
+      const desiredTemplate: 'vite' | 'next' =
+        (kanban.plan as any)?.templateTarget ||
+        planBlueprint?.templateTarget ||
+        (sandboxData as any)?.templateTarget ||
+        'vite';
+      const nextTemplateEnabled = Boolean(appConfig?.buildSystem?.enableNextTemplate);
+      const effectiveTemplate: 'vite' | 'next' =
+        desiredTemplate === 'next' && !nextTemplateEnabled ? 'vite' : desiredTemplate;
+
+      const newSandbox = await createSandbox(true, 0, effectiveTemplate);
       if (newSandbox) {
         addChatMessage('Sandbox was recreated after expiration. Please retry your last action.', 'system');
       }
     };
 
     handleExpiredSandbox();
-  }, [sandboxExpired]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sandboxExpired, appConfig?.buildSystem?.enableNextTemplate, kanban.plan, sandboxData]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const updateStatus = (text: string, active: boolean) => {
     setStatus({ text, active });
@@ -774,13 +795,18 @@ Visual Features: ${uiOption.features.join(', ')}`;
     }
   };
 
-  const checkSandboxStatus = async () => {
+  const checkSandboxStatus = async (desiredTemplate: 'vite' | 'next' = 'vite') => {
     try {
       const response = await fetch('/api/sandbox-status');
       const data = await response.json();
 
-      if (data.sandboxStopped) {
-        console.log('[checkSandboxStatus] Sandbox stopped, clearing state and creating new one');
+      const hasSandboxHint = Boolean(searchParams.get('sandbox')) || Boolean(sandboxData?.sandboxId);
+      const shouldRecreate =
+        Boolean(data?.sandboxStopped) ||
+        (hasSandboxHint && (!data?.active || data?.sandboxData?.healthStatusCode === 410));
+
+      if (shouldRecreate) {
+        console.log('[checkSandboxStatus] Sandbox unavailable, clearing state and creating new one');
         setSandboxData(null);
         updateStatus('Sandbox stopped - creating new one...', false);
         
@@ -789,13 +815,13 @@ Visual Features: ${uiOption.features.join(', ')}`;
         newParams.delete('sandbox');
         router.replace(`/generation?${newParams.toString()}`, { scroll: false });
         
-        await createSandbox(true);
+        await createSandbox(true, 0, desiredTemplate);
         return;
       }
 
       if (data.active && data.healthy && data.sandboxData) {
         console.log('[checkSandboxStatus] Setting sandboxData from API:', data.sandboxData);
-        setSandboxData(data.sandboxData);
+        setSandboxData(prev => ({ ...(prev || {}), ...(data.sandboxData || {}) }));
         updateStatus('Sandbox active', true);
       } else if (data.active && !data.healthy) {
         const healthStatusCode = data?.sandboxData?.healthStatusCode;
@@ -905,11 +931,12 @@ Apply these design specifications consistently across all components.`;
       gitSync.syncTicketCompletion(combinedTicket, pendingReviewData.fileContents);
     }
 
-    addChatMessage('✅ Build approved and marked complete', 'system');
+    addChatMessage('✅ Changes approved. Continuing build...', 'system');
     setShowCodeReview(false);
     setPendingReviewData(null);
     bugbot.clearLastReview();
-    setGenerationProgress(prev => ({ ...prev, status: 'Build complete (approved)' }));
+    setGenerationProgress(prev => ({ ...prev, status: 'Continuing build...' }));
+    setResumeAfterReview(true);
   };
 
   const handleCodeReviewDismiss = () => {
@@ -1360,223 +1387,543 @@ Requirements:
     setKanbanBuildActive(true);
     kanban.setIsPaused(false);
 
-    // Ensure sandbox exists before proceeding
-    if (!sandboxData) {
-      const newSandbox = await createSandbox(true);
-      if (!newSandbox && !sandboxData) {
+    const blueprintBuildsEnabled = Boolean(appConfig?.buildSystem?.enableBlueprintBuilds);
+    const nextTemplateEnabled = Boolean(appConfig?.buildSystem?.enableNextTemplate);
+
+    // Determine template + blueprint (if available)
+    const planBlueprint: any = (kanban.plan as any)?.blueprint || null;
+    const desiredTemplate: 'vite' | 'next' =
+      (kanban.plan as any)?.templateTarget ||
+      planBlueprint?.templateTarget ||
+      'vite';
+    const effectiveTemplate: 'vite' | 'next' =
+      desiredTemplate === 'next' && !nextTemplateEnabled ? 'vite' : desiredTemplate;
+
+    // Ensure sandbox exists (and matches the plan template)
+    let activeSandbox = sandboxData as any;
+    // Proactively detect expired/stopped sandboxes before starting a build.
+    // If the server lost the provider (or the sandbox expired), force a new sandbox.
+    try {
+      const statusRes = await fetch('/api/sandbox-status');
+      const statusData = await statusRes.json().catch(() => null);
+
+      // IMPORTANT: The server maintains the authoritative "active sandbox".
+      // The client can hold a stale sandboxId (e.g., URL param from a prior run),
+      // which causes scaffold/apply routes to 400 because the provider is registered under
+      // a different sandboxId. Always sync from `/api/sandbox-status` before scaffolding.
+      const statusSandbox =
+        statusData?.sandboxData && typeof statusData.sandboxData === 'object'
+          ? statusData.sandboxData
+          : null;
+
+      if (statusData?.active && statusData?.healthy && statusSandbox?.sandboxId) {
+        // Sync local state + our local variable so subsequent calls use the correct sandboxId immediately.
+        setSandboxData(prev => ({ ...(prev || {}), ...(statusSandbox || {}) }));
+        activeSandbox = { ...(activeSandbox || {}), ...(statusSandbox || {}) };
+
+        // Keep the URL param aligned as well (helps refresh/resume flows).
+        const currentSandboxParam = searchParams.get('sandbox');
+        if (currentSandboxParam !== statusSandbox.sandboxId) {
+          const newParams = new URLSearchParams(searchParams.toString());
+          newParams.set('sandbox', statusSandbox.sandboxId);
+          router.replace(`/generation?${newParams.toString()}`, { scroll: false });
+        }
+      }
+      const sandboxUnavailable =
+        !statusData?.active ||
+        Boolean(statusData?.sandboxStopped) ||
+        statusSandbox?.healthStatusCode === 410;
+      if (sandboxUnavailable) {
+        if (activeSandbox) {
+          addChatMessage('Sandbox is no longer available. Creating a new sandbox before continuing...', 'system');
+        }
+        setSandboxData(null);
+        activeSandbox = null;
+      }
+    } catch (e) {
+      // If status check fails, proceed with current state; downstream operations may still recreate.
+      console.warn('[handleStartKanbanBuild] Sandbox status preflight failed:', e);
+    }
+    if (!activeSandbox || activeSandbox.templateTarget !== effectiveTemplate) {
+      if (activeSandbox?.templateTarget && activeSandbox.templateTarget !== effectiveTemplate) {
+        addChatMessage('Current sandbox template does not match the plan. Creating a new sandbox...', 'system');
+      }
+      const newSandbox = await createSandbox(true, 0, effectiveTemplate);
+      activeSandbox = newSandbox || activeSandbox;
+
+      // `createSandbox` can return null if a sandbox creation is already in progress.
+      // In that case, wait briefly for the server-side active sandbox to become healthy.
+      if (!activeSandbox) {
+        const started = Date.now();
+        const maxWaitMs = 30000;
+
+        while (Date.now() - started < maxWaitMs) {
+          await new Promise(r => setTimeout(r, 1000));
+          try {
+            const waitRes = await fetch('/api/sandbox-status');
+            const waitData = await waitRes.json().catch(() => null);
+            const waitSandbox =
+              waitData?.sandboxData && typeof waitData.sandboxData === 'object'
+                ? waitData.sandboxData
+                : null;
+
+            if (waitData?.active && waitData?.healthy && waitSandbox?.sandboxId) {
+              setSandboxData(prev => ({ ...(prev || {}), ...(waitSandbox || {}), templateTarget: effectiveTemplate } as any));
+              activeSandbox = { ...(waitSandbox || {}), templateTarget: effectiveTemplate };
+
+              const currentSandboxParam = searchParams.get('sandbox');
+              if (currentSandboxParam !== waitSandbox.sandboxId) {
+                const newParams = new URLSearchParams(searchParams.toString());
+                newParams.set('sandbox', waitSandbox.sandboxId);
+                router.replace(`/generation?${newParams.toString()}`, { scroll: false });
+              }
+              break;
+            }
+          } catch {
+            // ignore and keep waiting
+          }
+        }
+      }
+      if (!activeSandbox) {
         setKanbanBuildActive(false);
-        addChatMessage('❌ Failed to create sandbox. Please try again or refresh the page.', 'error');
+        addChatMessage('Failed to create sandbox. Please try again.', 'error');
         return;
       }
     }
 
-    // Mark all backlog tickets as generating at once
-    backlogTickets.forEach(ticket => {
-      kanban.updateTicketStatus(ticket.id, 'generating');
-    });
+    // Deterministic scaffold step (guarantees routes/nav/data are present before AI edits)
+    if (blueprintBuildsEnabled && planBlueprint) {
+      try {
+        const alreadyScaffoldedForSandbox =
+          Boolean((kanban.plan as any)?.scaffolded) &&
+          Boolean((kanban.plan as any)?.scaffoldedSandboxId) &&
+          (kanban.plan as any)?.scaffoldedSandboxId === activeSandbox.sandboxId;
 
-    // Build combined prompt from all tickets
-    const ticketDescriptions = backlogTickets.map((ticket, idx) => {
-      let desc = `${idx + 1}. ${ticket.title}: ${ticket.description}`;
-      if (ticket.userInputs && Object.keys(ticket.userInputs).length > 0) {
-        desc += `\n   Credentials: ${Object.entries(ticket.userInputs).map(([k, v]) => `${k}=${v}`).join(', ')}`;
+        if (!alreadyScaffoldedForSandbox) {
+          addChatMessage('Scaffolding project from blueprint...', 'system');
+          const scaffoldRes = await fetch('/api/scaffold-project', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sandboxId: activeSandbox.sandboxId,
+              template: effectiveTemplate,
+              blueprint: planBlueprint,
+            }),
+          });
+          const scaffoldData = await scaffoldRes.json().catch(() => ({}));
+          if (!scaffoldRes.ok || !scaffoldData?.success) {
+            throw new Error(scaffoldData?.error || `Scaffold failed (HTTP ${scaffoldRes.status})`);
+          }
+          addChatMessage(`Scaffolded ${scaffoldData.filesWritten?.length || 0} file(s)`, 'system');
+
+          if (kanban.plan) {
+            kanban.setPlan({
+              ...kanban.plan,
+              scaffolded: true,
+              scaffoldedSandboxId: activeSandbox.sandboxId,
+            } as any);
+          }
+        }
+      } catch (e: any) {
+        setKanbanBuildActive(false);
+        addChatMessage(`Scaffolding failed: ${e.message}`, 'error');
+        return;
       }
-      return desc;
-    }).join('\n');
+    } else if (planBlueprint) {
+      addChatMessage('Blueprint builds are disabled; skipping scaffold step.', 'system');
+    } else {
+      addChatMessage('No blueprint found; skipping scaffold step.', 'system');
+    }
 
-    const combinedPrompt = `Build a complete application with ALL of the following features simultaneously:
+    setGenerationProgress(prev => ({
+      ...prev,
+      isGenerating: true,
+      status: 'Building tickets...',
+      streamedCode: '',
+      files: [],
+    }));
 
-FEATURES TO BUILD:
-${ticketDescriptions}
+    const redactSensitiveForPrompt = (content: string): string => {
+      const input = String(content ?? '');
+      return input
+        // JWTs (common Supabase anon keys are JWT-like)
+        .replace(/eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*/g, '[REDACTED_JWT]')
+        // Common env key assignment patterns
+        .replace(/(VITE_SUPABASE_ANON_KEY\s*[:=]\s*['"])([^'"]+)(['"])/g, '$1[REDACTED]$3')
+        .replace(/(NEXT_PUBLIC_SUPABASE_ANON_KEY\s*[:=]\s*['"])([^'"]+)(['"])/g, '$1[REDACTED]$3');
+    };
 
-Requirements:
-- Generate ALL files needed for ALL features in a single response
-- Use modern React with TypeScript and Tailwind CSS
-- Create a cohesive, production-ready application
-- Ensure all components work together seamlessly`;
-
-    try {
+    const streamFileBlocksFromAI = async (prompt: string, sandboxId: string): Promise<string> => {
       const response = await fetch('/api/generate-ai-code-stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          prompt: combinedPrompt,
+          prompt,
           model: aiModel,
-          context: { sandboxId: sandboxData?.sandboxId },
+          context: { sandboxId },
+          isEdit: true,
+          buildProfile: 'implement_ticket',
         }),
       });
 
       if (!response.ok || !response.body) {
-        throw new Error('Generation failed');
+        throw new Error(`AI generation failed (HTTP ${response.status})`);
       }
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+      let buffer = '';
       let generatedCode = '';
-      const completedFiles = new Set<string>();
-
-      setGenerationProgress(prev => ({
-        ...prev,
-        isGenerating: true,
-        status: `Building ${backlogTickets.length} features...`,
-        streamedCode: '',
-        files: [],
-      }));
-
-      // Start build tracker
-      buildTracker.startBuild(`Building ${backlogTickets.length} features`);
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-
-        const chunk = decoder.decode(value);
-        const lines = chunk.split('\n');
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
 
         for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              if (data.type === 'stream' && data.raw) {
-                generatedCode += data.text;
-
-                // Use build tracker to process streamed code and update tickets
-                buildTracker.processStreamedCode(generatedCode);
-
-                // Update overall progress
-                const progress = Math.min(85, (generatedCode.length / 10000) * 100);
-                backlogTickets.forEach(ticket => {
-                  kanban.updateTicketProgress(ticket.id, progress);
-                });
-
-                setGenerationProgress(prev => ({
-                  ...prev,
-                  streamedCode: generatedCode,
-                }));
-
-                // Parse files for UI display
-                const fileRegex = /<file path="([^"]+)">([\s\S]*?)(?:<\/file>|$)/g;
-                const parsedFiles: Array<{ path: string; content: string; type: string; completed: boolean }> = [];
-                let match;
-                while ((match = fileRegex.exec(generatedCode)) !== null) {
-                  const filePath = match[1];
-                  const content = match[2];
-                  const ext = filePath.split('.').pop() || '';
-                  const hasClosingTag = match[0].includes('</file>');
-                  parsedFiles.push({ path: filePath, content, type: ext, completed: hasClosingTag });
-                  
-                  // Mark tickets as progressing based on file types
-                  if (hasClosingTag && !completedFiles.has(filePath)) {
-                    completedFiles.add(filePath);
-                  }
-                }
-                if (parsedFiles.length > 0) {
-                  setGenerationProgress(prev => ({ ...prev, files: parsedFiles }));
-                }
-              } else if (data.type === 'complete') {
-                generatedCode = data.generatedCode || generatedCode;
-              }
-            } catch (e) {
-              console.debug('[stream-parse] Partial JSON chunk, continuing...', e);
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.type === 'stream' && data.raw) {
+              generatedCode += data.text;
+            } else if (data.type === 'complete') {
+              generatedCode = data.generatedCode || generatedCode;
             }
+          } catch {
+            // ignore partial chunks
           }
         }
       }
 
-      // Mark all as applying
-      buildTracker.markApplying();
-      backlogTickets.forEach(ticket => {
-        kanban.updateTicketStatus(ticket.id, 'applying');
-        kanban.updateTicketProgress(ticket.id, 90);
-      });
-      setGenerationProgress(prev => ({ ...prev, status: 'Applying code...' }));
+      return generatedCode;
+    };
 
-      // Switch to preview as soon as we start applying code
-      setActiveTab('preview');
+    try {
+      while (true) {
+        if (kanban.isPaused) {
+          addChatMessage('Build paused.', 'system');
+          break;
+        }
 
-      await applyGeneratedCode(generatedCode, false);
+        const nextTicket = kanban.getNextBuildableTicket();
+        if (!nextTicket) break;
 
-      // Extract files for review and sync
-      buildTracker.markCompleted();
-      const allFiles = Array.from(generatedCode.matchAll(/<file path="([^"]+)">/g)).map(m => m[1]);
-      
-      const fileContents: Array<{ path: string; content: string }> = [];
-      const fileRegex = /<file path="([^"]+)">([\s\S]*?)(?:<\/file>|(?=<file path="|$))/g;
-      let fileMatch;
-      while ((fileMatch = fileRegex.exec(generatedCode)) !== null) {
-        fileContents.push({ path: fileMatch[1], content: fileMatch[2].trim() });
-      }
+        kanban.setCurrentTicketId(nextTicket.id);
+        kanban.updateTicketStatus(nextTicket.id, 'generating');
+        kanban.updateTicketProgress(nextTicket.id, 5);
 
-      // Update files on tickets
-      backlogTickets.forEach(ticket => {
-        kanban.updateTicketFiles(ticket.id, allFiles);
-      });
+        // If this ticket has Supabase credentials, apply them to the sandbox env once (and restart dev server)
+        // so the generated app can actually switch from mock-first → real DB without manual steps.
+        const isSupabaseTicket =
+          /supabase/i.test(nextTicket.title || '') ||
+          /supabase/i.test(nextTicket.description || '') ||
+          Array.isArray((nextTicket as any).inputRequests) &&
+            (nextTicket as any).inputRequests.some((r: any) => typeof r?.id === 'string' && r.id.startsWith('supabase_'));
 
-      // Move into PR Review while Bugbot runs
-      backlogTickets.forEach(ticket => {
-        kanban.updateTicketStatus(ticket.id, 'pr_review');
-        kanban.updateTicketProgress(ticket.id, 95);
-      });
+        const hasSupabaseInputs =
+          nextTicket.userInputs &&
+          typeof (nextTicket.userInputs as any).supabase_url === 'string' &&
+          String((nextTicket.userInputs as any).supabase_url).trim().length > 0 &&
+          typeof (nextTicket.userInputs as any).supabase_anon_key === 'string' &&
+          String((nextTicket.userInputs as any).supabase_anon_key).trim().length > 0;
 
-      // Run Bugbot code review
-      setGenerationProgress(prev => ({ ...prev, status: 'Running code review...' }));
-      addChatMessage('🔍 Running Bugbot code review...', 'system');
-      
-      const reviewResult = await bugbot.reviewCode({
-        ticketId: backlogTickets.map(t => t.id).join('-'),
-        ticketTitle: backlogTickets.map(t => t.title).join(', '),
-        files: fileContents,
-      });
+        if (isSupabaseTicket && hasSupabaseInputs) {
+          const applyKey = `${activeSandbox.sandboxId}:${effectiveTemplate}`;
+          if (supabaseEnvAppliedRef.current !== applyKey) {
+            try {
+              addChatMessage('Applying Supabase env vars to sandbox...', 'system');
+              const envRes = await fetch('/api/apply-sandbox-env', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  sandboxId: activeSandbox.sandboxId,
+                  template: effectiveTemplate,
+                  userInputs: nextTicket.userInputs,
+                }),
+              });
+              const envData = await envRes.json().catch(() => ({}));
+              if (!envRes.ok || !envData?.success) {
+                throw new Error(envData?.error || `Failed to apply env (HTTP ${envRes.status})`);
+              }
+              supabaseEnvAppliedRef.current = applyKey;
+              addChatMessage('Supabase env vars applied to sandbox.', 'system');
+            } catch (e: any) {
+              console.warn('[generation] Failed to apply Supabase env vars:', e);
+              addChatMessage(
+                `Warning: could not apply Supabase env vars automatically (${e?.message || 'unknown error'}).`,
+                'system'
+              );
+            }
+          }
+        }
 
-      if (reviewResult && !reviewResult.passed) {
-        setPendingReviewData({ tickets: backlogTickets, fileContents });
-        setShowCodeReview(true);
-        setKanbanBuildActive(false);
-        setGenerationProgress(prev => ({ 
-          ...prev, 
-          isGenerating: false, 
-          status: `Review: ${reviewResult.issues.filter(i => i.severity === 'error').length} issues found` 
+        // Never include sensitive user-provided values in the LLM prompt.
+        const sensitiveIds = new Set(
+          Array.isArray((nextTicket as any).inputRequests)
+            ? (nextTicket as any).inputRequests.filter((r: any) => r?.sensitive).map((r: any) => r?.id)
+            : []
+        );
+
+        const credentialText =
+          nextTicket.userInputs && Object.keys(nextTicket.userInputs).length > 0
+            ? `\n\nUser inputs:\n${Object.entries(nextTicket.userInputs)
+                .map(([k, v]) => {
+                  if (sensitiveIds.has(k)) return `- ${k}=[REDACTED]`;
+                  const str = String(v ?? '');
+                  // Avoid dumping long values into prompts even if not marked sensitive.
+                  if (str.length > 120) return `- ${k}=[REDACTED]`;
+                  return `- ${k}=${str}`;
+                })
+                .join('\n')}`
+            : '';
+
+        const ticketPrompt = `Implement the following ticket in the existing application.\n\nTemplate: ${desiredTemplate}\n\nBlueprint (high-level contract):\n${planBlueprint ? JSON.stringify(planBlueprint, null, 2) : '(none)'}\n\nTicket:\n- Title: ${nextTicket.title}\n- Description: ${nextTicket.description}${credentialText}\n\nRules:\n- Implement the ticket completely.\n- Preserve existing routes/navigation and the mock-first data layer.\n- Create new files if required by this ticket.\n- Output ONLY <file path=\"...\"> blocks for files you changed/created.`;
+
+        const response = await fetch('/api/generate-ai-code-stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt: ticketPrompt,
+            model: aiModel,
+            context: { sandboxId: activeSandbox.sandboxId },
+            isEdit: true,
+            buildProfile: 'implement_ticket',
+          }),
+        });
+
+        if (!response.ok || !response.body) {
+          throw new Error(`Generation failed for "${nextTicket.title}" (HTTP ${response.status})`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let generatedCode = '';
+
+        setGenerationProgress(prev => ({
+          ...prev,
+          status: `Generating: ${nextTicket.title}`,
+          streamedCode: '',
         }));
-        addChatMessage(`⚠️ Code review found ${reviewResult.issues.length} issues. Please review.`, 'system');
-        return;
-      }
 
-      // Review passed - mark all as done
-      backlogTickets.forEach(ticket => {
-        kanban.updateTicketStatus(ticket.id, 'done');
-        kanban.updateTicketProgress(ticket.id, 100);
-      });
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk = decoder.decode(value);
+          const lines = chunk.split('\n');
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.type === 'stream' && data.raw) {
+                generatedCode += data.text;
+                const progress = Math.min(85, Math.max(10, (generatedCode.length / 6000) * 100));
+                kanban.updateTicketProgress(nextTicket.id, progress);
+                setGenerationProgress(prev => ({ ...prev, streamedCode: generatedCode }));
+              } else if (data.type === 'complete') {
+                generatedCode = data.generatedCode || generatedCode;
+              }
+            } catch {
+              // ignore partial chunks
+            }
+          }
+        }
 
-      if (reviewResult) {
-        addChatMessage(`✅ Code review passed with score ${reviewResult.score}/100`, 'system');
-      }
+        kanban.updateTicketCode(nextTicket.id, generatedCode);
 
-      // Auto-sync to GitHub if enabled
-      if (gitSync.isEnabled && fileContents.length > 0) {
-        const combinedTicket = {
-          id: backlogTickets.map(t => t.id).join('-'),
-          title: `Build: ${backlogTickets.map(t => t.title).join(', ')}`,
-          description: `Completed ${backlogTickets.length} features`,
-          type: 'feature' as const,
-          priority: 'medium' as const,
-          status: 'done' as const,
+        // Apply generated code (incremental edit)
+        kanban.updateTicketStatus(nextTicket.id, 'applying');
+        kanban.updateTicketProgress(nextTicket.id, 90);
+        setGenerationProgress(prev => ({ ...prev, status: `Applying: ${nextTicket.title}` }));
+        setActiveTab('preview');
+        await applyGeneratedCode(generatedCode, true, activeSandbox);
+
+        const allFiles = Array.from(generatedCode.matchAll(/<file path="([^"]+)">/g)).map(m => m[1]);
+        if (allFiles.length > 0) {
+          kanban.updateTicketFiles(nextTicket.id, allFiles);
+        }
+
+        // Code review gate (Bugbot)
+        kanban.updateTicketStatus(nextTicket.id, 'pr_review');
+        kanban.updateTicketProgress(nextTicket.id, 95);
+        setGenerationProgress(prev => ({ ...prev, status: `Reviewing: ${nextTicket.title}` }));
+
+        const fileContents: Array<{ path: string; content: string }> = [];
+        const fileRegex = /<file path="([^"]+)">([\s\S]*?)(?:<\/file>|(?=<file path="|$))/g;
+        let fileMatch;
+        while ((fileMatch = fileRegex.exec(generatedCode)) !== null) {
+          fileContents.push({ path: fileMatch[1], content: fileMatch[2].trim() });
+        }
+
+        const reviewResult = await bugbot.reviewCode({
+          ticketId: nextTicket.id,
+          ticketTitle: nextTicket.title,
+          files: fileContents,
+        });
+
+        const isBlockingIssue = (issue: { severity: string; type: string }) => {
+          if (issue.severity === 'error') return true;
+          if (issue.severity === 'warning' && (issue.type === 'security' || issue.type === 'bug')) return true;
+          return false;
         };
-        gitSync.syncTicketCompletion(combinedTicket, fileContents);
+
+        const hasBlockingIssues = (res: ReviewResult | null) =>
+          Boolean(res?.issues?.some(i => isBlockingIssue(i)));
+
+        const maxAutoFixAttempts = 2;
+        let currentReview: ReviewResult | null = reviewResult;
+        let currentFiles = fileContents;
+        let autoFixAttempts = 0;
+
+        while (hasBlockingIssues(currentReview) && autoFixAttempts < maxAutoFixAttempts) {
+          autoFixAttempts += 1;
+
+          const blockingIssues = (currentReview?.issues || []).filter(i => isBlockingIssue(i));
+          const issuesText = blockingIssues
+            .map((i, idx) => {
+              const loc = `${i.file}${i.line ? `:${i.line}` : ''}`;
+              const suggestion = i.suggestion ? `\n  Suggestion: ${i.suggestion}` : '';
+              return `- [${idx + 1}] (${i.severity}/${i.type}) ${loc}\n  ${i.message}${suggestion}`;
+            })
+            .join('\n');
+
+          const filesText = currentFiles
+            .map(f => `// FILE: ${f.path}\n${redactSensitiveForPrompt(f.content)}`)
+            .join('\n\n---\n\n');
+
+          addChatMessage(
+            `Code review found blocking issues. Attempting auto-fix (${autoFixAttempts}/${maxAutoFixAttempts})...`,
+            'system'
+          );
+          setGenerationProgress(prev => ({
+            ...prev,
+            status: `Auto-fixing: ${nextTicket.title} (${autoFixAttempts}/${maxAutoFixAttempts})`,
+          }));
+
+          const fixPrompt = `Fix the listed issues in the provided code.\n\nBlocking issues:\n${issuesText}\n\nRules:\n- Make the smallest possible changes to fix ONLY the issues above.\n- Do NOT change app behavior beyond what is needed to fix the issues.\n- Do NOT introduce new dependencies unless absolutely necessary.\n- Do NOT include or log secrets.\n- Output ONLY <file path=\"...\"> blocks for files you change. Each block must contain the full updated file content.\n\nCode:\n${filesText}`;
+
+          let fixCode = '';
+          try {
+            fixCode = await streamFileBlocksFromAI(fixPrompt, activeSandbox.sandboxId);
+          } catch (e: any) {
+            console.warn('[kanban] Auto-fix generation failed:', e);
+            break;
+          }
+
+          if (!fixCode || !fixCode.includes('<file path="')) {
+            console.warn('[kanban] Auto-fix produced no file blocks; stopping auto-fix loop.');
+            break;
+          }
+
+          // Apply the fix patch (incremental edit)
+          await applyGeneratedCode(fixCode, true, activeSandbox);
+
+          // Update the in-memory file set for the next Bugbot pass using the returned <file> blocks.
+          const updatedMap = new Map(currentFiles.map(f => [f.path, f.content]));
+          const fixFileRegex = /<file path="([^"]+)">([\s\S]*?)(?:<\/file>|(?=<file path="|$))/g;
+          let fixMatch;
+          while ((fixMatch = fixFileRegex.exec(fixCode)) !== null) {
+            updatedMap.set(fixMatch[1], fixMatch[2].trim());
+          }
+          currentFiles = Array.from(updatedMap.entries()).map(([path, content]) => ({ path, content }));
+
+          currentReview = await bugbot.reviewCode({
+            ticketId: nextTicket.id,
+            ticketTitle: nextTicket.title,
+            files: currentFiles,
+          });
+        }
+
+        if (hasBlockingIssues(currentReview)) {
+          const errors = (currentReview?.issues || []).filter(i => i.severity === 'error').length;
+          setPendingReviewData({ tickets: [nextTicket], fileContents: currentFiles });
+          setShowCodeReview(true);
+          setKanbanBuildActive(false);
+          setGenerationProgress(prev => ({
+            ...prev,
+            isGenerating: false,
+            status: `Review failed: ${errors} error(s)`,
+          }));
+          addChatMessage('Code review found blocking issues. Please review.', 'system');
+          return;
+        }
+
+        // Testing gate placeholder (real gates will be added later)
+        kanban.updateTicketStatus(nextTicket.id, 'testing');
+        kanban.updateTicketProgress(nextTicket.id, 98);
+
+        // Blueprint coverage gate (static)
+        try {
+          const { validateBlueprint } = await import('@/lib/blueprint-validator');
+          const bpResult = validateBlueprint(planBlueprint);
+          if (!bpResult.ok) {
+            throw new Error(`Blueprint validation failed: ${bpResult.errors.join('; ')}`);
+          }
+        } catch (e: any) {
+          kanban.updateTicketStatus(nextTicket.id, 'failed', e.message || 'Blueprint validation failed');
+          setKanbanBuildActive(false);
+          setGenerationProgress(prev => ({ ...prev, isGenerating: false, status: `Failed: ${e.message}` }));
+          addChatMessage(`Build failed: ${e.message}`, 'error');
+          return;
+        }
+
+        // Mark ticket complete
+        kanban.updateTicketStatus(nextTicket.id, 'done');
+        kanban.updateTicketProgress(nextTicket.id, 100);
+
+        if (gitSync.isEnabled && fileContents.length > 0) {
+          gitSync.syncTicketCompletion(
+            {
+              id: nextTicket.id,
+              title: nextTicket.title,
+              description: nextTicket.description,
+              type: nextTicket.type,
+              priority: nextTicket.priority,
+            },
+            fileContents
+          );
+        }
       }
 
       setKanbanBuildActive(false);
       setGenerationProgress(prev => ({ ...prev, isGenerating: false, status: 'Build complete' }));
-
     } catch (error: any) {
-      buildTracker.markFailed(error.message);
-      backlogTickets.forEach(ticket => {
-        kanban.updateTicketStatus(ticket.id, 'failed', error.message);
-      });
+      const message = error?.message || 'Build failed';
+      const currentId = kanban.currentTicketId;
+      if (currentId) {
+        kanban.updateTicketStatus(currentId, 'failed', message);
+      }
       setKanbanBuildActive(false);
-      setGenerationProgress(prev => ({ ...prev, isGenerating: false, status: `Failed: ${error.message}` }));
-      addChatMessage(`❌ Build failed: ${error.message}`, 'error');
+      setGenerationProgress(prev => ({ ...prev, isGenerating: false, status: `Failed: ${message}` }));
+      addChatMessage(`Build failed: ${message}`, 'error');
     }
   };
+
+  // Auto-resume the build after a review approval (so users don't have to hit ▶ Start repeatedly).
+  useEffect(() => {
+    if (!resumeAfterReview) return;
+    if (showCodeReview) return;
+    if (kanbanBuildActive) {
+      setResumeAfterReview(false);
+      return;
+    }
+    if (kanban.isPaused) {
+      setResumeAfterReview(false);
+      return;
+    }
+
+    const hasBacklog = kanban.tickets.some(t => t.status === 'backlog');
+    if (!hasBacklog) {
+      setResumeAfterReview(false);
+      return;
+    }
+
+    // Kick the loop again using the latest state (this effect runs after state updates).
+    setResumeAfterReview(false);
+    void handleStartKanbanBuild();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resumeAfterReview, showCodeReview, kanbanBuildActive, kanban.isPaused, kanban.tickets]);
 
   const handleCreateManualPlanSnapshot = async () => {
     const created = await planVersions.createSnapshot({
@@ -1749,7 +2096,11 @@ Requirements:
 
   const sandboxCreationRef = useRef<boolean>(false);
 
-  const createSandbox = async (fromHomeScreen = false, retryCount = 0) => {
+  const createSandbox = async (
+    fromHomeScreen = false,
+    retryCount = 0,
+    template: 'vite' | 'next' = 'vite'
+  ) => {
     const MAX_RETRIES = 3;
 
     // Prevent duplicate sandbox creation
@@ -1771,7 +2122,7 @@ Requirements:
       const response = await fetch('/api/create-ai-sandbox-v2', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({})
+        body: JSON.stringify({ template })
       });
 
       const data = await response.json();
@@ -1836,7 +2187,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
         console.log(`[createSandbox] Retrying (${retryCount + 1}/${MAX_RETRIES})...`);
         updateStatus(`Connection failed. Retrying (${retryCount + 1}/${MAX_RETRIES})...`, false);
         await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1))); // Exponential backoff
-        return createSandbox(fromHomeScreen, retryCount + 1);
+        return createSandbox(fromHomeScreen, retryCount + 1, template);
       }
 
       updateStatus('Error', false);
@@ -2924,7 +3275,22 @@ Tip: I automatically detect and install npm packages from your code imports (lik
 
             {/* Refresh button */}
             <button
-              onClick={() => {
+              onClick={async () => {
+                if (!sandboxData?.sandboxId) return;
+
+                // If the sandbox expired while idle, recreate it instead of just reloading the iframe.
+                try {
+                  const res = await fetch('/api/sandbox-status');
+                  const data = await res.json().catch(() => null);
+                  if (data?.sandboxStopped || !data?.active || data?.sandboxData?.healthStatusCode === 410) {
+                    console.log('[Manual Refresh] Sandbox stopped - recreating...');
+                    await checkSandboxStatus((sandboxData as any)?.templateTarget || 'vite');
+                    return;
+                  }
+                } catch (e) {
+                  console.warn('[Manual Refresh] Sandbox status check failed:', e);
+                }
+
                 if (iframeRef.current && sandboxData?.url) {
                   console.log('[Manual Refresh] Forcing iframe reload...');
                   const newSrc = `${sandboxData.url}?t=${Date.now()}&manual=true`;

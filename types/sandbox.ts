@@ -9,6 +9,7 @@ export interface SandboxFileCache {
   files: Record<string, SandboxFile>;
   lastSync: number;
   sandboxId: string;
+  templateTarget?: 'vite' | 'next';
   manifest?: any; // FileManifest type from file-manifest.ts
 }
 
@@ -18,6 +19,8 @@ export interface SandboxState {
   sandboxData: {
     sandboxId: string;
     url: string;
+    templateTarget?: 'vite' | 'next';
+    devPort?: number;
   } | null;
 }
 

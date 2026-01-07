@@ -37,6 +37,8 @@ export default function KanbanTicketModal({
     setIsEditing(false);
   };
 
+  const canApprove = ticket.status === 'testing' || ticket.status === 'pr_review';
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
       <div 
@@ -285,6 +287,28 @@ export default function KanbanTicketModal({
                   className="px-3 py-1.5 bg-yellow-100 text-yellow-700 text-sm rounded-md hover:bg-yellow-200"
                 >
                   Skip
+                </button>
+              </>
+            )}
+            {canApprove && (
+              <>
+                <button
+                  onClick={() => {
+                    onEdit({ status: 'done', progress: 100 });
+                    onClose();
+                  }}
+                  className="px-3 py-1.5 bg-green-600 text-white text-sm rounded-md hover:bg-green-700 transition-colors"
+                >
+                  Approve & Mark Done
+                </button>
+                <button
+                  onClick={() => {
+                    onEdit({ status: 'backlog' });
+                    onClose();
+                  }}
+                  className="px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-md hover:bg-gray-200 transition-colors"
+                >
+                  Needs changes
                 </button>
               </>
             )}

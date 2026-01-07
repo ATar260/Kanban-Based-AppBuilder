@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { SandboxFactory } from '@/lib/sandbox/factory';
 // SandboxProvider type is used through SandboxFactory
 import type { SandboxState } from '@/types/sandbox';
@@ -12,9 +12,18 @@ declare global {
   var sandboxState: SandboxState;
 }
 
-export async function POST() {
+export async function POST(request: NextRequest) {
   try {
     console.log('[create-ai-sandbox-v2] Creating sandbox...');
+
+    let templateTarget: 'vite' | 'next' = 'vite';
+    try {
+      const body = await request.json();
+      if (body?.template === 'next') templateTarget = 'next';
+      if (body?.template === 'vite') templateTarget = 'vite';
+    } catch {
+      // No body provided; default to vite
+    }
     
     // Clean up all existing sandboxes
     console.log('[create-ai-sandbox-v2] Cleaning up existing sandboxes...');
@@ -38,11 +47,16 @@ export async function POST() {
     }
 
     // Create new sandbox using factory
-    const provider = SandboxFactory.create();
+    const provider = SandboxFactory.create(undefined, { templateTarget });
     const sandboxInfo = await provider.createSandbox();
     
-    console.log('[create-ai-sandbox-v2] Setting up Vite React app...');
-    await provider.setupViteApp();
+    if (templateTarget === 'next') {
+      console.log('[create-ai-sandbox-v2] Setting up Next.js app...');
+      await provider.setupNextApp();
+    } else {
+      console.log('[create-ai-sandbox-v2] Setting up Vite React app...');
+      await provider.setupViteApp();
+    }
     
     // Register with sandbox manager
     sandboxManager.registerSandbox(sandboxInfo.sandboxId, provider);
@@ -51,7 +65,9 @@ export async function POST() {
     global.activeSandboxProvider = provider;
     global.sandboxData = {
       sandboxId: sandboxInfo.sandboxId,
-      url: sandboxInfo.url
+      url: sandboxInfo.url,
+      templateTarget,
+      devPort: sandboxInfo.devPort
     };
     
     // Initialize sandbox state
@@ -59,12 +75,15 @@ export async function POST() {
       fileCache: {
         files: {},
         lastSync: Date.now(),
-        sandboxId: sandboxInfo.sandboxId
+        sandboxId: sandboxInfo.sandboxId,
+        templateTarget
       },
       sandbox: provider, // Store the provider instead of raw sandbox
       sandboxData: {
         sandboxId: sandboxInfo.sandboxId,
-        url: sandboxInfo.url
+        url: sandboxInfo.url,
+        templateTarget,
+        devPort: sandboxInfo.devPort
       }
     };
     
@@ -75,7 +94,11 @@ export async function POST() {
       sandboxId: sandboxInfo.sandboxId,
       url: sandboxInfo.url,
       provider: sandboxInfo.provider,
-      message: 'Sandbox created and Vite React app initialized'
+      templateTarget,
+      devPort: sandboxInfo.devPort,
+      message: templateTarget === 'next'
+        ? 'Sandbox created and Next.js app initialized'
+        : 'Sandbox created and Vite React app initialized'
     });
 
   } catch (error) {

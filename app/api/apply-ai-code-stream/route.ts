@@ -268,7 +268,7 @@ function parseAIResponse(response: string): ParsedResponse {
 
 export async function POST(request: NextRequest) {
   try {
-    const { response, isEdit = false, packages = [], sandboxId } = await request.json();
+    const { response, isEdit = false, packages = [], sandboxId, template } = await request.json();
 
     if (!response) {
       return NextResponse.json({
@@ -415,11 +415,24 @@ export async function POST(request: NextRequest) {
       };
 
       try {
+        const providerInfo = typeof providerInstance?.getSandboxInfo === 'function'
+          ? providerInstance.getSandboxInfo()
+          : null;
+        const templateTarget: 'vite' | 'next' =
+          template === 'next' || template === 'vite'
+            ? template
+            : (providerInfo?.templateTarget === 'next' || providerInfo?.templateTarget === 'vite')
+              ? providerInfo.templateTarget
+              : (global.sandboxState?.fileCache?.templateTarget === 'next' || global.sandboxState?.fileCache?.templateTarget === 'vite')
+                ? global.sandboxState.fileCache!.templateTarget!
+                : 'vite';
+
         await sendProgress({
           type: 'start',
           message: 'Starting code application...',
           totalSteps: 3
         });
+        await sendProgress({ type: 'info', message: `Template detected: ${templateTarget}` });
         if (morphEnabled) {
           await sendProgress({ type: 'info', message: 'Morph Fast Apply enabled' });
           await sendProgress({ type: 'info', message: `Parsed ${morphEdits.length} Morph edits` });
@@ -546,7 +559,17 @@ export async function POST(request: NextRequest) {
         });
 
         // Filter out config files that shouldn't be created
-        const configFiles = ['tailwind.config.js', 'vite.config.js', 'package.json', 'package-lock.json', 'tsconfig.json', 'postcss.config.js'];
+        const configFiles = [
+          'tailwind.config.js',
+          'vite.config.js',
+          'package.json',
+          'package-lock.json',
+          'tsconfig.json',
+          'postcss.config.js',
+          'next.config.js',
+          'next.config.mjs',
+          'next-env.d.ts',
+        ];
         // Files that we *do* allow creating, but must remain at repo root (do not prefix into src/)
         const rootFiles = ['.env.example'];
         let filteredFiles = filesArray.filter(file => {
@@ -617,18 +640,31 @@ export async function POST(request: NextRequest) {
         const normalizeGeneratedPath = (p: string) => {
           let normalizedPath = p.startsWith('/') ? p.slice(1) : p;
           const fileName = normalizedPath.split('/').pop() || '';
-          if (!normalizedPath.startsWith('src/') &&
-              !normalizedPath.startsWith('public/') &&
-              normalizedPath !== 'index.html' &&
-              !configFiles.includes(fileName) &&
-              !rootFiles.includes(fileName)) {
-            normalizedPath = 'src/' + normalizedPath;
+          if (templateTarget === 'vite') {
+            if (!normalizedPath.startsWith('src/') &&
+                !normalizedPath.startsWith('public/') &&
+                normalizedPath !== 'index.html' &&
+                !configFiles.includes(fileName) &&
+                !rootFiles.includes(fileName)) {
+              normalizedPath = 'src/' + normalizedPath;
+            }
           }
           return normalizedPath;
         };
 
         const writeRank = (normalizedPath: string) => {
           // Lower rank writes first
+          if (templateTarget === 'next') {
+            if (normalizedPath.startsWith('components/')) return 10;
+            if (normalizedPath.startsWith('lib/')) return 20;
+            if (normalizedPath.startsWith('app/')) return 30;
+            if (normalizedPath.startsWith('public/')) return 40;
+            // Layout/page are high-impact entrypoints; write after components/lib.
+            if (normalizedPath === 'app/layout.tsx') return 90;
+            if (normalizedPath === 'app/page.tsx') return 91;
+            return 50;
+          }
+
           if (normalizedPath.startsWith('src/components/')) return 10;
           if (normalizedPath.startsWith('src/')) return 20;
           if (normalizedPath.startsWith('public/')) return 30;
@@ -652,23 +688,23 @@ export async function POST(request: NextRequest) {
           return aNorm.localeCompare(bNorm);
         });
 
-        // Some generators produce TSX entrypoints (App.tsx / main.tsx) but the Vite template still boots
-        // from src/main.jsx → src/App.jsx. We patch the runtime entry to point at the generated TSX app
-        // so the preview actually updates.
+        // Vite-only entrypoint patching.
         const normalizedPathsSet = new Set(filteredFiles.map(f => normalizeGeneratedPath(f.path)));
         const appImportPath =
-          normalizedPathsSet.has('src/App.tsx') ? './App.tsx' :
-          normalizedPathsSet.has('src/App.ts') ? './App.ts' :
-          null;
+          templateTarget === 'vite'
+            ? (normalizedPathsSet.has('src/App.tsx') ? './App.tsx' :
+               normalizedPathsSet.has('src/App.ts') ? './App.ts' :
+               null)
+            : null;
         const desiredEntry =
-          normalizedPathsSet.has('src/main.tsx') ? '/src/main.tsx' :
-          normalizedPathsSet.has('src/main.ts') ? '/src/main.ts' :
-          null;
-        const shouldPatchIndexHtml = Boolean(desiredEntry) && !normalizedPathsSet.has('index.html');
-        // Only patch the template `src/main.jsx` when we *don't* have a TS entrypoint to point `index.html` at.
-        // If we generate `src/main.tsx`, we must update `index.html` to load it; otherwise React Router context
-        // can be missing (the default template `main.jsx` renders `<App />` without a `<BrowserRouter>`).
+          templateTarget === 'vite'
+            ? (normalizedPathsSet.has('src/main.tsx') ? '/src/main.tsx' :
+               normalizedPathsSet.has('src/main.ts') ? '/src/main.ts' :
+               null)
+            : null;
+        const shouldPatchIndexHtml = templateTarget === 'vite' && Boolean(desiredEntry) && !normalizedPathsSet.has('index.html');
         const shouldPatchExistingMainJsx =
+          templateTarget === 'vite' &&
           !desiredEntry &&
           Boolean(appImportPath) &&
           !normalizedPathsSet.has('src/main.jsx');
@@ -692,20 +728,22 @@ export async function POST(request: NextRequest) {
             if (normalizedPath.startsWith('/')) {
               normalizedPath = normalizedPath.substring(1);
             }
-            if (!normalizedPath.startsWith('src/') &&
-              !normalizedPath.startsWith('public/') &&
-              normalizedPath !== 'index.html' &&
-              !configFiles.includes(normalizedPath.split('/').pop() || '') &&
-              !rootFiles.includes(normalizedPath.split('/').pop() || '')) {
-              normalizedPath = 'src/' + normalizedPath;
+            if (templateTarget === 'vite') {
+              if (!normalizedPath.startsWith('src/') &&
+                !normalizedPath.startsWith('public/') &&
+                normalizedPath !== 'index.html' &&
+                !configFiles.includes(normalizedPath.split('/').pop() || '') &&
+                !rootFiles.includes(normalizedPath.split('/').pop() || '')) {
+                normalizedPath = 'src/' + normalizedPath;
+              }
             }
 
             const isUpdate = global.existingFiles.has(normalizedPath);
 
-            // Remove any CSS imports from JSX/JS files (we're using Tailwind).
+            // Remove any CSS imports from JSX/JS files for Vite (we're using Tailwind).
             // Keep the global Tailwind entry import (./index.css) since Vite needs one CSS entrypoint.
             let fileContent = file.content;
-            if (file.path.endsWith('.jsx') || file.path.endsWith('.js') || file.path.endsWith('.tsx') || file.path.endsWith('.ts')) {
+            if (templateTarget === 'vite' && (file.path.endsWith('.jsx') || file.path.endsWith('.js') || file.path.endsWith('.tsx') || file.path.endsWith('.ts'))) {
               fileContent = fileContent.replace(/import\s+['"]\.\/(?!index\.css)[^'"]+\.css['"];?\s*\n?/g, '');
 
               // If we're writing an entry file, make sure it points to the TS app when present.
@@ -780,9 +818,7 @@ export async function POST(request: NextRequest) {
         }
 
         // Patch the Vite entrypoint so the sandbox boots the generated app.
-        // - If we generated `src/main.tsx`, update `index.html` to load it.
-        // - Otherwise, patch the template `src/main.jsx` to import the generated TS/TSX App.
-        if (shouldPatchIndexHtml && desiredEntry) {
+        if (templateTarget === 'vite' && shouldPatchIndexHtml && desiredEntry) {
           try {
             const existingIndex = await providerInstance.readFile('index.html');
             const patchedIndex = existingIndex.replace(/\/src\/main\.(jsx|js|tsx|ts)/g, desiredEntry);
@@ -812,7 +848,7 @@ export async function POST(request: NextRequest) {
           } catch (e) {
             console.warn('[apply-ai-code-stream] Failed to patch index.html entrypoint:', e);
           }
-        } else if (shouldPatchExistingMainJsx && appImportPath) {
+        } else if (templateTarget === 'vite' && shouldPatchExistingMainJsx && appImportPath) {
           try {
             const existingMain = await providerInstance.readFile('src/main.jsx');
             // IMPORTANT: avoid `\s*` here because it can swallow the trailing newline and concatenate imports.
@@ -922,7 +958,8 @@ export async function POST(request: NextRequest) {
             const componentLike =
               Boolean(defaultImport && defaultImport[0] === defaultImport[0].toUpperCase()) ||
               resolvedBase.includes('/pages/') ||
-              resolvedBase.includes('/components/');
+              resolvedBase.includes('/components/') ||
+              resolvedBase.includes('/app/');
 
             const importerIsTs = importerPath.endsWith('.ts') || importerPath.endsWith('.tsx');
             const placeholderExt = ext || (componentLike ? (importerIsTs ? '.tsx' : '.jsx') : (importerIsTs ? '.ts' : '.js'));

@@ -9,6 +9,8 @@ export interface SandboxInfo {
   url: string;
   provider: 'vercel';
   createdAt: Date;
+  templateTarget?: TemplateTarget;
+  devPort?: number;
   persistent?: boolean;
   persistentUrl?: string;
   expiresAt?: Date;
@@ -22,6 +24,7 @@ export interface CommandResult {
 }
 
 export interface SandboxProviderConfig {
+  templateTarget?: TemplateTarget;
   vercel?: {
     teamId?: string;
     projectId?: string;
@@ -29,6 +32,8 @@ export interface SandboxProviderConfig {
     authMethod?: 'oidc' | 'pat';
   };
 }
+
+export type TemplateTarget = 'vite' | 'next';
 
 export abstract class SandboxProvider {
   protected config: SandboxProviderConfig;
@@ -63,9 +68,19 @@ export abstract class SandboxProvider {
     // Default implementation for setting up a Vite React app
     throw new Error('setupViteApp not implemented for this provider');
   }
+
+  async setupNextApp(): Promise<void> {
+    // Default implementation for setting up a Next.js app
+    throw new Error('setupNextApp not implemented for this provider');
+  }
   
   async restartViteServer(): Promise<void> {
     // Default implementation for restarting Vite
     throw new Error('restartViteServer not implemented for this provider');
+  }
+
+  async restartNextServer(): Promise<void> {
+    // Default implementation for restarting Next.js dev server
+    throw new Error('restartNextServer not implemented for this provider');
   }
 }

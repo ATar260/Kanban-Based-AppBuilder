@@ -1,3 +1,5 @@
+import type { BuildBlueprint, DataMode, TemplateTarget } from '@/types/build-blueprint';
+
 export type TicketStatus =
   | 'planning'
   | 'backlog'
@@ -35,6 +37,12 @@ export type TicketType =
 export type TicketPriority = 'critical' | 'high' | 'medium' | 'low';
 
 export type TicketComplexity = 'XS' | 'S' | 'M' | 'L' | 'XL';
+
+export interface BlueprintRefs {
+  routeIds?: string[];
+  flowIds?: string[];
+  entityNames?: string[];
+}
 
 export interface DatabaseConfig {
   provider: 'supabase' | 'firebase' | 'mongodb' | 'postgres' | 'mysql' | 'sqlite';
@@ -75,6 +83,7 @@ export interface KanbanTicket {
   userInputs?: Record<string, string>;
   databaseConfig?: DatabaseConfig;
   manualBuild?: boolean;
+  blueprintRefs?: BlueprintRefs;
 }
 
 export type BuildMode = 'auto' | 'manual';
@@ -92,6 +101,19 @@ export interface BuildPlan {
   buildMode: BuildMode;
   sandboxPersistent?: boolean;
   persistentUrl?: string;
+  /**
+   * Blueprint scaffold status for the currently active sandbox.
+   * Used to avoid re-scaffolding (and potentially overwriting) on every resume.
+   */
+  scaffolded?: boolean;
+  scaffoldedSandboxId?: string;
+  /**
+   * Blueprint-driven build metadata (optional for backward compatibility).
+   * Stored as plain JSON (no functions/Dates) so it can be safely persisted.
+   */
+  blueprint?: BuildBlueprint;
+  templateTarget?: TemplateTarget;
+  dataMode?: DataMode;
 }
 
 export interface BuildAnalytics {

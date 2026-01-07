@@ -37,6 +37,27 @@ export function useKanbanBoard(initialPlan?: BuildPlan) {
     }
   }, [initialPlan]);
 
+  // Load the most recent plan from localStorage on mount (so refresh doesn't show "No tasks yet"
+  // even when plans exist in storage).
+  useEffect(() => {
+    if (initialPlan) return;
+    if (plan) return;
+
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      const storedPlans: BuildPlan[] = stored ? JSON.parse(stored) : [];
+      const latest = storedPlans?.[0];
+      if (!latest) return;
+
+      setPlan(latest);
+      setTickets(latest.tickets || []);
+      setCurrentTicketId((latest as any).currentTicketId || null);
+      setBuildMode((latest as any).buildMode || 'auto');
+    } catch (e) {
+      console.warn('[useKanbanBoard] Failed to load latest plan from storage:', e);
+    }
+  }, [initialPlan, plan]);
+
   useEffect(() => {
     if (plan) {
       savePlanToStorage(plan);

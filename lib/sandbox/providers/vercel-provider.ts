@@ -26,10 +26,13 @@ export class VercelProvider extends SandboxProvider {
       const envTimeoutMs = Number(process.env.VERCEL_SANDBOX_TIMEOUT_MS);
       const timeoutMs = Number.isFinite(envTimeoutMs) && envTimeoutMs > 0 ? envTimeoutMs : defaultTimeoutMs;
 
+      const templateTarget = this.config.templateTarget || 'vite';
+      const devPort = templateTarget === 'next' ? 3000 : 5173;
+
       const sandboxConfig: any = {
         timeout: timeoutMs, // ms
         runtime: 'node22', // Use node22 runtime for Vercel sandboxes
-        ports: [5173] // Vite port
+        ports: [devPort]
       };
 
       // Add authentication based on environment variables
@@ -47,13 +50,15 @@ export class VercelProvider extends SandboxProvider {
       // Sandbox created successfully
 
       // Get the sandbox URL using the correct Vercel Sandbox API
-      const sandboxUrl = this.sandbox.domain(5173);
+      const sandboxUrl = this.sandbox.domain(devPort);
 
       this.sandboxInfo = {
         sandboxId,
         url: sandboxUrl,
         provider: 'vercel',
-        createdAt: new Date()
+        createdAt: new Date(),
+        templateTarget,
+        devPort
       };
 
       return this.sandboxInfo;
@@ -62,6 +67,172 @@ export class VercelProvider extends SandboxProvider {
       console.error('[VercelProvider] Error creating sandbox:', error);
       throw error;
     }
+  }
+
+  async setupNextApp(): Promise<void> {
+    if (!this.sandbox) {
+      throw new Error('No active sandbox');
+    }
+
+    // Create Next.js + Tailwind project scaffold (deterministic, no interactive create-next-app)
+    await this.sandbox.runCommand({
+      cmd: 'mkdir',
+      args: ['-p', '/vercel/sandbox/app', '/vercel/sandbox/public'],
+    });
+
+    const packageJson = {
+      name: 'sandbox-next-app',
+      version: '1.0.0',
+      private: true,
+      scripts: {
+        dev: 'next dev -H 0.0.0.0 -p 3000',
+        build: 'next build',
+        start: 'next start -H 0.0.0.0 -p 3000',
+      },
+      dependencies: {
+        next: '^15.0.0',
+        react: '^18.2.0',
+        'react-dom': '^18.2.0',
+      },
+      devDependencies: {
+        typescript: '^5.0.0',
+        '@types/node': '^20.0.0',
+        '@types/react': '^18.0.0',
+        '@types/react-dom': '^18.0.0',
+        tailwindcss: '^3.4.0',
+        postcss: '^8.4.31',
+        autoprefixer: '^10.4.16',
+      },
+    };
+
+    const nextConfig = `/** @type {import('next').NextConfig} */
+const nextConfig = {
+  reactStrictMode: true,
+};
+
+module.exports = nextConfig;
+`;
+
+    const tsconfig = `{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "incremental": true,
+    "plugins": [{ "name": "next" }],
+    "paths": {
+      "@/*": ["./*"]
+    }
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+  "exclude": ["node_modules"]
+}
+`;
+
+    const tailwindConfig = `/** @type {import('tailwindcss').Config} */
+module.exports = {
+  content: [
+    "./app/**/*.{js,ts,jsx,tsx}",
+    "./components/**/*.{js,ts,jsx,tsx}"
+  ],
+  theme: { extend: {} },
+  plugins: [],
+};
+`;
+
+    const postcssConfig = `module.exports = {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+};
+`;
+
+    const nextEnv = `/// <reference types="next" />
+/// <reference types="next/image-types/global" />
+
+// NOTE: This file should not be edited.
+`;
+
+    const globalsCss = `@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body {
+  height: 100%;
+}
+`;
+
+    const layoutTsx = `import './globals.css';
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <body className="min-h-screen bg-gray-950 text-white">
+        {children}
+      </body>
+    </html>
+  );
+}
+`;
+
+    const pageTsx = `export default function Page() {
+  return (
+    <main className="min-h-screen flex items-center justify-center p-8">
+      <div className="max-w-2xl w-full text-center">
+        <h1 className="text-3xl font-semibold">Next sandbox ready</h1>
+        <p className="mt-3 text-sm text-gray-300">
+          Start building your app. This is a deterministic Next.js scaffold.
+        </p>
+      </div>
+    </main>
+  );
+}
+`;
+
+    await this.writeFile('package.json', JSON.stringify(packageJson, null, 2));
+    await this.writeFile('next.config.js', nextConfig);
+    await this.writeFile('tsconfig.json', tsconfig);
+    await this.writeFile('tailwind.config.js', tailwindConfig);
+    await this.writeFile('postcss.config.js', postcssConfig);
+    await this.writeFile('next-env.d.ts', nextEnv);
+    await this.writeFile('app/globals.css', globalsCss);
+    await this.writeFile('app/layout.tsx', layoutTsx);
+    await this.writeFile('app/page.tsx', pageTsx);
+
+    // Install dependencies
+    try {
+      await this.sandbox.runCommand({
+        cmd: 'npm',
+        args: ['install'],
+        cwd: '/vercel/sandbox',
+      });
+    } catch (error) {
+      console.error('[VercelProvider] npm install error during Next setup:', error);
+    }
+
+    // Start Next dev server (port 3000)
+    await this.restartNextServer();
+
+    // Track initial files
+    this.existingFiles.add('package.json');
+    this.existingFiles.add('next.config.js');
+    this.existingFiles.add('tsconfig.json');
+    this.existingFiles.add('tailwind.config.js');
+    this.existingFiles.add('postcss.config.js');
+    this.existingFiles.add('next-env.d.ts');
+    this.existingFiles.add('app/layout.tsx');
+    this.existingFiles.add('app/page.tsx');
+    this.existingFiles.add('app/globals.css');
   }
 
   async runCommand(command: string): Promise<CommandResult> {
@@ -312,10 +483,8 @@ export class VercelProvider extends SandboxProvider {
       stderr = '';
     }
 
-    // Restart Vite if configured and successful
-    if (result.exitCode === 0 && process.env.AUTO_RESTART_VITE === 'true') {
-      await this.restartViteServer();
-    }
+    // Do not auto-restart a dev server here. The caller (API route) should restart the appropriate
+    // server based on the sandbox template (Vite vs Next).
 
     return {
       stdout: stdout,
@@ -574,6 +743,29 @@ body {
     // Vite server started in background
 
     // Wait for Vite to be ready
+    await new Promise(resolve => setTimeout(resolve, 7000));
+  }
+
+  async restartNextServer(): Promise<void> {
+    if (!this.sandbox) {
+      throw new Error('No active sandbox');
+    }
+
+    // Kill existing Next processes
+    await this.sandbox.runCommand({
+      cmd: 'sh',
+      args: ['-c', 'pkill -f "next dev" || true'],
+      cwd: '/',
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    await this.sandbox.runCommand({
+      cmd: 'sh',
+      args: ['-c', 'nohup npm run dev > /tmp/next.log 2>&1 &'],
+      cwd: '/vercel/sandbox',
+    });
+
     await new Promise(resolve => setTimeout(resolve, 7000));
   }
 
