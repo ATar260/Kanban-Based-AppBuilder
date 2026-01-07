@@ -40,7 +40,9 @@ export default function InputRequestModal({
   };
 
   const validateApiKey = (key: string): boolean => {
-    return key.length >= 10 && /^[a-zA-Z0-9_-]+$/.test(key);
+    // Accept common key formats (JWTs like Supabase anon keys include '.' separators).
+    // Minimal validation: long enough and no whitespace/newlines.
+    return key.length >= 10 && !/\s/.test(key);
   };
 
   const validate = () => {

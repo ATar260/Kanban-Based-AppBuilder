@@ -7,6 +7,7 @@ import KanbanColumn from './KanbanColumn';
 import KanbanTicketModal from './KanbanTicketModal';
 import TicketEditor from './TicketEditor';
 import InputRequestModal from './InputRequestModal';
+import { validateBlueprint } from '@/lib/blueprint-validator';
 
 const COLUMN_EMOJIS: Record<string, string> = {
   planning: '🎯',
@@ -62,6 +63,7 @@ interface KanbanBoardProps {
 }
 
 export default function KanbanBoard({
+  plan,
   ticketsByColumn,
   analytics,
   isBuilding,
@@ -100,6 +102,12 @@ export default function KanbanBoard({
     ? Math.round((analytics.completed / analytics.totalTickets) * 100)
     : 0;
 
+  const blueprintResult = plan?.blueprint ? validateBlueprint(plan.blueprint as any) : null;
+  const routesTotal = blueprintResult?.metrics.routesTotal ?? 0;
+  const routesWithNav = blueprintResult?.metrics.routesWithNav ?? 0;
+  const flowsTotal = blueprintResult?.metrics.flowsTotal ?? 0;
+  const templateTarget = (plan as any)?.templateTarget || (plan as any)?.blueprint?.templateTarget;
+
   return (
     <div className="flex flex-col h-full bg-gray-50">
       {/* Top Header - Responsive */}
@@ -115,6 +123,23 @@ export default function KanbanBoard({
                 />
               </div>
               <span className="text-[10px] sm:text-xs text-gray-500 font-medium">{totalProgress}%</span>
+            </div>
+          )}
+
+          {blueprintResult && (
+            <div className="hidden md:flex items-center gap-2 px-2 py-1 rounded-md border border-gray-200 bg-gray-50">
+              <span className="text-[11px] text-gray-700 font-medium">
+                Routes {routesWithNav}/{routesTotal}
+              </span>
+              <span className="text-[11px] text-gray-500">Flows {flowsTotal}</span>
+              {templateTarget ? (
+                <span className="text-[11px] text-gray-500">Template {String(templateTarget)}</span>
+              ) : null}
+              {!blueprintResult.ok ? (
+                <span className="text-[11px] text-red-600 font-medium">Blueprint issues</span>
+              ) : (
+                <span className="text-[11px] text-green-700 font-medium">Blueprint OK</span>
+              )}
             </div>
           )}
         </div>
@@ -219,7 +244,7 @@ export default function KanbanBoard({
       )}
 
       {/* Kanban Columns - Mobile: Single column, Desktop: All columns */}
-      <div className="flex-1 overflow-hidden p-2 sm:p-4">
+      <div className="flex-1 overflow-x-auto overflow-y-hidden p-2 sm:p-4">
         {tickets.length > 0 ? (
           <>
             {/* Mobile View - Single Column */}

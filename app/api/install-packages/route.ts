@@ -48,6 +48,14 @@ export async function POST(request: NextRequest) {
     }
     
     console.log('[install-packages] Installing packages:', validPackages);
+
+    const providerInfo = typeof provider?.getSandboxInfo === 'function' ? provider.getSandboxInfo() : null;
+    const templateTarget: 'vite' | 'next' =
+      providerInfo?.templateTarget === 'next' || providerInfo?.templateTarget === 'vite'
+        ? providerInfo.templateTarget
+        : (global as any).sandboxState?.fileCache?.templateTarget === 'next' || (global as any).sandboxState?.fileCache?.templateTarget === 'vite'
+          ? (global as any).sandboxState.fileCache.templateTarget
+          : 'vite';
     
     // Create a response stream for real-time updates
     const encoder = new TextEncoder();
@@ -74,7 +82,11 @@ export async function POST(request: NextRequest) {
         
         try {
           // Try to kill any running dev server processes
-          await providerInstance.runCommand('pkill -f vite');
+          if (templateTarget === 'next') {
+            await providerInstance.runCommand('pkill -f next');
+          } else {
+            await providerInstance.runCommand('pkill -f vite');
+          }
           await new Promise(resolve => setTimeout(resolve, 1000)); // Wait a bit
         } catch (killError) {
           // It's OK if no process is found
@@ -143,8 +155,12 @@ export async function POST(request: NextRequest) {
           
           // Restart dev server
           await sendProgress({ type: 'status', message: 'Restarting development server...' });
-          
-          await providerInstance.restartViteServer();
+
+          if (templateTarget === 'next' && typeof providerInstance.restartNextServer === 'function') {
+            await providerInstance.restartNextServer();
+          } else {
+            await providerInstance.restartViteServer();
+          }
           
           await sendProgress({ 
             type: 'complete', 
@@ -210,7 +226,11 @@ export async function POST(request: NextRequest) {
         await sendProgress({ type: 'status', message: 'Restarting development server...' });
         
         try {
-          await providerInstance.restartViteServer();
+          if (templateTarget === 'next' && typeof providerInstance.restartNextServer === 'function') {
+            await providerInstance.restartNextServer();
+          } else {
+            await providerInstance.restartViteServer();
+          }
           
           // Wait a bit for the server to start
           await new Promise(resolve => setTimeout(resolve, 3000));

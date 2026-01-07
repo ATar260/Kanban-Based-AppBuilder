@@ -18,7 +18,8 @@ export async function POST() {
     // Create zip file in sandbox using standard commands
     const zipResult = await global.activeSandbox.runCommand({
       cmd: 'bash',
-      args: ['-c', `zip -r /tmp/project.zip . -x "node_modules/*" ".git/*" ".next/*" "dist/*" "build/*" "*.log"`]
+      // Never include local env files in downloadable zips (they may contain secrets). Keep `.env.example`.
+      args: ['-c', `zip -r /tmp/project.zip . -x "node_modules/*" ".git/*" ".next/*" "dist/*" "build/*" "*.log" ".env" ".env.local" ".env.production" ".env.development" ".env.test"`]
     });
     
     if (zipResult.exitCode !== 0) {

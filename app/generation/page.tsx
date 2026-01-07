@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, Suspense } from 'react';
+import { useState, useEffect, useRef, useMemo, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { appConfig } from '@/config/app.config';
@@ -37,8 +37,9 @@ import { useBugbot, ReviewResult } from '@/hooks/useBugbot';
 import { CodeReviewPanel, RegressionWarningModal } from '@/components/kanban';
 import { useSoftDelete } from '@/hooks/useSoftDelete';
 import { useAutoRefactor } from '@/hooks/useAutoRefactor';
-import ErrorCorrectionAgent from '@/components/ErrorCorrectionAgent';
-import HMRErrorDetector, { DetectedError } from '@/components/HMRErrorDetector';
+import { useGitHubImport } from '@/hooks/useGitHubImport';
+import { usePlanVersions, type PlanVersion } from '@/hooks/usePlanVersions';
+import { PlanVersionHistoryPanel } from '@/components/planning';
 
 interface SandboxData {
   sandboxId: string;
@@ -86,6 +87,7 @@ function AISandboxPage() {
   const [aiEnabled] = useState(true);
   const searchParams = useSearchParams();
   const router = useRouter();
+  const projectId = searchParams.get('project');
   const [aiModel, setAiModel] = useState(() => {
     const modelParam = searchParams.get('model');
     return appConfig.ai.availableModels.includes(modelParam || '') ? modelParam! : appConfig.ai.defaultModel;
@@ -126,15 +128,22 @@ function AISandboxPage() {
   const [kanbanBuildActive, setKanbanBuildActive] = useState(false);
   const [isPreviewRefreshing, setIsPreviewRefreshing] = useState(false);
   const [sandboxExpired, setSandboxExpired] = useState(false);
-
-  // Auto-fix error correction state
-  const [autoFixEnabled, setAutoFixEnabled] = useState(true);
-  const [autoFixStatus, setAutoFixStatus] = useState<'idle' | 'detecting' | 'fixing' | 'success' | 'failed'>('idle');
+  const [isRestoringSandbox, setIsRestoringSandbox] = useState(false);
 
   // UI Options state for 3-mockup generation
   const [showUIOptions, setShowUIOptions] = useState(false);
   const [uiOptions, setUIOptions] = useState<UIOption[]>([]);
   const [isLoadingUIOptions, setIsLoadingUIOptions] = useState(false);
+  const [isImportingRepo, setIsImportingRepo] = useState(false);
+  const [lastImportedRepo, setLastImportedRepo] = useState<{ repoFullName: string; branch: string } | null>(null);
+  const [isLoadingRepoIntoSandbox, setIsLoadingRepoIntoSandbox] = useState(false);
+  const [repoLoadModalOpen, setRepoLoadModalOpen] = useState(false);
+  const [repoLoadStatus, setRepoLoadStatus] = useState<'idle' | 'running' | 'success' | 'error'>('idle');
+  const [repoLoadError, setRepoLoadError] = useState<string | null>(null);
+  const [repoLoadSteps, setRepoLoadSteps] = useState<
+    Array<{ id: string; label: string; status: 'pending' | 'running' | 'done' | 'error'; detail?: string }>
+  >([]);
+  const [repoLoadLogs, setRepoLoadLogs] = useState<string[]>([]);
   const [selectedUIOption, setSelectedUIOption] = useState<UIOption | null>(null);
   const [pendingPrompt, setPendingPrompt] = useState<string>('');
 
@@ -144,11 +153,13 @@ function AISandboxPage() {
     tickets: KanbanTicketType[];
     fileContents: Array<{ path: string; content: string }>;
   } | null>(null);
+  const [resumeAfterReview, setResumeAfterReview] = useState(false);
 
   const kanban = useKanbanBoard();
   const bugbot = useBugbot();
   const softDelete = useSoftDelete();
   const autoRefactor = useAutoRefactor();
+  const githubImport = useGitHubImport();
 
   // Regression warning state
   const [regressionWarning, setRegressionWarning] = useState<{
@@ -170,6 +181,12 @@ function AISandboxPage() {
 
   const versioning = useVersioning({ enableAutoSave: true, autoSaveInterval: 5 * 60 * 1000 });
   const [showVersionHistory, setShowVersionHistory] = useState(false);
+  const [versionHistoryTab, setVersionHistoryTab] = useState<'plan' | 'code'>('plan');
+
+  const planVersions = usePlanVersions({
+    planId: kanban.plan?.id || 'active',
+    projectId,
+  });
 
   // Git Sync hook for auto-committing on ticket completion
   const gitSync = useGitSync({
@@ -198,6 +215,7 @@ function AISandboxPage() {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const chatMessagesRef = useRef<HTMLDivElement>(null);
   const codeDisplayRef = useRef<HTMLDivElement>(null);
+  const restoringSandboxRef = useRef(false);
 
   const [codeApplicationState, setCodeApplicationState] = useState<CodeApplicationState>({
     stage: null
@@ -397,7 +415,7 @@ Visual Features: ${uiOption.features.join(', ')}`;
           newParams.delete('sandbox');
           window.history.replaceState({}, '', `/generation?${newParams.toString()}`);
         }
-
+        
         console.log('[home] Creating new sandbox...');
         sandboxCreated = true;
         await createSandbox(true);
@@ -480,6 +498,9 @@ Visual Features: ${uiOption.features.join(', ')}`;
 
   // Ref to prevent double-triggering of auto-generation (race condition fix)
   const autoGenerationTriggeredRef = useRef<boolean>(false);
+
+  // Track whether we've already applied Supabase env vars for the current sandbox (avoid repeated restarts).
+  const supabaseEnvAppliedRef = useRef<string | null>(null);
 
   // CONSOLIDATED: Single auto-start generation effect to prevent race conditions
   // Previously there were two effects that could both trigger generation
@@ -601,16 +622,26 @@ Visual Features: ${uiOption.features.join(', ')}`;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shouldAutoGenerate, homeUrlInput, showHomeScreen]);
 
-  // Keep-alive effect: ping sandbox periodically during active builds to prevent timeout
+  const hasTestingOrReviewTickets = useMemo(() => {
+    return kanban.tickets.some(t => t.status === 'testing' || t.status === 'pr_review');
+  }, [kanban.tickets]);
+
+  // Keep-alive effect: ping sandbox periodically during active builds AND during human gates
+  // (code review / testing) so the sandbox doesn't expire while the user is inspecting.
   useEffect(() => {
-    if (!kanbanBuildActive && !generationProgress.isGenerating) return;
+    const hasHumanGate = showCodeReview || hasTestingOrReviewTickets;
+
+    const isViewingPreview = activeTab === 'preview' || activeTab === 'split';
+
+    // Keep the sandbox alive while a build is running OR while the user is actively looking at the preview.
+    if (!kanbanBuildActive && !generationProgress.isGenerating && !hasHumanGate && !isViewingPreview) return;
     if (!sandboxData?.sandboxId) return;
 
     const keepAlive = async () => {
       try {
         const response = await fetch('/api/sandbox-status');
         const data = await response.json();
-
+        
         if (data.sandboxStopped) {
           console.log('[keep-alive] Sandbox expired during build');
           setSandboxExpired(true);
@@ -622,12 +653,12 @@ Visual Features: ${uiOption.features.join(', ')}`;
 
     // Ping every 2 minutes to keep sandbox alive
     const interval = setInterval(keepAlive, 2 * 60 * 1000);
-
+    
     // Also ping immediately
     keepAlive();
 
     return () => clearInterval(interval);
-  }, [kanbanBuildActive, generationProgress.isGenerating, sandboxData?.sandboxId]);
+  }, [kanbanBuildActive, generationProgress.isGenerating, sandboxData?.sandboxId, showCodeReview, hasTestingOrReviewTickets, activeTab]);
 
   // Handle sandbox expiration - auto-recreate if needed
   useEffect(() => {
@@ -638,15 +669,33 @@ Visual Features: ${uiOption.features.join(', ')}`;
       setSandboxData(null);
       setSandboxExpired(false);
 
-      // Create new sandbox
-      const newSandbox = await createSandbox(true);
+      // Create new sandbox (match the current plan template if available)
+      const planBlueprint: any = (kanban.plan as any)?.blueprint || null;
+      const desiredTemplate: 'vite' | 'next' =
+        (kanban.plan as any)?.templateTarget ||
+        planBlueprint?.templateTarget ||
+        (sandboxData as any)?.templateTarget ||
+        'vite';
+      const nextTemplateEnabled = Boolean(appConfig?.buildSystem?.enableNextTemplate);
+      const effectiveTemplate: 'vite' | 'next' =
+        desiredTemplate === 'next' && !nextTemplateEnabled ? 'vite' : desiredTemplate;
+
+      const newSandbox = await createSandbox(true, 0, effectiveTemplate);
       if (newSandbox) {
-        addChatMessage('Sandbox was recreated after expiration. Please retry your last action.', 'system');
+        // If we have an existing Kanban plan with ticket code, restore automatically so the preview isn't a blank starter.
+        const hasRestorableTickets = (kanban.tickets || []).some(t =>
+          Boolean(t.generatedCode) && ['done', 'testing', 'pr_review', 'applying', 'generating'].includes(t.status)
+        );
+        if ((kanban.plan as any)?.blueprint && hasRestorableTickets) {
+          await restoreKanbanPlanToSandbox(newSandbox, 'recreate');
+        } else {
+          addChatMessage('Sandbox was recreated after expiration. Please retry your last action.', 'system');
+        }
       }
     };
 
     handleExpiredSandbox();
-  }, [sandboxExpired]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sandboxExpired, appConfig?.buildSystem?.enableNextTemplate, kanban.plan, sandboxData]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const updateStatus = (text: string, active: boolean) => {
     setStatus({ text, active });
@@ -759,28 +808,45 @@ Visual Features: ${uiOption.features.join(', ')}`;
     }
   };
 
-  const checkSandboxStatus = async () => {
+  const checkSandboxStatus = async (desiredTemplate: 'vite' | 'next' = 'vite') => {
     try {
       const response = await fetch('/api/sandbox-status');
       const data = await response.json();
 
-      if (data.sandboxStopped) {
-        console.log('[checkSandboxStatus] Sandbox stopped, clearing state and creating new one');
+      const hasSandboxHint = Boolean(searchParams.get('sandbox')) || Boolean(sandboxData?.sandboxId);
+      const shouldRecreate =
+        Boolean(data?.sandboxStopped) ||
+        (hasSandboxHint && (!data?.active || data?.sandboxData?.healthStatusCode === 410));
+
+      if (shouldRecreate) {
+        console.log('[checkSandboxStatus] Sandbox unavailable, clearing state and creating new one');
         setSandboxData(null);
         updateStatus('Sandbox stopped - creating new one...', false);
-
+        
         // Clear old sandbox ID from URL
         const newParams = new URLSearchParams(searchParams.toString());
         newParams.delete('sandbox');
         router.replace(`/generation?${newParams.toString()}`, { scroll: false });
-
-        await createSandbox(true);
+        
+        const created = await createSandbox(true, 0, desiredTemplate);
+        if (created) {
+          // If we have an existing Kanban plan (often completed), rehydrate the new sandbox
+          // so the preview returns to the generated app instead of the default Vite starter.
+          const hasRestorableTickets = (kanban.tickets || []).some(t =>
+            Boolean(t.generatedCode) && ['done', 'testing', 'pr_review', 'applying', 'generating'].includes(t.status)
+          );
+          if (kanban.plan?.blueprint && hasRestorableTickets) {
+            await restoreKanbanPlanToSandbox(created, 'recreate');
+          } else {
+            addChatMessage('Sandbox was recreated after expiration. Please retry your last action.', 'system');
+          }
+        }
         return;
       }
 
       if (data.active && data.healthy && data.sandboxData) {
         console.log('[checkSandboxStatus] Setting sandboxData from API:', data.sandboxData);
-        setSandboxData(data.sandboxData);
+        setSandboxData(prev => ({ ...(prev || {}), ...(data.sandboxData || {}) }));
         updateStatus('Sandbox active', true);
       } else if (data.active && !data.healthy) {
         const healthStatusCode = data?.sandboxData?.healthStatusCode;
@@ -808,6 +874,133 @@ Visual Features: ${uiOption.features.join(', ')}`;
       } else {
         updateStatus('Status check failed', false);
       }
+    }
+  };
+
+  const restoreKanbanPlanToSandbox = async (
+    overrideSandbox?: SandboxData,
+    reason: 'manual' | 'recreate' = 'manual'
+  ) => {
+    if (restoringSandboxRef.current) return;
+
+    const activeSandbox = overrideSandbox || sandboxData;
+    if (!activeSandbox?.sandboxId) {
+      addChatMessage('No active sandbox to restore into.', 'system');
+      return;
+    }
+
+    const plan = kanban.plan;
+    if (!plan?.blueprint) {
+      addChatMessage('No saved blueprint/plan found to restore. Use “Plan Build” to create a new build plan.', 'system');
+      return;
+    }
+
+    const restorableTickets = (kanban.tickets || [])
+      .filter(t => Boolean(t.generatedCode) && ['done', 'testing', 'pr_review', 'applying', 'generating'].includes(t.status))
+      .sort((a, b) => (a.order || 0) - (b.order || 0));
+
+    if (restorableTickets.length === 0) {
+      addChatMessage('No ticket code found to restore. Use “Plan Build” to rebuild into this sandbox.', 'system');
+      return;
+    }
+
+    const template: 'vite' | 'next' = plan.templateTarget === 'nextjs' ? 'next' : 'vite';
+
+    restoringSandboxRef.current = true;
+    setIsRestoringSandbox(true);
+
+    try {
+      addChatMessage(
+        reason === 'recreate'
+          ? 'Sandbox was recreated — restoring your app into the new sandbox...'
+          : 'Restoring your app into this sandbox...',
+        'system'
+      );
+
+      addChatMessage('Restoring scaffold from blueprint...', 'system');
+      const scaffoldRes = await fetch('/api/scaffold-project', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sandboxId: activeSandbox.sandboxId,
+          template,
+          blueprint: plan.blueprint,
+        }),
+      });
+      const scaffoldData = await scaffoldRes.json().catch(() => ({}));
+      if (!scaffoldRes.ok || !scaffoldData?.success) {
+        throw new Error(scaffoldData?.error || `Failed to scaffold (HTTP ${scaffoldRes.status})`);
+      }
+
+      // Mark scaffolded for this sandbox so future resumes don't try to overwrite unexpectedly.
+      if (kanban.plan) {
+        kanban.setPlan({
+          ...kanban.plan,
+          scaffolded: true,
+          scaffoldedSandboxId: activeSandbox.sandboxId,
+        } as any);
+      }
+
+      for (let i = 0; i < restorableTickets.length; i++) {
+        const ticket = restorableTickets[i];
+        if (!ticket.generatedCode) continue;
+        addChatMessage(`Restoring ${i + 1}/${restorableTickets.length}: ${ticket.title}`, 'system');
+        // Apply sequentially so later tickets can override earlier ones even if files shrink.
+        await applyGeneratedCode(ticket.generatedCode, false, activeSandbox);
+      }
+
+      // Re-apply Supabase env vars if present in any ticket inputs (so the restored preview switches to Supabase mode).
+      const supabaseInputs = (kanban.tickets || [])
+        .map(t => t.userInputs)
+        .find(
+          (inputs: any) =>
+            inputs &&
+            typeof inputs.supabase_url === 'string' &&
+            inputs.supabase_url.trim().length > 0 &&
+            typeof inputs.supabase_anon_key === 'string' &&
+            inputs.supabase_anon_key.trim().length > 0
+        ) as Record<string, string> | undefined;
+
+      if (supabaseInputs) {
+        try {
+          addChatMessage('Re-applying Supabase env vars to sandbox...', 'system');
+          const applyKey = `${activeSandbox.sandboxId}:${template}`;
+          if (supabaseEnvAppliedRef.current !== applyKey) {
+            const envRes = await fetch('/api/apply-sandbox-env', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                sandboxId: activeSandbox.sandboxId,
+                template,
+                userInputs: supabaseInputs,
+              }),
+            });
+            const envData = await envRes.json().catch(() => ({}));
+            if (!envRes.ok || !envData?.success) {
+              throw new Error(envData?.error || `Failed to apply env (HTTP ${envRes.status})`);
+            }
+            supabaseEnvAppliedRef.current = applyKey;
+            addChatMessage('Supabase env vars applied to sandbox.', 'system');
+          }
+        } catch (e: any) {
+          console.warn('[restoreKanbanPlanToSandbox] Failed to apply Supabase env:', e);
+          addChatMessage(
+            `Warning: could not apply Supabase env vars automatically (${e?.message || 'unknown error'}).`,
+            'system'
+          );
+        }
+      }
+
+      addChatMessage('✅ Restore complete. Reloading preview…', 'system');
+      if (iframeRef.current && activeSandbox.url) {
+        iframeRef.current.src = `${activeSandbox.url}?t=${Date.now()}&restored=true`;
+      }
+    } catch (e: any) {
+      console.warn('[restoreKanbanPlanToSandbox] Restore failed:', e);
+      addChatMessage(`Restore failed: ${e?.message || 'unknown error'}`, 'system');
+    } finally {
+      setIsRestoringSandbox(false);
+      restoringSandboxRef.current = false;
     }
   };
 
@@ -872,7 +1065,7 @@ Apply these design specifications consistently across all components.`;
 
   const handleCodeReviewApprove = () => {
     if (!pendingReviewData) return;
-
+    
     pendingReviewData.tickets.forEach(ticket => {
       kanban.updateTicketStatus(ticket.id, 'done');
       kanban.updateTicketProgress(ticket.id, 100);
@@ -890,11 +1083,12 @@ Apply these design specifications consistently across all components.`;
       gitSync.syncTicketCompletion(combinedTicket, pendingReviewData.fileContents);
     }
 
-    addChatMessage('✅ Build approved and marked complete', 'system');
+    addChatMessage('✅ Changes approved. Continuing build...', 'system');
     setShowCodeReview(false);
     setPendingReviewData(null);
     bugbot.clearLastReview();
-    setGenerationProgress(prev => ({ ...prev, status: 'Build complete (approved)' }));
+    setGenerationProgress(prev => ({ ...prev, status: 'Continuing build...' }));
+    setResumeAfterReview(true);
   };
 
   const handleCodeReviewDismiss = () => {
@@ -938,7 +1132,7 @@ Apply these design specifications consistently across all components.`;
   const isRegressionMove = (fromStatus: TicketStatus, toStatus: TicketStatus): boolean => {
     const fromOrder = STATUS_ORDER[fromStatus];
     const toOrder = STATUS_ORDER[toStatus];
-    return fromOrder >= 0 && toOrder >= 0 && fromOrder >= STATUS_ORDER.done && toOrder < fromOrder;
+    return fromOrder >= 0 && toOrder >= 0 && fromOrder >= STATUS_ORDER.pr_review && toOrder < fromOrder;
   };
 
   const handleMoveTicket = (ticketId: string, newStatus: TicketStatus) => {
@@ -1010,7 +1204,7 @@ Apply these design specifications consistently across all components.`;
     setRegressionWarning(null);
   };
 
-  const planBuild = async (prompt: string, uiStyle?: UIOption) => {
+  const planBuild = async (prompt: string, uiStyle?: UIOption, context?: any) => {
     setIsPlanning(true);
     kanban.setTickets([]);
 
@@ -1018,8 +1212,9 @@ Apply these design specifications consistently across all components.`;
       const response = await fetch('/api/plan-build', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: JSON.stringify({ 
           prompt,
+          context,
           uiStyle: uiStyle ? {
             name: uiStyle.name,
             style: uiStyle.style,
@@ -1052,6 +1247,16 @@ Apply these design specifications consistently across all components.`;
                 kanban.setTickets(prev => [...prev, data.ticket]);
               } else if (data.type === 'plan_complete') {
                 kanban.setPlan(data.plan);
+                // Snapshot the initial plan (for plan versioning)
+                if (data.plan?.tickets && Array.isArray(data.plan.tickets) && data.plan.tickets.length > 0) {
+                  void planVersions.createSnapshot({
+                    source: 'initial_plan',
+                    name: '📦 Initial plan',
+                    description: 'Snapshot captured when planning completed',
+                    tickets: data.plan.tickets,
+                    planIdOverride: data.plan?.id || null,
+                  });
+                }
               }
             } catch (e) {
               console.error('Failed to parse plan event:', e);
@@ -1063,6 +1268,249 @@ Apply these design specifications consistently across all components.`;
       addChatMessage(`Failed to create build plan: ${error.message}`, 'system');
     } finally {
       setIsPlanning(false);
+    }
+  };
+
+  const truncateForPrompt = (content: string, maxChars: number) => {
+    if (!content) return '';
+    if (content.length <= maxChars) return content;
+    return `${content.slice(0, maxChars)}\n\n// ... truncated ...`;
+  };
+
+  const buildGitHubImportPlanningContext = (files: Array<{ path: string; content: string }>) => {
+    const filePaths = files.map(f => f.path).sort();
+
+    const fileList = filePaths
+      .slice(0, 200)
+      .map(p => `- ${p}`)
+      .join('\n');
+
+    const find = (path: string) => files.find(f => f.path === path);
+    const keyPaths = [
+      'package.json',
+      'README.md',
+      'README.mdx',
+      'src/main.tsx',
+      'src/main.jsx',
+      'src/App.tsx',
+      'src/App.jsx',
+      'vite.config.ts',
+      'vite.config.js',
+      'next.config.js',
+    ];
+
+    const keySnippets = keyPaths
+      .map(path => {
+        const file = find(path);
+        if (!file) return null;
+        return `// FILE: ${path}\n${truncateForPrompt(file.content, 2500)}`;
+      })
+      .filter(Boolean)
+      .join('\n\n---\n\n');
+
+    const contextText = `Repo files (showing ${Math.min(filePaths.length, 200)} of ${filePaths.length}):\n${fileList}\n\nKey files:\n${keySnippets || '(none found)'}`;
+    return { filePaths, contextText };
+  };
+
+  const handleGitHubImportAndPlan = async (
+    repoFullName: string,
+    branch: string,
+    maxFiles: number,
+    model: string,
+    goalPrompt?: string
+  ) => {
+    setIsImportingRepo(true);
+    setHasInitialSubmission(true);
+    setAiModel(model);
+    setActiveTab('kanban');
+
+    try {
+      addChatMessage(`🐙 Importing GitHub repo ${repoFullName}@${branch} (up to ${maxFiles} files)...`, 'system');
+
+      const result = await githubImport.importRepo(repoFullName, branch, maxFiles);
+      if (!result?.success) {
+        throw new Error(githubImport.error || 'Import failed');
+      }
+
+      addChatMessage(`✅ Imported ${result.importedFiles} file(s) from ${repoFullName}@${branch}`, 'system');
+      setLastImportedRepo({ repoFullName, branch });
+
+      const { filePaths, contextText } = buildGitHubImportPlanningContext(result.files);
+      const goal =
+        goalPrompt?.trim() ||
+        'Analyze this codebase and propose a safe, incremental plan to improve it and implement missing MVP features.';
+
+      const prompt = `You are planning changes for an existing codebase imported from GitHub.
+
+Repo: ${repoFullName}
+Branch: ${branch}
+
+User goal:
+${goal}
+
+Context:
+${contextText}
+
+Requirements:
+- Prefer modifying existing files over creating new ones.
+- Keep changes incremental, testable, and dependency-aware.
+- Include a ticket to verify build/run if the repo appears to be a React/Vite app.`;
+
+      await planBuild(prompt, undefined, { existingFiles: filePaths, github: { repoFullName, branch } });
+    } catch (error: any) {
+      console.error('[GitHub Import] Failed:', error);
+      addChatMessage(`❌ GitHub import failed: ${error.message}`, 'error');
+      setLastImportedRepo(null);
+      setHasInitialSubmission(false);
+    } finally {
+      setIsImportingRepo(false);
+    }
+  };
+
+  const handleLoadImportedRepoIntoSandbox = async () => {
+    if (!sandboxData) {
+      addChatMessage('❌ No active sandbox to load into. Create a sandbox first.', 'error');
+      return;
+    }
+
+    if (!lastImportedRepo) {
+      addChatMessage('❌ No imported repo found. Import a repo first.', 'error');
+      return;
+    }
+
+    setIsLoadingRepoIntoSandbox(true);
+    try {
+      addChatMessage(
+        `⬇️ Loading ${lastImportedRepo.repoFullName}@${lastImportedRepo.branch} into sandbox...`,
+        'system'
+      );
+
+      setRepoLoadModalOpen(true);
+      setRepoLoadStatus('running');
+      setRepoLoadError(null);
+      setRepoLoadLogs([]);
+      setRepoLoadSteps([
+        { id: 'stop_vite', label: 'Stopping dev server', status: 'pending' },
+        { id: 'clear_sandbox', label: 'Clearing sandbox files', status: 'pending' },
+        { id: 'download', label: 'Downloading repository', status: 'pending' },
+        { id: 'extract', label: 'Extracting repository', status: 'pending' },
+        { id: 'cleanup', label: 'Cleaning up', status: 'pending' },
+        { id: 'vite_config', label: 'Configuring Vite host allowlist', status: 'pending' },
+        { id: 'npm_install', label: 'Installing dependencies', status: 'pending' },
+        { id: 'restart_vite', label: 'Restarting dev server', status: 'pending' },
+      ]);
+
+      const response = await fetch('/api/github/load-into-sandbox', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sandboxId: sandboxData.sandboxId,
+          repoFullName: lastImportedRepo.repoFullName,
+          branch: lastImportedRepo.branch,
+        }),
+      });
+
+      // If server returned a non-stream error, handle it
+      if (!response.ok || !response.body) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data?.error || `Failed to load repo into sandbox (HTTP ${response.status})`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let sawComplete = false;
+      let sawError = false;
+      let errorMessage: string | null = null;
+
+      const updateStep = (stepId: string, status: 'pending' | 'running' | 'done' | 'error', detail?: string) => {
+        setRepoLoadSteps(prev =>
+          prev.map(s => (s.id === stepId ? { ...s, status, detail: detail ?? s.detail } : s))
+        );
+      };
+
+      const appendLog = (line: string) => {
+        const trimmed = line?.trim();
+        if (!trimmed) return;
+        setRepoLoadLogs(prev => [...prev, trimmed].slice(-200));
+      };
+
+      const handleEvent = (evt: any) => {
+        if (!evt || typeof evt !== 'object') return;
+        if (evt.type === 'step' && typeof evt.step === 'string') {
+          const status = evt.status as any;
+          if (status === 'running' || status === 'done' || status === 'error') {
+            updateStep(evt.step, status, evt.detail || evt.message);
+          }
+          return;
+        }
+
+        if (evt.type === 'log') {
+          appendLog(`[${evt.step || 'log'}]\n${evt.message || ''}`.trim());
+          return;
+        }
+
+        if (evt.type === 'error') {
+          sawError = true;
+          errorMessage = evt.message || 'Failed to load repo into sandbox';
+          setRepoLoadStatus('error');
+          setRepoLoadError(errorMessage);
+          return;
+        }
+
+        if (evt.type === 'complete') {
+          sawComplete = true;
+          setRepoLoadStatus('success');
+          return;
+        }
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() ?? '';
+        for (const part of parts) {
+          const lines = part.split('\n');
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const raw = line.slice(6);
+            try {
+              const evt = JSON.parse(raw);
+              handleEvent(evt);
+            } catch {
+              // ignore malformed chunks
+            }
+          }
+        }
+      }
+
+      if (sawError) {
+        throw new Error(errorMessage || 'Failed to load repo into sandbox');
+      }
+
+      // If we didn't get an explicit complete event, treat stream end as success
+      if (!sawComplete) {
+        setRepoLoadStatus(prev => (prev === 'running' ? 'success' : prev));
+      }
+
+      addChatMessage('✅ Repo loaded into sandbox. Dev server restarted.', 'system');
+
+      // Force refresh the preview iframe (if mounted)
+      if (iframeRef.current && sandboxData.url) {
+        iframeRef.current.src = `${sandboxData.url}?t=${Date.now()}`;
+      }
+      setIsPreviewRefreshing(true);
+      setTimeout(() => setIsPreviewRefreshing(false), 1000);
+    } catch (error: any) {
+      console.error('[GitHub Load Into Sandbox] Failed:', error);
+      addChatMessage(`❌ Failed to load repo into sandbox: ${error.message}`, 'error');
+      setRepoLoadStatus('error');
+      setRepoLoadError(error.message || 'Failed to load repo into sandbox');
+    } finally {
+      setIsLoadingRepoIntoSandbox(false);
     }
   };
 
@@ -1079,224 +1527,776 @@ Apply these design specifications consistently across all components.`;
       return;
     }
 
+    // Snapshot the plan as it is being locked for execution ("Move to Pipeline")
+    void planVersions.createSnapshot({
+      source: 'move_to_pipeline',
+      name: '🔒 Plan locked (Move to Pipeline)',
+      description: 'Snapshot captured when build started',
+      tickets: kanban.tickets,
+      planIdOverride: kanban.plan?.id || null,
+    });
+
     setKanbanBuildActive(true);
     kanban.setIsPaused(false);
 
-    // Ensure sandbox exists before proceeding
-    if (!sandboxData) {
-      const newSandbox = await createSandbox(true);
-      if (!newSandbox && !sandboxData) {
+    const blueprintBuildsEnabled = Boolean(appConfig?.buildSystem?.enableBlueprintBuilds);
+    const nextTemplateEnabled = Boolean(appConfig?.buildSystem?.enableNextTemplate);
+
+    // Determine template + blueprint (if available)
+    const planBlueprint: any = (kanban.plan as any)?.blueprint || null;
+    const desiredTemplate: 'vite' | 'next' =
+      (kanban.plan as any)?.templateTarget ||
+      planBlueprint?.templateTarget ||
+      'vite';
+    const effectiveTemplate: 'vite' | 'next' =
+      desiredTemplate === 'next' && !nextTemplateEnabled ? 'vite' : desiredTemplate;
+
+    // Ensure sandbox exists (and matches the plan template)
+    let activeSandbox = sandboxData as any;
+    // Proactively detect expired/stopped sandboxes before starting a build.
+    // If the server lost the provider (or the sandbox expired), force a new sandbox.
+    try {
+      const statusRes = await fetch('/api/sandbox-status');
+      const statusData = await statusRes.json().catch(() => null);
+
+      // IMPORTANT: The server maintains the authoritative "active sandbox".
+      // The client can hold a stale sandboxId (e.g., URL param from a prior run),
+      // which causes scaffold/apply routes to 400 because the provider is registered under
+      // a different sandboxId. Always sync from `/api/sandbox-status` before scaffolding.
+      const statusSandbox =
+        statusData?.sandboxData && typeof statusData.sandboxData === 'object'
+          ? statusData.sandboxData
+          : null;
+
+      if (statusData?.active && statusData?.healthy && statusSandbox?.sandboxId) {
+        // Sync local state + our local variable so subsequent calls use the correct sandboxId immediately.
+        setSandboxData(prev => ({ ...(prev || {}), ...(statusSandbox || {}) }));
+        activeSandbox = { ...(activeSandbox || {}), ...(statusSandbox || {}) };
+
+        // Keep the URL param aligned as well (helps refresh/resume flows).
+        const currentSandboxParam = searchParams.get('sandbox');
+        if (currentSandboxParam !== statusSandbox.sandboxId) {
+          const newParams = new URLSearchParams(searchParams.toString());
+          newParams.set('sandbox', statusSandbox.sandboxId);
+          router.replace(`/generation?${newParams.toString()}`, { scroll: false });
+        }
+      }
+      const sandboxUnavailable =
+        !statusData?.active ||
+        Boolean(statusData?.sandboxStopped) ||
+        statusSandbox?.healthStatusCode === 410;
+      if (sandboxUnavailable) {
+        if (activeSandbox) {
+          addChatMessage('Sandbox is no longer available. Creating a new sandbox before continuing...', 'system');
+        }
+        setSandboxData(null);
+        activeSandbox = null;
+      }
+    } catch (e) {
+      // If status check fails, proceed with current state; downstream operations may still recreate.
+      console.warn('[handleStartKanbanBuild] Sandbox status preflight failed:', e);
+    }
+    if (!activeSandbox || activeSandbox.templateTarget !== effectiveTemplate) {
+      if (activeSandbox?.templateTarget && activeSandbox.templateTarget !== effectiveTemplate) {
+        addChatMessage('Current sandbox template does not match the plan. Creating a new sandbox...', 'system');
+      }
+      const newSandbox = await createSandbox(true, 0, effectiveTemplate);
+      activeSandbox = newSandbox || activeSandbox;
+
+      // `createSandbox` can return null if a sandbox creation is already in progress.
+      // In that case, wait briefly for the server-side active sandbox to become healthy.
+      if (!activeSandbox) {
+        const started = Date.now();
+        const maxWaitMs = 30000;
+
+        while (Date.now() - started < maxWaitMs) {
+          await new Promise(r => setTimeout(r, 1000));
+          try {
+            const waitRes = await fetch('/api/sandbox-status');
+            const waitData = await waitRes.json().catch(() => null);
+            const waitSandbox =
+              waitData?.sandboxData && typeof waitData.sandboxData === 'object'
+                ? waitData.sandboxData
+                : null;
+
+            if (waitData?.active && waitData?.healthy && waitSandbox?.sandboxId) {
+              setSandboxData(prev => ({ ...(prev || {}), ...(waitSandbox || {}), templateTarget: effectiveTemplate } as any));
+              activeSandbox = { ...(waitSandbox || {}), templateTarget: effectiveTemplate };
+
+              const currentSandboxParam = searchParams.get('sandbox');
+              if (currentSandboxParam !== waitSandbox.sandboxId) {
+                const newParams = new URLSearchParams(searchParams.toString());
+                newParams.set('sandbox', waitSandbox.sandboxId);
+                router.replace(`/generation?${newParams.toString()}`, { scroll: false });
+              }
+              break;
+            }
+          } catch {
+            // ignore and keep waiting
+          }
+        }
+      }
+      if (!activeSandbox) {
         setKanbanBuildActive(false);
-        addChatMessage('❌ Failed to create sandbox. Please try again or refresh the page.', 'error');
+        addChatMessage('Failed to create sandbox. Please try again.', 'error');
         return;
       }
     }
 
-    // Mark all backlog tickets as generating at once
-    backlogTickets.forEach(ticket => {
-      kanban.updateTicketStatus(ticket.id, 'generating');
-    });
+    // Deterministic scaffold step (guarantees routes/nav/data are present before AI edits)
+    if (blueprintBuildsEnabled && planBlueprint) {
+      try {
+        const alreadyScaffoldedForSandbox =
+          Boolean((kanban.plan as any)?.scaffolded) &&
+          Boolean((kanban.plan as any)?.scaffoldedSandboxId) &&
+          (kanban.plan as any)?.scaffoldedSandboxId === activeSandbox.sandboxId;
 
-    // Build combined prompt from all tickets
-    const ticketDescriptions = backlogTickets.map((ticket, idx) => {
-      let desc = `${idx + 1}. ${ticket.title}: ${ticket.description}`;
-      if (ticket.userInputs && Object.keys(ticket.userInputs).length > 0) {
-        desc += `\n   Credentials: ${Object.entries(ticket.userInputs).map(([k, v]) => `${k}=${v}`).join(', ')}`;
+        if (!alreadyScaffoldedForSandbox) {
+          addChatMessage('Scaffolding project from blueprint...', 'system');
+          const scaffoldRes = await fetch('/api/scaffold-project', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sandboxId: activeSandbox.sandboxId,
+              template: effectiveTemplate,
+              blueprint: planBlueprint,
+            }),
+          });
+          const scaffoldData = await scaffoldRes.json().catch(() => ({}));
+          if (!scaffoldRes.ok || !scaffoldData?.success) {
+            throw new Error(scaffoldData?.error || `Scaffold failed (HTTP ${scaffoldRes.status})`);
+          }
+          addChatMessage(`Scaffolded ${scaffoldData.filesWritten?.length || 0} file(s)`, 'system');
+
+          if (kanban.plan) {
+            kanban.setPlan({
+              ...kanban.plan,
+              scaffolded: true,
+              scaffoldedSandboxId: activeSandbox.sandboxId,
+            } as any);
+          }
+        }
+      } catch (e: any) {
+        setKanbanBuildActive(false);
+        addChatMessage(`Scaffolding failed: ${e.message}`, 'error');
+        return;
       }
-      return desc;
-    }).join('\n');
+    } else if (planBlueprint) {
+      addChatMessage('Blueprint builds are disabled; skipping scaffold step.', 'system');
+    } else {
+      addChatMessage('No blueprint found; skipping scaffold step.', 'system');
+    }
 
-    const combinedPrompt = `Build a complete application with ALL of the following features simultaneously:
+    // If the plan already has stored Supabase credentials, apply them to this sandbox up-front.
+    // This ensures the preview can switch to Supabase mode even if the Supabase tickets were
+    // completed in a previous run (or if the user adds follow-up tickets later).
+    const supabaseInputsFromPlan = (kanban.tickets || [])
+      .map(t => t.userInputs)
+      .find(
+        (inputs: any) =>
+          inputs &&
+          typeof inputs.supabase_url === 'string' &&
+          inputs.supabase_url.trim().length > 0 &&
+          typeof inputs.supabase_anon_key === 'string' &&
+          inputs.supabase_anon_key.trim().length > 0
+      ) as Record<string, string> | undefined;
 
-FEATURES TO BUILD:
-${ticketDescriptions}
+    if (supabaseInputsFromPlan) {
+      const applyKey = `${activeSandbox.sandboxId}:${effectiveTemplate}`;
+      if (supabaseEnvAppliedRef.current !== applyKey) {
+        try {
+          addChatMessage('Applying Supabase env vars to sandbox...', 'system');
+          const envRes = await fetch('/api/apply-sandbox-env', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sandboxId: activeSandbox.sandboxId,
+              template: effectiveTemplate,
+              userInputs: supabaseInputsFromPlan,
+            }),
+          });
+          const envData = await envRes.json().catch(() => ({}));
+          if (!envRes.ok || !envData?.success) {
+            throw new Error(envData?.error || `Failed to apply env (HTTP ${envRes.status})`);
+          }
+          supabaseEnvAppliedRef.current = applyKey;
+          addChatMessage('Supabase env vars applied to sandbox.', 'system');
+        } catch (e: any) {
+          console.warn('[generation] Failed to apply Supabase env vars (preflight):', e);
+          addChatMessage(
+            `Warning: could not apply Supabase env vars automatically (${e?.message || 'unknown error'}).`,
+            'system'
+          );
+        }
+      }
+    }
 
-Requirements:
-- Generate ALL files needed for ALL features in a single response
-- Use modern React with TypeScript and Tailwind CSS
-- Create a cohesive, production-ready application
-- Ensure all components work together seamlessly`;
+    setGenerationProgress(prev => ({
+      ...prev,
+      isGenerating: true,
+      status: 'Building tickets...',
+      streamedCode: '',
+      files: [],
+    }));
 
-    try {
+    const redactSensitiveForPrompt = (content: string): string => {
+      const input = String(content ?? '');
+      return input
+        // JWTs (common Supabase anon keys are JWT-like)
+        .replace(/eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*/g, '[REDACTED_JWT]')
+        // Common env key assignment patterns
+        .replace(/(VITE_SUPABASE_ANON_KEY\s*[:=]\s*['"])([^'"]+)(['"])/g, '$1[REDACTED]$3')
+        .replace(/(NEXT_PUBLIC_SUPABASE_ANON_KEY\s*[:=]\s*['"])([^'"]+)(['"])/g, '$1[REDACTED]$3');
+    };
+
+    const streamFileBlocksFromAI = async (prompt: string, sandboxId: string): Promise<string> => {
       const response = await fetch('/api/generate-ai-code-stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          prompt: combinedPrompt,
+          prompt,
           model: aiModel,
-          context: { sandboxId: sandboxData?.sandboxId },
+          context: { sandboxId },
+          isEdit: true,
+          buildProfile: 'implement_ticket',
         }),
       });
 
       if (!response.ok || !response.body) {
-        throw new Error('Generation failed');
+        throw new Error(`AI generation failed (HTTP ${response.status})`);
       }
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+      let buffer = '';
       let generatedCode = '';
-      const completedFiles = new Set<string>();
-
-      setGenerationProgress(prev => ({
-        ...prev,
-        isGenerating: true,
-        status: `Building ${backlogTickets.length} features...`,
-        streamedCode: '',
-        files: [],
-      }));
-
-      // Start build tracker
-      buildTracker.startBuild(`Building ${backlogTickets.length} features`);
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-
-        const chunk = decoder.decode(value);
-        const lines = chunk.split('\n');
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
 
         for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              if (data.type === 'stream' && data.raw) {
-                generatedCode += data.text;
-
-                // Use build tracker to process streamed code and update tickets
-                buildTracker.processStreamedCode(generatedCode);
-
-                // Update overall progress
-                const progress = Math.min(85, (generatedCode.length / 10000) * 100);
-                backlogTickets.forEach(ticket => {
-                  kanban.updateTicketProgress(ticket.id, progress);
-                });
-
-                setGenerationProgress(prev => ({
-                  ...prev,
-                  streamedCode: generatedCode,
-                }));
-
-                // Parse files for UI display
-                const fileRegex = /<file path="([^"]+)">([\s\S]*?)(?:<\/file>|$)/g;
-                const parsedFiles: Array<{ path: string; content: string; type: string; completed: boolean }> = [];
-                let match;
-                while ((match = fileRegex.exec(generatedCode)) !== null) {
-                  const filePath = match[1];
-                  const content = match[2];
-                  const ext = filePath.split('.').pop() || '';
-                  const hasClosingTag = match[0].includes('</file>');
-                  parsedFiles.push({ path: filePath, content, type: ext, completed: hasClosingTag });
-
-                  // Mark tickets as progressing based on file types
-                  if (hasClosingTag && !completedFiles.has(filePath)) {
-                    completedFiles.add(filePath);
-                  }
-                }
-                if (parsedFiles.length > 0) {
-                  setGenerationProgress(prev => ({ ...prev, files: parsedFiles }));
-                }
-              } else if (data.type === 'complete') {
-                generatedCode = data.generatedCode || generatedCode;
-              }
-            } catch (e) {
-              console.debug('[stream-parse] Partial JSON chunk, continuing...', e);
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.type === 'stream' && data.raw) {
+              generatedCode += data.text;
+            } else if (data.type === 'complete') {
+              generatedCode = data.generatedCode || generatedCode;
             }
+          } catch {
+            // ignore partial chunks
           }
         }
       }
 
-      // Mark all as applying
-      buildTracker.markApplying();
-      backlogTickets.forEach(ticket => {
-        kanban.updateTicketStatus(ticket.id, 'applying');
-        kanban.updateTicketProgress(ticket.id, 90);
-      });
-      setGenerationProgress(prev => ({ ...prev, status: 'Applying code...' }));
+      return generatedCode;
+    };
 
-      // Switch to preview as soon as we start applying code
-      setActiveTab('preview');
+    try {
+      while (true) {
+        if (kanban.isPaused) {
+          addChatMessage('Build paused.', 'system');
+          break;
+        }
 
-      await applyGeneratedCode(generatedCode, false);
+        const nextTicket = kanban.getNextBuildableTicket();
+        if (!nextTicket) break;
 
-      // Extract files for review and sync
-      buildTracker.markCompleted();
-      const allFiles = Array.from(generatedCode.matchAll(/<file path="([^"]+)">/g)).map(m => m[1]);
+        kanban.setCurrentTicketId(nextTicket.id);
+        kanban.updateTicketStatus(nextTicket.id, 'generating');
+        kanban.updateTicketProgress(nextTicket.id, 5);
 
-      const fileContents: Array<{ path: string; content: string }> = [];
-      const fileRegex = /<file path="([^"]+)">([\s\S]*?)(?:<\/file>|(?=<file path="|$))/g;
-      let fileMatch;
-      while ((fileMatch = fileRegex.exec(generatedCode)) !== null) {
-        fileContents.push({ path: fileMatch[1], content: fileMatch[2].trim() });
-      }
+        // If this ticket has Supabase credentials, apply them to the sandbox env once (and restart dev server)
+        // so the generated app can actually switch from mock-first → real DB without manual steps.
+        const isSupabaseTicket =
+          /supabase/i.test(nextTicket.title || '') ||
+          /supabase/i.test(nextTicket.description || '') ||
+          Array.isArray((nextTicket as any).inputRequests) &&
+            (nextTicket as any).inputRequests.some((r: any) => typeof r?.id === 'string' && r.id.startsWith('supabase_'));
 
-      // Update files on tickets
-      backlogTickets.forEach(ticket => {
-        kanban.updateTicketFiles(ticket.id, allFiles);
-      });
+        const hasSupabaseInputs =
+          nextTicket.userInputs &&
+          typeof (nextTicket.userInputs as any).supabase_url === 'string' &&
+          String((nextTicket.userInputs as any).supabase_url).trim().length > 0 &&
+          typeof (nextTicket.userInputs as any).supabase_anon_key === 'string' &&
+          String((nextTicket.userInputs as any).supabase_anon_key).trim().length > 0;
 
-      // Run Bugbot code review
-      setGenerationProgress(prev => ({ ...prev, status: 'Running code review...' }));
-      addChatMessage('🔍 Running Bugbot code review...', 'system');
+        if (isSupabaseTicket && hasSupabaseInputs) {
+          const applyKey = `${activeSandbox.sandboxId}:${effectiveTemplate}`;
+          if (supabaseEnvAppliedRef.current !== applyKey) {
+            try {
+              addChatMessage('Applying Supabase env vars to sandbox...', 'system');
+              const envRes = await fetch('/api/apply-sandbox-env', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  sandboxId: activeSandbox.sandboxId,
+                  template: effectiveTemplate,
+                  userInputs: nextTicket.userInputs,
+                }),
+              });
+              const envData = await envRes.json().catch(() => ({}));
+              if (!envRes.ok || !envData?.success) {
+                throw new Error(envData?.error || `Failed to apply env (HTTP ${envRes.status})`);
+              }
+              supabaseEnvAppliedRef.current = applyKey;
+              addChatMessage('Supabase env vars applied to sandbox.', 'system');
+            } catch (e: any) {
+              console.warn('[generation] Failed to apply Supabase env vars:', e);
+              addChatMessage(
+                `Warning: could not apply Supabase env vars automatically (${e?.message || 'unknown error'}).`,
+                'system'
+              );
+            }
+          }
+        }
 
-      const reviewResult = await bugbot.reviewCode({
-        ticketId: backlogTickets.map(t => t.id).join('-'),
-        ticketTitle: backlogTickets.map(t => t.title).join(', '),
-        files: fileContents,
-      });
+        // Never include sensitive user-provided values in the LLM prompt.
+        const sensitiveIds = new Set(
+          Array.isArray((nextTicket as any).inputRequests)
+            ? (nextTicket as any).inputRequests.filter((r: any) => r?.sensitive).map((r: any) => r?.id)
+            : []
+        );
 
-      if (reviewResult && !reviewResult.passed) {
-        setPendingReviewData({ tickets: backlogTickets, fileContents });
-        // Don't auto-popup - user can click the Review button to see issues
-        setKanbanBuildActive(false);
+        const credentialText =
+          nextTicket.userInputs && Object.keys(nextTicket.userInputs).length > 0
+            ? `\n\nUser inputs:\n${Object.entries(nextTicket.userInputs)
+                .map(([k, v]) => {
+                  if (sensitiveIds.has(k)) return `- ${k}=[REDACTED]`;
+                  const str = String(v ?? '');
+                  // Avoid dumping long values into prompts even if not marked sensitive.
+                  if (str.length > 120) return `- ${k}=[REDACTED]`;
+                  return `- ${k}=${str}`;
+                })
+                .join('\n')}`
+            : '';
+
+        const ticketPrompt = `Implement the following ticket in the existing application.\n\nTemplate: ${desiredTemplate}\n\nBlueprint (high-level contract):\n${planBlueprint ? JSON.stringify(planBlueprint, null, 2) : '(none)'}\n\nTicket:\n- Title: ${nextTicket.title}\n- Description: ${nextTicket.description}${credentialText}\n\nRules:\n- Implement the ticket completely.\n- Preserve existing routes/navigation and the mock-first data layer.\n- Create new files if required by this ticket.\n- Output ONLY <file path=\"...\"> blocks for files you changed/created.`;
+
+        const response = await fetch('/api/generate-ai-code-stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt: ticketPrompt,
+            model: aiModel,
+            context: { sandboxId: activeSandbox.sandboxId },
+            isEdit: true,
+            buildProfile: 'implement_ticket',
+          }),
+        });
+
+        if (!response.ok || !response.body) {
+          throw new Error(`Generation failed for "${nextTicket.title}" (HTTP ${response.status})`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let generatedCode = '';
+
         setGenerationProgress(prev => ({
           ...prev,
-          isGenerating: false,
-          status: `Review: ${reviewResult.issues.filter(i => i.severity === 'error').length} issues found`
+          status: `Generating: ${nextTicket.title}`,
+          streamedCode: '',
         }));
-        addChatMessage(`⚠️ Code review found ${reviewResult.issues.length} issues. Click the Review button to see details.`, 'system');
-        // Continue with the build - don't return early
-      }
 
-      // Review passed - mark all as done
-      backlogTickets.forEach(ticket => {
-        kanban.updateTicketStatus(ticket.id, 'done');
-        kanban.updateTicketProgress(ticket.id, 100);
-      });
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk = decoder.decode(value);
+          const lines = chunk.split('\n');
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.type === 'stream' && data.raw) {
+                generatedCode += data.text;
+                const progress = Math.min(85, Math.max(10, (generatedCode.length / 6000) * 100));
+                kanban.updateTicketProgress(nextTicket.id, progress);
+                setGenerationProgress(prev => ({ ...prev, streamedCode: generatedCode }));
+              } else if (data.type === 'complete') {
+                generatedCode = data.generatedCode || generatedCode;
+              }
+            } catch {
+              // ignore partial chunks
+            }
+          }
+        }
 
-      if (reviewResult) {
-        addChatMessage(`✅ Code review passed with score ${reviewResult.score}/100`, 'system');
-      }
+        kanban.updateTicketCode(nextTicket.id, generatedCode);
 
-      // Auto-sync to GitHub if enabled
-      if (gitSync.isEnabled && fileContents.length > 0) {
-        const combinedTicket = {
-          id: backlogTickets.map(t => t.id).join('-'),
-          title: `Build: ${backlogTickets.map(t => t.title).join(', ')}`,
-          description: `Completed ${backlogTickets.length} features`,
-          type: 'feature' as const,
-          priority: 'medium' as const,
-          status: 'done' as const,
+        // Apply generated code (incremental edit)
+        kanban.updateTicketStatus(nextTicket.id, 'applying');
+        kanban.updateTicketProgress(nextTicket.id, 90);
+        setGenerationProgress(prev => ({ ...prev, status: `Applying: ${nextTicket.title}` }));
+        setActiveTab('preview');
+        await applyGeneratedCode(generatedCode, true, activeSandbox);
+
+        const allFiles = Array.from(generatedCode.matchAll(/<file path="([^"]+)">/g)).map(m => m[1]);
+        if (allFiles.length > 0) {
+          kanban.updateTicketFiles(nextTicket.id, allFiles);
+        }
+
+        // Code review gate (Bugbot)
+        kanban.updateTicketStatus(nextTicket.id, 'pr_review');
+        kanban.updateTicketProgress(nextTicket.id, 95);
+        setGenerationProgress(prev => ({ ...prev, status: `Reviewing: ${nextTicket.title}` }));
+
+        const fileContents: Array<{ path: string; content: string }> = [];
+        const fileRegex = /<file path="([^"]+)">([\s\S]*?)(?:<\/file>|(?=<file path="|$))/g;
+        let fileMatch;
+        while ((fileMatch = fileRegex.exec(generatedCode)) !== null) {
+          fileContents.push({ path: fileMatch[1], content: fileMatch[2].trim() });
+        }
+
+        const reviewResult = await bugbot.reviewCode({
+          ticketId: nextTicket.id,
+          ticketTitle: nextTicket.title,
+          files: fileContents,
+        });
+
+        const isBlockingIssue = (issue: { severity: string; type: string }) => {
+          if (issue.severity === 'error') return true;
+          if (issue.severity === 'warning' && (issue.type === 'security' || issue.type === 'bug')) return true;
+          return false;
         };
-        gitSync.syncTicketCompletion(combinedTicket, fileContents);
+
+        const hasBlockingIssues = (res: ReviewResult | null) =>
+          Boolean(res?.issues?.some(i => isBlockingIssue(i)));
+
+        const maxAutoFixAttempts = 2;
+        let currentReview: ReviewResult | null = reviewResult;
+        let currentFiles = fileContents;
+        let autoFixAttempts = 0;
+
+        while (hasBlockingIssues(currentReview) && autoFixAttempts < maxAutoFixAttempts) {
+          autoFixAttempts += 1;
+
+          const blockingIssues = (currentReview?.issues || []).filter(i => isBlockingIssue(i));
+          const issuesText = blockingIssues
+            .map((i, idx) => {
+              const loc = `${i.file}${i.line ? `:${i.line}` : ''}`;
+              const suggestion = i.suggestion ? `\n  Suggestion: ${i.suggestion}` : '';
+              return `- [${idx + 1}] (${i.severity}/${i.type}) ${loc}\n  ${i.message}${suggestion}`;
+            })
+            .join('\n');
+
+          const filesText = currentFiles
+            .map(f => `// FILE: ${f.path}\n${redactSensitiveForPrompt(f.content)}`)
+            .join('\n\n---\n\n');
+
+          addChatMessage(
+            `Code review found blocking issues. Attempting auto-fix (${autoFixAttempts}/${maxAutoFixAttempts})...`,
+            'system'
+          );
+          setGenerationProgress(prev => ({
+            ...prev,
+            status: `Auto-fixing: ${nextTicket.title} (${autoFixAttempts}/${maxAutoFixAttempts})`,
+          }));
+
+          const fixPrompt = `Fix the listed issues in the provided code.\n\nBlocking issues:\n${issuesText}\n\nRules:\n- Make the smallest possible changes to fix ONLY the issues above.\n- Do NOT change app behavior beyond what is needed to fix the issues.\n- Do NOT introduce new dependencies unless absolutely necessary.\n- Do NOT include or log secrets.\n- Output ONLY <file path=\"...\"> blocks for files you change. Each block must contain the full updated file content.\n\nCode:\n${filesText}`;
+
+          let fixCode = '';
+          try {
+            fixCode = await streamFileBlocksFromAI(fixPrompt, activeSandbox.sandboxId);
+          } catch (e: any) {
+            console.warn('[kanban] Auto-fix generation failed:', e);
+            break;
+          }
+
+          if (!fixCode || !fixCode.includes('<file path="')) {
+            console.warn('[kanban] Auto-fix produced no file blocks; stopping auto-fix loop.');
+            break;
+          }
+
+          // Apply the fix patch (incremental edit)
+          await applyGeneratedCode(fixCode, true, activeSandbox);
+
+          // Update the in-memory file set for the next Bugbot pass using the returned <file> blocks.
+          const updatedMap = new Map(currentFiles.map(f => [f.path, f.content]));
+          const fixFileRegex = /<file path="([^"]+)">([\s\S]*?)(?:<\/file>|(?=<file path="|$))/g;
+          let fixMatch;
+          while ((fixMatch = fixFileRegex.exec(fixCode)) !== null) {
+            updatedMap.set(fixMatch[1], fixMatch[2].trim());
+          }
+          currentFiles = Array.from(updatedMap.entries()).map(([path, content]) => ({ path, content }));
+
+          currentReview = await bugbot.reviewCode({
+            ticketId: nextTicket.id,
+            ticketTitle: nextTicket.title,
+            files: currentFiles,
+          });
+        }
+
+        if (hasBlockingIssues(currentReview)) {
+          const errors = (currentReview?.issues || []).filter(i => i.severity === 'error').length;
+          setPendingReviewData({ tickets: [nextTicket], fileContents: currentFiles });
+          setShowCodeReview(true);
+          setKanbanBuildActive(false);
+          setGenerationProgress(prev => ({
+            ...prev,
+            isGenerating: false,
+            status: `Review failed: ${errors} error(s)`,
+          }));
+          addChatMessage('Code review found blocking issues. Please review.', 'system');
+          return;
+        }
+
+        // Testing gate placeholder (real gates will be added later)
+        kanban.updateTicketStatus(nextTicket.id, 'testing');
+        kanban.updateTicketProgress(nextTicket.id, 98);
+
+        // Blueprint coverage gate (static)
+        try {
+          const { validateBlueprint } = await import('@/lib/blueprint-validator');
+          const bpResult = validateBlueprint(planBlueprint);
+          if (!bpResult.ok) {
+            throw new Error(`Blueprint validation failed: ${bpResult.errors.join('; ')}`);
+          }
+        } catch (e: any) {
+          kanban.updateTicketStatus(nextTicket.id, 'failed', e.message || 'Blueprint validation failed');
+          setKanbanBuildActive(false);
+          setGenerationProgress(prev => ({ ...prev, isGenerating: false, status: `Failed: ${e.message}` }));
+          addChatMessage(`Build failed: ${e.message}`, 'error');
+          return;
+        }
+
+        // Mark ticket complete
+        kanban.updateTicketStatus(nextTicket.id, 'done');
+        kanban.updateTicketProgress(nextTicket.id, 100);
+
+        if (gitSync.isEnabled && fileContents.length > 0) {
+          gitSync.syncTicketCompletion(
+            {
+              id: nextTicket.id,
+              title: nextTicket.title,
+              description: nextTicket.description,
+              type: nextTicket.type,
+              priority: nextTicket.priority,
+            },
+            fileContents
+          );
+        }
       }
 
       setKanbanBuildActive(false);
       setGenerationProgress(prev => ({ ...prev, isGenerating: false, status: 'Build complete' }));
-
     } catch (error: any) {
-      buildTracker.markFailed(error.message);
-      backlogTickets.forEach(ticket => {
-        kanban.updateTicketStatus(ticket.id, 'failed', error.message);
-      });
+      const message = error?.message || 'Build failed';
+      const currentId = kanban.currentTicketId;
+      if (currentId) {
+        kanban.updateTicketStatus(currentId, 'failed', message);
+      }
       setKanbanBuildActive(false);
-      setGenerationProgress(prev => ({ ...prev, isGenerating: false, status: `Failed: ${error.message}` }));
-      addChatMessage(`❌ Build failed: ${error.message}`, 'error');
+      setGenerationProgress(prev => ({ ...prev, isGenerating: false, status: `Failed: ${message}` }));
+      addChatMessage(`Build failed: ${message}`, 'error');
     }
+  };
+
+  // Auto-resume the build after a review approval (so users don't have to hit ▶ Start repeatedly).
+  useEffect(() => {
+    if (!resumeAfterReview) return;
+    if (showCodeReview) return;
+    if (kanbanBuildActive) {
+      setResumeAfterReview(false);
+      return;
+    }
+    if (kanban.isPaused) {
+      setResumeAfterReview(false);
+      return;
+    }
+
+    const hasBacklog = kanban.tickets.some(t => t.status === 'backlog');
+    if (!hasBacklog) {
+      setResumeAfterReview(false);
+      return;
+    }
+
+    // Kick the loop again using the latest state (this effect runs after state updates).
+    setResumeAfterReview(false);
+    void handleStartKanbanBuild();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resumeAfterReview, showCodeReview, kanbanBuildActive, kanban.isPaused, kanban.tickets]);
+
+  const handleCreateManualPlanSnapshot = async () => {
+    const created = await planVersions.createSnapshot({
+      source: 'manual',
+      name: '💾 Plan snapshot',
+      description: 'Manual snapshot',
+      tickets: kanban.tickets,
+      planIdOverride: kanban.plan?.id || null,
+    });
+    if (created) {
+      addChatMessage(`📌 Saved plan snapshot: ${created.name}`, 'system');
+    }
+  };
+
+  const handleRestorePlanSnapshot = async (version: PlanVersion) => {
+    if (kanbanBuildActive) {
+      addChatMessage('⏳ Cannot restore plan while build is running.', 'system');
+      return;
+    }
+
+    const ok =
+      typeof window !== 'undefined' &&
+      window.confirm(`Restore snapshot "${version.name}"?\n\nThis will replace your current plan.`); // eslint-disable-line no-alert
+
+    if (!ok) return;
+
+    // Create a quick backup snapshot before restoring (local only if server isn't available)
+    await planVersions.createSnapshot({
+      source: 'manual',
+      name: '💾 Backup (before restore)',
+      description: `Backup before restoring "${version.name}"`,
+      tickets: kanban.tickets,
+      planIdOverride: kanban.plan?.id || null,
+    });
+
+    kanban.setTickets(version.tickets || []);
+    if (kanban.plan) {
+      kanban.setPlan({ ...kanban.plan, tickets: version.tickets || [], updatedAt: new Date() });
+    }
+    setActiveTab('kanban');
+    addChatMessage(`🔁 Restored plan snapshot: ${version.name}`, 'system');
+  };
+
+  const renderRepoLoadModal = () => {
+    if (!repoLoadModalOpen) return null;
+
+    const titleRepo = lastImportedRepo ? `${lastImportedRepo.repoFullName}@${lastImportedRepo.branch}` : 'Imported repo';
+    const canClose = repoLoadStatus !== 'running';
+    const statusLabel =
+      repoLoadStatus === 'running'
+        ? 'Working…'
+        : repoLoadStatus === 'success'
+          ? 'Done'
+          : repoLoadStatus === 'error'
+            ? 'Failed'
+            : 'Idle';
+
+    const statusClass =
+      repoLoadStatus === 'running'
+        ? 'bg-blue-50 text-blue-700 border-blue-200'
+        : repoLoadStatus === 'success'
+          ? 'bg-green-50 text-green-700 border-green-200'
+          : repoLoadStatus === 'error'
+            ? 'bg-red-50 text-red-700 border-red-200'
+            : 'bg-gray-50 text-gray-700 border-gray-200';
+
+    return (
+      <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4">
+        <div className="w-full max-w-lg rounded-xl bg-white shadow-xl border border-gray-200 overflow-hidden">
+          <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-sm font-semibold text-gray-900 truncate">Loading repo into sandbox</div>
+              <div className="text-xs text-gray-500 truncate">{titleRepo}</div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className={`text-[10px] px-2 py-1 rounded-full border ${statusClass}`}>{statusLabel}</span>
+              <button
+                onClick={() => canClose && setRepoLoadModalOpen(false)}
+                disabled={!canClose}
+                className={`h-8 w-8 rounded-md border flex items-center justify-center ${
+                  canClose ? 'border-gray-200 hover:bg-gray-50 text-gray-700' : 'border-gray-100 text-gray-300 cursor-not-allowed'
+                }`}
+                title={canClose ? 'Close' : 'Working…'}
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+
+          <div className="px-4 py-3">
+            <div className="text-xs text-gray-600">
+              This can take a couple minutes (especially during <span className="font-medium">npm install</span>).
+            </div>
+          </div>
+
+          <div className="px-4 pb-3 space-y-2">
+            {repoLoadSteps.length === 0 ? (
+              <div className="text-xs text-gray-500">Preparing…</div>
+            ) : (
+              <div className="space-y-1.5">
+                {repoLoadSteps.map(step => {
+                  const icon =
+                    step.status === 'done'
+                      ? '✅'
+                      : step.status === 'running'
+                        ? '⏳'
+                        : step.status === 'error'
+                          ? '❌'
+                          : '•';
+
+                  const rowClass =
+                    step.status === 'running'
+                      ? 'border-blue-200 bg-blue-50'
+                      : step.status === 'done'
+                        ? 'border-green-200 bg-green-50'
+                        : step.status === 'error'
+                          ? 'border-red-200 bg-red-50'
+                          : 'border-gray-200 bg-white';
+
+                  return (
+                    <div key={step.id} className={`rounded-lg border px-3 py-2 ${rowClass}`}>
+                      <div className="flex items-start gap-2">
+                        <span className="text-sm leading-5">{icon}</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-medium text-gray-900">{step.label}</div>
+                          {step.detail ? (
+                            <div className="mt-0.5 text-[11px] text-gray-600 whitespace-pre-wrap break-words">
+                              {step.detail}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {repoLoadStatus === 'error' && repoLoadError ? (
+              <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 whitespace-pre-wrap">
+                {repoLoadError}
+              </div>
+            ) : null}
+
+            {repoLoadLogs.length > 0 ? (
+              <div className="mt-2">
+                <div className="text-[10px] font-semibold text-gray-500 mb-1">Logs (tail)</div>
+                <pre className="max-h-40 overflow-auto rounded-lg border border-gray-200 bg-gray-50 p-2 text-[10px] text-gray-700 whitespace-pre-wrap break-words">
+{repoLoadLogs.slice(-20).join('\n\n')}
+                </pre>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="px-4 py-3 border-t border-gray-100 flex items-center justify-end gap-2">
+            <button
+              onClick={() => setRepoLoadModalOpen(false)}
+              disabled={!canClose}
+              className={`px-3 py-2 text-xs font-medium rounded-lg border transition-colors ${
+                canClose ? 'border-gray-200 hover:bg-gray-50 text-gray-700' : 'border-gray-100 text-gray-300 cursor-not-allowed'
+              }`}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   const sandboxCreationRef = useRef<boolean>(false);
 
-  const createSandbox = async (fromHomeScreen = false, retryCount = 0) => {
+  const createSandbox = async (
+    fromHomeScreen = false,
+    retryCount = 0,
+    template: 'vite' | 'next' = 'vite'
+  ) => {
     const MAX_RETRIES = 3;
 
     // Prevent duplicate sandbox creation
@@ -1318,7 +2318,7 @@ Requirements:
       const response = await fetch('/api/create-ai-sandbox-v2', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({})
+        body: JSON.stringify({ template })
       });
 
       const data = await response.json();
@@ -1383,7 +2383,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
         console.log(`[createSandbox] Retrying (${retryCount + 1}/${MAX_RETRIES})...`);
         updateStatus(`Connection failed. Retrying (${retryCount + 1}/${MAX_RETRIES})...`, false);
         await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1))); // Exponential backoff
-        return createSandbox(fromHomeScreen, retryCount + 1);
+        return createSandbox(fromHomeScreen, retryCount + 1, template);
       }
 
       updateStatus('Error', false);
@@ -1762,7 +2762,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
 
             setIsPreviewRefreshing(true);
             setActiveTab('preview');
-
+            
             setTimeout(async () => {
               if (iframeRef.current && currentSandboxData?.url) {
                 console.log('[applyGeneratedCode] Starting iframe refresh sequence...');
@@ -1778,7 +2778,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
                     setIsPreviewRefreshing(false);
                   };
                   iframeRef.current.src = urlWithTimestamp;
-
+                  
                   // Fallback timeout to hide loading state
                   setTimeout(() => setIsPreviewRefreshing(false), 5000);
                 } catch (e) {
@@ -2469,22 +3469,70 @@ Tip: I automatically detect and install npm packages from your code imports (lik
               </div>
             )}
 
-            {/* Refresh button */}
-            <button
-              onClick={() => {
-                if (iframeRef.current && sandboxData?.url) {
-                  console.log('[Manual Refresh] Forcing iframe reload...');
-                  const newSrc = `${sandboxData.url}?t=${Date.now()}&manual=true`;
-                  iframeRef.current.src = newSrc;
-                }
-              }}
-              className="absolute bottom-4 right-4 bg-white/90 hover:bg-white text-gray-700 p-2 rounded-lg shadow-lg transition-all duration-200 hover:scale-105"
-              title="Refresh sandbox"
-            >
-              <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-            </button>
+            {/* Preview controls */}
+            <div className="absolute bottom-4 right-4 flex gap-2">
+              {sandboxData &&
+              kanban.plan?.blueprint &&
+              (kanban.tickets || []).some(t =>
+                Boolean(t.generatedCode) && ['done', 'testing', 'pr_review', 'applying', 'generating'].includes(t.status)
+              ) ? (
+                <button
+                  onClick={() => restoreKanbanPlanToSandbox(undefined, 'manual')}
+                  disabled={isRestoringSandbox}
+                  className={`bg-white/90 hover:bg-white text-gray-700 p-2 rounded-lg shadow-lg transition-all duration-200 hover:scale-105 ${
+                    isRestoringSandbox ? 'opacity-60 cursor-not-allowed pointer-events-none' : ''
+                  }`}
+                  title={isRestoringSandbox ? 'Restoring…' : 'Restore build into this sandbox'}
+                >
+                  <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 6v6l4 2m6-2a10 10 0 11-3.2-7.3"
+                    />
+                  </svg>
+                </button>
+              ) : null}
+              <button
+                disabled={isRestoringSandbox}
+                onClick={async () => {
+                  if (!sandboxData?.sandboxId) return;
+
+                  // If the sandbox expired while idle, recreate it instead of just reloading the iframe.
+                  try {
+                    const res = await fetch('/api/sandbox-status');
+                    const data = await res.json().catch(() => null);
+                    if (data?.sandboxStopped || !data?.active || data?.sandboxData?.healthStatusCode === 410) {
+                      console.log('[Manual Refresh] Sandbox stopped - recreating...');
+                      await checkSandboxStatus((sandboxData as any)?.templateTarget || 'vite');
+                      return;
+                    }
+                  } catch (e) {
+                    console.warn('[Manual Refresh] Sandbox status check failed:', e);
+                  }
+
+                  if (iframeRef.current && sandboxData?.url) {
+                    console.log('[Manual Refresh] Forcing iframe reload...');
+                    const newSrc = `${sandboxData.url}?t=${Date.now()}&manual=true`;
+                    iframeRef.current.src = newSrc;
+                  }
+                }}
+                className={`bg-white/90 hover:bg-white text-gray-700 p-2 rounded-lg shadow-lg transition-all duration-200 hover:scale-105 ${
+                  isRestoringSandbox ? 'opacity-60 cursor-not-allowed pointer-events-none' : ''
+                }`}
+                title={isRestoringSandbox ? 'Restoring…' : 'Refresh sandbox'}
+              >
+                <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                  />
+                </svg>
+              </button>
+            </div>
           </div>
         );
       }
@@ -4502,21 +5550,6 @@ Focus on the key sections and content, making it clean and modern.`;
               onDisable={gitSync.disableSync}
               className="mr-2"
             />
-            <button
-              onClick={() => setAutoFixEnabled(!autoFixEnabled)}
-              className={`p-2 rounded-lg transition-colors border ${autoFixEnabled
-                ? 'bg-green-50 border-green-200 text-green-700'
-                : 'bg-gray-50 border-gray-200 text-gray-400'}`}
-              title={autoFixEnabled ? 'Auto-fix enabled (click to disable)' : 'Auto-fix disabled (click to enable)'}
-            >
-              <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-              {autoFixStatus === 'fixing' && (
-                <span className="absolute -top-1 -right-1 w-2 h-2 bg-yellow-400 rounded-full animate-pulse" />
-              )}
-            </button>
             <LoginButton className="text-sm" />
             <UserMenu />
             {versioning.saveStatus.local !== 'idle' && (
@@ -4544,7 +5577,10 @@ Focus on the key sections and content, making it clean and modern.`;
                     // Generate 3 UI options for user to choose from
                     await generateUIOptions(prompt);
                   }}
-                  disabled={loading || generationProgress.isGenerating || isPlanning || isLoadingUIOptions}
+                  onImportSubmit={async (repoFullName, branch, maxFiles, model, goalPrompt) => {
+                    await handleGitHubImportAndPlan(repoFullName, branch, maxFiles, model, goalPrompt);
+                  }}
+                  disabled={generationProgress.isGenerating || isPlanning || isLoadingUIOptions || isImportingRepo}
                 />
               </div>
             ) : null}
@@ -4552,7 +5588,7 @@ Focus on the key sections and content, making it clean and modern.`;
             {(isPlanning || kanban.tickets.length > 0) && hasInitialSubmission && (
               <div className="flex-1 overflow-y-auto border-b border-border">
                 <div className="p-3 border-b border-gray-100 bg-gray-50 sticky top-0 z-10">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                       {isPlanning && (
                         <div className="w-3 h-3 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
@@ -4561,19 +5597,36 @@ Focus on the key sections and content, making it clean and modern.`;
                         {isPlanning ? 'Planning Build...' : `Build Plan (${kanban.tickets.length} tasks)`}
                       </span>
                     </div>
-                    {!isPlanning && kanban.tickets.length > 0 && !kanbanBuildActive && (
-                      <button
-                        onClick={handleStartKanbanBuild}
-                        className="px-2 py-1 text-[10px] font-medium rounded bg-orange-500 text-white hover:bg-orange-600 transition-colors"
-                      >
-                        Start Build
-                      </button>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {!isPlanning && kanban.tickets.length > 0 && lastImportedRepo && sandboxData && (
+                        <button
+                          onClick={handleLoadImportedRepoIntoSandbox}
+                          disabled={isLoadingRepoIntoSandbox || kanbanBuildActive}
+                          className={`px-2 py-1 text-[10px] font-medium rounded transition-colors ${
+                            isLoadingRepoIntoSandbox || kanbanBuildActive
+                              ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                              : 'bg-blue-600 text-white hover:bg-blue-700'
+                          }`}
+                          title="Replace sandbox files with the imported repo and restart dev server"
+                        >
+                          {isLoadingRepoIntoSandbox ? 'Loading…' : 'Load to sandbox'}
+                        </button>
+                      )}
+
+                      {!isPlanning && kanban.tickets.length > 0 && !kanbanBuildActive && (
+                        <button
+                          onClick={handleStartKanbanBuild}
+                          className="px-2 py-1 text-[10px] font-medium rounded bg-orange-500 text-white hover:bg-orange-600 transition-colors"
+                        >
+                          Start Build
+                        </button>
+                      )}
+                    </div>
                   </div>
                   {kanban.tickets.length > 0 && (
                     <div className="mt-2">
                       <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden">
-                        <div
+                        <div 
                           className="h-full bg-gradient-to-r from-orange-400 to-orange-500 transition-all duration-500"
                           style={{ width: `${kanban.tickets.length > 0 ? (kanban.tickets.filter(t => t.status === 'done').length / kanban.tickets.length) * 100 : 0}%` }}
                         />
@@ -4588,39 +5641,41 @@ Focus on the key sections and content, making it clean and modern.`;
                       initial={{ opacity: 0, x: -10 }}
                       animate={{ opacity: 1, x: 0 }}
                       transition={{ delay: idx * 0.05 }}
-                      className={`p-2.5 rounded-lg border transition-all ${ticket.status === 'done' ? 'bg-green-50 border-green-200' :
-                          ticket.status === 'generating' ? 'bg-orange-50 border-orange-200' :
-                            ticket.status === 'failed' ? 'bg-red-50 border-red-200' :
-                              'bg-white border-gray-200 hover:border-gray-300'
-                        }`}
+                      className={`p-2.5 rounded-lg border transition-all ${
+                        ticket.status === 'done' ? 'bg-green-50 border-green-200' :
+                        ticket.status === 'generating' ? 'bg-orange-50 border-orange-200' :
+                        ticket.status === 'failed' ? 'bg-red-50 border-red-200' :
+                        'bg-white border-gray-200 hover:border-gray-300'
+                      }`}
                     >
                       <div className="flex items-start gap-2">
                         <span className="text-sm">
                           {ticket.status === 'done' ? '✅' :
-                            ticket.status === 'generating' ? '⚡' :
-                              ticket.status === 'failed' ? '❌' :
-                                ticket.status === 'backlog' ? '📋' :
-                                  ticket.status === 'planning' ? '🎯' : '⏳'}
+                           ticket.status === 'generating' ? '⚡' :
+                           ticket.status === 'failed' ? '❌' :
+                           ticket.status === 'backlog' ? '📋' :
+                           ticket.status === 'planning' ? '🎯' : '⏳'}
                         </span>
                         <div className="flex-1 min-w-0">
                           <div className="text-xs font-medium text-gray-800 truncate">{ticket.title}</div>
                           <div className="text-[10px] text-gray-500 truncate">{ticket.description}</div>
                           {ticket.status === 'generating' && ticket.progress !== undefined && (
                             <div className="mt-1.5 w-full h-1 bg-gray-200 rounded-full overflow-hidden">
-                              <div
+                              <div 
                                 className="h-full bg-orange-400 transition-all duration-300"
                                 style={{ width: `${ticket.progress}%` }}
                               />
                             </div>
                           )}
                         </div>
-                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${ticket.type === 'component' ? 'bg-blue-100 text-blue-700' :
-                            ticket.type === 'feature' ? 'bg-green-100 text-green-700' :
-                              ticket.type === 'layout' ? 'bg-purple-100 text-purple-700' :
-                                ticket.type === 'styling' ? 'bg-pink-100 text-pink-700' :
-                                  ticket.type === 'integration' ? 'bg-amber-100 text-amber-700' :
-                                    'bg-gray-100 text-gray-600'
-                          }`}>
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${
+                          ticket.type === 'component' ? 'bg-blue-100 text-blue-700' :
+                          ticket.type === 'feature' ? 'bg-green-100 text-green-700' :
+                          ticket.type === 'layout' ? 'bg-purple-100 text-purple-700' :
+                          ticket.type === 'styling' ? 'bg-pink-100 text-pink-700' :
+                          ticket.type === 'integration' ? 'bg-amber-100 text-amber-700' :
+                          'bg-gray-100 text-gray-600'
+                        }`}>
                           {ticket.type}
                         </span>
                       </div>
@@ -4720,395 +5775,395 @@ Focus on the key sections and content, making it clean and modern.`;
             )}
 
             {!hasInitialSubmission && (
-              <div
-                className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 scrollbar-hide bg-gray-50"
-                ref={chatMessagesRef}>
-                {chatMessages.map((msg, idx) => {
-                  // Check if this message is from a successful generation
-                  const isGenerationComplete = msg.content.includes('Successfully recreated') ||
-                    msg.content.includes('AI recreation generated!') ||
-                    msg.content.includes('Code generated!');
+            <div
+              className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 scrollbar-hide bg-gray-50"
+              ref={chatMessagesRef}>
+              {chatMessages.map((msg, idx) => {
+                // Check if this message is from a successful generation
+                const isGenerationComplete = msg.content.includes('Successfully recreated') ||
+                  msg.content.includes('AI recreation generated!') ||
+                  msg.content.includes('Code generated!');
 
-                  // Get the files from metadata if this is a completion message
-                  // const completedFiles = msg.metadata?.appliedFiles || [];
+                // Get the files from metadata if this is a completion message
+                // const completedFiles = msg.metadata?.appliedFiles || [];
 
-                  return (
-                    <div key={idx} className="block">
-                      <div className={`flex ${msg.type === 'user' ? 'justify-end' : 'justify-start'}`}>
-                        <div className="block">
-                          <div className={`block rounded-lg px-3 py-2 ${msg.type === 'user' ? 'bg-[#36322F] text-white ml-auto max-w-[80%]' :
-                            msg.type === 'ai' ? 'bg-gray-100 text-gray-900 mr-auto max-w-[80%]' :
-                              msg.type === 'system' ? 'bg-[#36322F] text-white text-sm' :
-                                msg.type === 'command' ? 'bg-[#36322F] text-white font-mono text-sm' :
-                                  msg.type === 'error' ? 'bg-red-900 text-red-100 text-sm border border-red-700' :
-                                    'bg-[#36322F] text-white text-sm'
-                            }`}>
-                            {msg.type === 'command' ? (
-                              <div className="flex items-start gap-2">
-                                <span className={`text-xs ${msg.metadata?.commandType === 'input' ? 'text-blue-400' :
-                                  msg.metadata?.commandType === 'error' ? 'text-red-400' :
-                                    msg.metadata?.commandType === 'success' ? 'text-green-400' :
-                                      'text-gray-400'
-                                  }`}>
-                                  {msg.metadata?.commandType === 'input' ? '$' : '>'}
-                                </span>
-                                <span className="flex-1 whitespace-pre-wrap text-white">{msg.content}</span>
-                              </div>
-                            ) : msg.type === 'error' ? (
-                              <div className="flex items-start gap-3">
-                                <div className="flex-shrink-0">
-                                  <div className="w-8 h-8 bg-red-800 rounded-full flex items-center justify-center">
-                                    <svg className="w-6 h-6 text-red-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                                    </svg>
-                                  </div>
-                                </div>
-                                <div className="flex-1">
-                                  <div className="font-semibold mb-1">Build Errors Detected</div>
-                                  <div className="whitespace-pre-wrap text-sm">{msg.content}</div>
-                                  <div className="mt-2 text-xs opacity-70">Press 'F' or click the Fix button above to resolve</div>
+                return (
+                  <div key={idx} className="block">
+                    <div className={`flex ${msg.type === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      <div className="block">
+                        <div className={`block rounded-lg px-3 py-2 ${msg.type === 'user' ? 'bg-[#36322F] text-white ml-auto max-w-[80%]' :
+                          msg.type === 'ai' ? 'bg-gray-100 text-gray-900 mr-auto max-w-[80%]' :
+                            msg.type === 'system' ? 'bg-[#36322F] text-white text-sm' :
+                              msg.type === 'command' ? 'bg-[#36322F] text-white font-mono text-sm' :
+                                msg.type === 'error' ? 'bg-red-900 text-red-100 text-sm border border-red-700' :
+                                  'bg-[#36322F] text-white text-sm'
+                          }`}>
+                          {msg.type === 'command' ? (
+                            <div className="flex items-start gap-2">
+                              <span className={`text-xs ${msg.metadata?.commandType === 'input' ? 'text-blue-400' :
+                                msg.metadata?.commandType === 'error' ? 'text-red-400' :
+                                  msg.metadata?.commandType === 'success' ? 'text-green-400' :
+                                    'text-gray-400'
+                                }`}>
+                                {msg.metadata?.commandType === 'input' ? '$' : '>'}
+                              </span>
+                              <span className="flex-1 whitespace-pre-wrap text-white">{msg.content}</span>
+                            </div>
+                          ) : msg.type === 'error' ? (
+                            <div className="flex items-start gap-3">
+                              <div className="flex-shrink-0">
+                                <div className="w-8 h-8 bg-red-800 rounded-full flex items-center justify-center">
+                                  <svg className="w-6 h-6 text-red-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                  </svg>
                                 </div>
                               </div>
-                            ) : (
-                              <span className="text-sm">{msg.content}</span>
-                            )}
-                          </div>
+                              <div className="flex-1">
+                                <div className="font-semibold mb-1">Build Errors Detected</div>
+                                <div className="whitespace-pre-wrap text-sm">{msg.content}</div>
+                                <div className="mt-2 text-xs opacity-70">Press 'F' or click the Fix button above to resolve</div>
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="text-sm">{msg.content}</span>
+                          )}
+                        </div>
 
-                          {/* Show branding data if this is a brand extraction message */}
-                          {msg.metadata?.brandingData && (
-                            <div className="mt-3 bg-gradient-to-br from-gray-50 to-white border-2 border-gray-200 rounded-xl overflow-hidden max-w-[500px] shadow-sm">
-                              <div className="bg-[#36322F] px-4 py-3">
-                                <div className="flex items-center gap-2">
-                                  <Image
-                                    src={`https://www.google.com/s2/favicons?domain=${msg.metadata.sourceUrl}&sz=32`}
-                                    alt=""
-                                    width={32}
-                                    height={32}
-                                    className="w-8 h-8"
-                                  />
-                                  <div className="text-sm font-semibold text-white">
-                                    Brand Guidelines
-                                  </div>
+                        {/* Show branding data if this is a brand extraction message */}
+                        {msg.metadata?.brandingData && (
+                          <div className="mt-3 bg-gradient-to-br from-gray-50 to-white border-2 border-gray-200 rounded-xl overflow-hidden max-w-[500px] shadow-sm">
+                            <div className="bg-[#36322F] px-4 py-3">
+                              <div className="flex items-center gap-2">
+                                <Image
+                                  src={`https://www.google.com/s2/favicons?domain=${msg.metadata.sourceUrl}&sz=32`}
+                                  alt=""
+                                  width={32}
+                                  height={32}
+                                  className="w-8 h-8"
+                                />
+                                <div className="text-sm font-semibold text-white">
+                                  Brand Guidelines
                                 </div>
                               </div>
+                            </div>
 
-                              <div className="p-4">
-                                {/* Color Scheme Mode */}
-                                {msg.metadata.brandingData.colorScheme && (
-                                  <div className="mb-4">
-                                    <div className="text-sm">
-                                      <span className="text-gray-600 font-medium">Mode:</span>{' '}
-                                      <span className="font-semibold text-gray-900 capitalize">{msg.metadata.brandingData.colorScheme}</span>
-                                    </div>
+                            <div className="p-4">
+                              {/* Color Scheme Mode */}
+                              {msg.metadata.brandingData.colorScheme && (
+                                <div className="mb-4">
+                                  <div className="text-sm">
+                                    <span className="text-gray-600 font-medium">Mode:</span>{' '}
+                                    <span className="font-semibold text-gray-900 capitalize">{msg.metadata.brandingData.colorScheme}</span>
                                   </div>
-                                )}
+                                </div>
+                              )}
 
-                                {/* Colors */}
-                                {msg.metadata.brandingData.colors && (
-                                  <div className="mb-4">
-                                    <div className="text-sm font-semibold text-gray-900 mb-2">Colors</div>
-                                    <div className="flex flex-wrap gap-3">
-                                      {msg.metadata.brandingData.colors.primary && (
-                                        <div className="flex items-center gap-2">
-                                          <div className="w-8 h-8 rounded border border-gray-300" style={{ backgroundColor: msg.metadata.brandingData.colors.primary }} />
-                                          <div className="text-sm">
-                                            <div className="font-semibold text-gray-900">Primary</div>
-                                            <div className="text-gray-600 font-mono text-xs">{msg.metadata.brandingData.colors.primary}</div>
-                                          </div>
+                              {/* Colors */}
+                              {msg.metadata.brandingData.colors && (
+                                <div className="mb-4">
+                                  <div className="text-sm font-semibold text-gray-900 mb-2">Colors</div>
+                                  <div className="flex flex-wrap gap-3">
+                                    {msg.metadata.brandingData.colors.primary && (
+                                      <div className="flex items-center gap-2">
+                                        <div className="w-8 h-8 rounded border border-gray-300" style={{ backgroundColor: msg.metadata.brandingData.colors.primary }} />
+                                        <div className="text-sm">
+                                          <div className="font-semibold text-gray-900">Primary</div>
+                                          <div className="text-gray-600 font-mono text-xs">{msg.metadata.brandingData.colors.primary}</div>
                                         </div>
-                                      )}
-                                      {msg.metadata.brandingData.colors.accent && (
-                                        <div className="flex items-center gap-2">
-                                          <div className="w-8 h-8 rounded border border-gray-300" style={{ backgroundColor: msg.metadata.brandingData.colors.accent }} />
-                                          <div className="text-sm">
-                                            <div className="font-semibold text-gray-900">Accent</div>
-                                            <div className="text-gray-600 font-mono text-xs">{msg.metadata.brandingData.colors.accent}</div>
-                                          </div>
+                                      </div>
+                                    )}
+                                    {msg.metadata.brandingData.colors.accent && (
+                                      <div className="flex items-center gap-2">
+                                        <div className="w-8 h-8 rounded border border-gray-300" style={{ backgroundColor: msg.metadata.brandingData.colors.accent }} />
+                                        <div className="text-sm">
+                                          <div className="font-semibold text-gray-900">Accent</div>
+                                          <div className="text-gray-600 font-mono text-xs">{msg.metadata.brandingData.colors.accent}</div>
                                         </div>
-                                      )}
-                                      {msg.metadata.brandingData.colors.background && (
-                                        <div className="flex items-center gap-2">
-                                          <div className="w-8 h-8 rounded border border-gray-300" style={{ backgroundColor: msg.metadata.brandingData.colors.background }} />
-                                          <div className="text-sm">
-                                            <div className="font-semibold text-gray-900">Background</div>
-                                            <div className="text-gray-600 font-mono text-xs">{msg.metadata.brandingData.colors.background}</div>
-                                          </div>
+                                      </div>
+                                    )}
+                                    {msg.metadata.brandingData.colors.background && (
+                                      <div className="flex items-center gap-2">
+                                        <div className="w-8 h-8 rounded border border-gray-300" style={{ backgroundColor: msg.metadata.brandingData.colors.background }} />
+                                        <div className="text-sm">
+                                          <div className="font-semibold text-gray-900">Background</div>
+                                          <div className="text-gray-600 font-mono text-xs">{msg.metadata.brandingData.colors.background}</div>
                                         </div>
-                                      )}
-                                      {msg.metadata.brandingData.colors.textPrimary && (
-                                        <div className="flex items-center gap-2">
-                                          <div className="w-8 h-8 rounded border border-gray-300" style={{ backgroundColor: msg.metadata.brandingData.colors.textPrimary }} />
-                                          <div className="text-sm">
-                                            <div className="font-semibold text-gray-900">Text</div>
-                                            <div className="text-gray-600 font-mono text-xs">{msg.metadata.brandingData.colors.textPrimary}</div>
-                                          </div>
+                                      </div>
+                                    )}
+                                    {msg.metadata.brandingData.colors.textPrimary && (
+                                      <div className="flex items-center gap-2">
+                                        <div className="w-8 h-8 rounded border border-gray-300" style={{ backgroundColor: msg.metadata.brandingData.colors.textPrimary }} />
+                                        <div className="text-sm">
+                                          <div className="font-semibold text-gray-900">Text</div>
+                                          <div className="text-gray-600 font-mono text-xs">{msg.metadata.brandingData.colors.textPrimary}</div>
                                         </div>
-                                      )}
-                                    </div>
+                                      </div>
+                                    )}
                                   </div>
-                                )}
+                                </div>
+                              )}
 
-                                {/* Typography */}
-                                {msg.metadata.brandingData.typography && (
-                                  <div className="mb-4">
-                                    <div className="text-sm font-semibold text-gray-900 mb-2">Typography</div>
-                                    <div className="grid grid-cols-2 gap-3 text-sm">
-                                      {msg.metadata.brandingData.typography.fontFamilies?.primary && (
-                                        <div>
-                                          <span className="text-gray-600 font-medium">Primary:</span>{' '}
-                                          <span className="font-semibold text-gray-900">{msg.metadata.brandingData.typography.fontFamilies.primary}</span>
-                                        </div>
-                                      )}
-                                      {msg.metadata.brandingData.typography.fontFamilies?.heading && (
-                                        <div>
-                                          <span className="text-gray-600 font-medium">Heading:</span>{' '}
-                                          <span className="font-semibold text-gray-900">{msg.metadata.brandingData.typography.fontFamilies.heading}</span>
-                                        </div>
-                                      )}
-                                      {msg.metadata.brandingData.typography.fontSizes?.h1 && (
-                                        <div>
-                                          <span className="text-gray-600 font-medium">H1 Size:</span>{' '}
-                                          <span className="font-semibold text-gray-900">{msg.metadata.brandingData.typography.fontSizes.h1}</span>
-                                        </div>
-                                      )}
-                                      {msg.metadata.brandingData.typography.fontSizes?.h2 && (
-                                        <div>
-                                          <span className="text-gray-600 font-medium">H2 Size:</span>{' '}
-                                          <span className="font-semibold text-gray-900">{msg.metadata.brandingData.typography.fontSizes.h2}</span>
-                                        </div>
-                                      )}
-                                      {msg.metadata.brandingData.typography.fontSizes?.body && (
-                                        <div>
-                                          <span className="text-gray-600 font-medium">Body Size:</span>{' '}
-                                          <span className="font-semibold text-gray-900">{msg.metadata.brandingData.typography.fontSizes.body}</span>
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-                                )}
-
-                                {/* Spacing */}
-                                {msg.metadata.brandingData.spacing && (
-                                  <div className="mb-4">
-                                    <div className="text-sm font-semibold text-gray-900 mb-2">Spacing</div>
-                                    <div className="flex flex-wrap gap-4 text-sm">
-                                      {msg.metadata.brandingData.spacing.baseUnit && (
-                                        <div>
-                                          <span className="text-gray-600 font-medium">Base Unit:</span>{' '}
-                                          <span className="font-semibold text-gray-900">{msg.metadata.brandingData.spacing.baseUnit}px</span>
-                                        </div>
-                                      )}
-                                      {msg.metadata.brandingData.spacing.borderRadius && (
-                                        <div>
-                                          <span className="text-gray-600 font-medium">Border Radius:</span>{' '}
-                                          <span className="font-semibold text-gray-900">{msg.metadata.brandingData.spacing.borderRadius}</span>
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-                                )}
-
-                                {/* Button Styles */}
-                                {msg.metadata.brandingData.components?.buttonPrimary && (
-                                  <div className="mb-4">
-                                    <div className="text-sm font-semibold text-gray-900 mb-2">Button Styles</div>
-                                    <div className="flex flex-wrap gap-3">
+                              {/* Typography */}
+                              {msg.metadata.brandingData.typography && (
+                                <div className="mb-4">
+                                  <div className="text-sm font-semibold text-gray-900 mb-2">Typography</div>
+                                  <div className="grid grid-cols-2 gap-3 text-sm">
+                                    {msg.metadata.brandingData.typography.fontFamilies?.primary && (
                                       <div>
-                                        <div className="text-xs text-gray-600 mb-1.5 font-medium">Primary Button</div>
+                                        <span className="text-gray-600 font-medium">Primary:</span>{' '}
+                                        <span className="font-semibold text-gray-900">{msg.metadata.brandingData.typography.fontFamilies.primary}</span>
+                                      </div>
+                                    )}
+                                    {msg.metadata.brandingData.typography.fontFamilies?.heading && (
+                                      <div>
+                                        <span className="text-gray-600 font-medium">Heading:</span>{' '}
+                                        <span className="font-semibold text-gray-900">{msg.metadata.brandingData.typography.fontFamilies.heading}</span>
+                                      </div>
+                                    )}
+                                    {msg.metadata.brandingData.typography.fontSizes?.h1 && (
+                                      <div>
+                                        <span className="text-gray-600 font-medium">H1 Size:</span>{' '}
+                                        <span className="font-semibold text-gray-900">{msg.metadata.brandingData.typography.fontSizes.h1}</span>
+                                      </div>
+                                    )}
+                                    {msg.metadata.brandingData.typography.fontSizes?.h2 && (
+                                      <div>
+                                        <span className="text-gray-600 font-medium">H2 Size:</span>{' '}
+                                        <span className="font-semibold text-gray-900">{msg.metadata.brandingData.typography.fontSizes.h2}</span>
+                                      </div>
+                                    )}
+                                    {msg.metadata.brandingData.typography.fontSizes?.body && (
+                                      <div>
+                                        <span className="text-gray-600 font-medium">Body Size:</span>{' '}
+                                        <span className="font-semibold text-gray-900">{msg.metadata.brandingData.typography.fontSizes.body}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Spacing */}
+                              {msg.metadata.brandingData.spacing && (
+                                <div className="mb-4">
+                                  <div className="text-sm font-semibold text-gray-900 mb-2">Spacing</div>
+                                  <div className="flex flex-wrap gap-4 text-sm">
+                                    {msg.metadata.brandingData.spacing.baseUnit && (
+                                      <div>
+                                        <span className="text-gray-600 font-medium">Base Unit:</span>{' '}
+                                        <span className="font-semibold text-gray-900">{msg.metadata.brandingData.spacing.baseUnit}px</span>
+                                      </div>
+                                    )}
+                                    {msg.metadata.brandingData.spacing.borderRadius && (
+                                      <div>
+                                        <span className="text-gray-600 font-medium">Border Radius:</span>{' '}
+                                        <span className="font-semibold text-gray-900">{msg.metadata.brandingData.spacing.borderRadius}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Button Styles */}
+                              {msg.metadata.brandingData.components?.buttonPrimary && (
+                                <div className="mb-4">
+                                  <div className="text-sm font-semibold text-gray-900 mb-2">Button Styles</div>
+                                  <div className="flex flex-wrap gap-3">
+                                    <div>
+                                      <div className="text-xs text-gray-600 mb-1.5 font-medium">Primary Button</div>
+                                      <button
+                                        className="px-4 py-2 text-sm font-medium"
+                                        style={{
+                                          backgroundColor: msg.metadata.brandingData.components.buttonPrimary.background,
+                                          color: msg.metadata.brandingData.components.buttonPrimary.textColor,
+                                          borderRadius: msg.metadata.brandingData.components.buttonPrimary.borderRadius,
+                                          boxShadow: msg.metadata.brandingData.components.buttonPrimary.shadow
+                                        }}
+                                      >
+                                        Sample Button
+                                      </button>
+                                    </div>
+                                    {msg.metadata.brandingData.components?.buttonSecondary && (
+                                      <div>
+                                        <div className="text-xs text-gray-600 mb-1.5 font-medium">Secondary Button</div>
                                         <button
                                           className="px-4 py-2 text-sm font-medium"
                                           style={{
-                                            backgroundColor: msg.metadata.brandingData.components.buttonPrimary.background,
-                                            color: msg.metadata.brandingData.components.buttonPrimary.textColor,
-                                            borderRadius: msg.metadata.brandingData.components.buttonPrimary.borderRadius,
-                                            boxShadow: msg.metadata.brandingData.components.buttonPrimary.shadow
+                                            backgroundColor: msg.metadata.brandingData.components.buttonSecondary.background,
+                                            color: msg.metadata.brandingData.components.buttonSecondary.textColor,
+                                            borderRadius: msg.metadata.brandingData.components.buttonSecondary.borderRadius,
+                                            boxShadow: msg.metadata.brandingData.components.buttonSecondary.shadow
                                           }}
                                         >
                                           Sample Button
                                         </button>
                                       </div>
-                                      {msg.metadata.brandingData.components?.buttonSecondary && (
-                                        <div>
-                                          <div className="text-xs text-gray-600 mb-1.5 font-medium">Secondary Button</div>
-                                          <button
-                                            className="px-4 py-2 text-sm font-medium"
-                                            style={{
-                                              backgroundColor: msg.metadata.brandingData.components.buttonSecondary.background,
-                                              color: msg.metadata.brandingData.components.buttonSecondary.textColor,
-                                              borderRadius: msg.metadata.brandingData.components.buttonSecondary.borderRadius,
-                                              boxShadow: msg.metadata.brandingData.components.buttonSecondary.shadow
-                                            }}
-                                          >
-                                            Sample Button
-                                          </button>
-                                        </div>
-                                      )}
-                                    </div>
+                                    )}
                                   </div>
-                                )}
+                                </div>
+                              )}
 
-                                {/* Personality */}
-                                {msg.metadata.brandingData.personality && (
-                                  <div className="text-sm">
-                                    <span className="text-gray-600 font-medium">Personality:</span>{' '}
-                                    <span className="font-semibold text-gray-900 capitalize">
-                                      {msg.metadata.brandingData.personality.tone} tone, {msg.metadata.brandingData.personality.energy} energy
-                                    </span>
-                                  </div>
-                                )}
+                              {/* Personality */}
+                              {msg.metadata.brandingData.personality && (
+                                <div className="text-sm">
+                                  <span className="text-gray-600 font-medium">Personality:</span>{' '}
+                                  <span className="font-semibold text-gray-900 capitalize">
+                                    {msg.metadata.brandingData.personality.tone} tone, {msg.metadata.brandingData.personality.energy} energy
+                                  </span>
+                                </div>
+                              )}
 
-                                {/* Target Audience */}
-                                {msg.metadata.brandingData.personality?.targetAudience && (
-                                  <div className="text-sm mt-8">
-                                    <span className="text-gray-600 font-medium">Target:</span>{' '}
-                                    <span className="text-gray-900">{msg.metadata.brandingData.personality.targetAudience}</span>
-                                  </div>
-                                )}
-                              </div>
+                              {/* Target Audience */}
+                              {msg.metadata.brandingData.personality?.targetAudience && (
+                                <div className="text-sm mt-8">
+                                  <span className="text-gray-600 font-medium">Target:</span>{' '}
+                                  <span className="text-gray-900">{msg.metadata.brandingData.personality.targetAudience}</span>
+                                </div>
+                              )}
                             </div>
-                          )}
+                          </div>
+                        )}
 
-                          {/* Show applied files if this is an apply success message */}
-                          {msg.metadata?.appliedFiles && msg.metadata.appliedFiles.length > 0 && (
-                            <div className="mt-3 inline-block bg-gray-100 rounded-lg p-3">
-                              <div className="text-sm font-medium mb-3 text-gray-700">
-                                {msg.content.includes('Applied') ? 'Files Updated:' : 'Generated Files:'}
-                              </div>
-                              <div className="flex flex-wrap items-start gap-2">
-                                {msg.metadata.appliedFiles.map((filePath, fileIdx) => {
-                                  const fileName = filePath.split('/').pop() || filePath;
-                                  const fileExt = fileName.split('.').pop() || '';
-                                  const fileType = fileExt === 'jsx' || fileExt === 'js' ? 'javascript' :
-                                    fileExt === 'css' ? 'css' :
-                                      fileExt === 'json' ? 'json' : 'text';
-
-                                  return (
-                                    <div
-                                      key={`applied-${fileIdx}`}
-                                      className="inline-flex items-center gap-1.5 px-2 py-1 bg-[#36322F] text-white rounded-md text-sm animate-fade-in-up"
-                                      style={{ animationDelay: `${fileIdx * 30}ms` }}
-                                    >
-                                      <span className={`inline-block w-1.5 h-1.5 rounded-full ${fileType === 'css' ? 'bg-blue-400' :
-                                        fileType === 'javascript' ? 'bg-yellow-400' :
-                                          fileType === 'json' ? 'bg-green-400' :
-                                            'bg-gray-400'
-                                        }`} />
-                                      {fileName}
-                                    </div>
-                                  );
-                                })}
-                              </div>
+                        {/* Show applied files if this is an apply success message */}
+                        {msg.metadata?.appliedFiles && msg.metadata.appliedFiles.length > 0 && (
+                          <div className="mt-3 inline-block bg-gray-100 rounded-lg p-3">
+                            <div className="text-sm font-medium mb-3 text-gray-700">
+                              {msg.content.includes('Applied') ? 'Files Updated:' : 'Generated Files:'}
                             </div>
-                          )}
+                            <div className="flex flex-wrap items-start gap-2">
+                              {msg.metadata.appliedFiles.map((filePath, fileIdx) => {
+                                const fileName = filePath.split('/').pop() || filePath;
+                                const fileExt = fileName.split('.').pop() || '';
+                                const fileType = fileExt === 'jsx' || fileExt === 'js' ? 'javascript' :
+                                  fileExt === 'css' ? 'css' :
+                                    fileExt === 'json' ? 'json' : 'text';
 
-                          {/* Show generated files for completion messages - but only if no appliedFiles already shown */}
-                          {isGenerationComplete && generationProgress.files.length > 0 && idx === chatMessages.length - 1 && !msg.metadata?.appliedFiles && !chatMessages.some(m => m.metadata?.appliedFiles) && (
-                            <div className="mt-2 inline-block bg-gray-100 rounded-[10px] p-3">
-                              <div className="text-xs font-medium mb-1 text-gray-700">Generated Files:</div>
-                              <div className="flex flex-wrap items-start gap-1">
-                                {generationProgress.files.map((file, fileIdx) => (
+                                return (
                                   <div
-                                    key={`complete-${fileIdx}`}
-                                    className="inline-flex items-center gap-1.5 px-2 py-1 bg-[#36322F] text-white rounded-md text-xs animate-fade-in-up"
+                                    key={`applied-${fileIdx}`}
+                                    className="inline-flex items-center gap-1.5 px-2 py-1 bg-[#36322F] text-white rounded-md text-sm animate-fade-in-up"
                                     style={{ animationDelay: `${fileIdx * 30}ms` }}
                                   >
-                                    <span className={`inline-block w-1.5 h-1.5 rounded-full ${file.type === 'css' ? 'bg-blue-400' :
-                                      file.type === 'javascript' ? 'bg-yellow-400' :
-                                        file.type === 'json' ? 'bg-green-400' :
+                                    <span className={`inline-block w-1.5 h-1.5 rounded-full ${fileType === 'css' ? 'bg-blue-400' :
+                                      fileType === 'javascript' ? 'bg-yellow-400' :
+                                        fileType === 'json' ? 'bg-green-400' :
                                           'bg-gray-400'
                                       }`} />
-                                    {file.path.split('/').pop()}
+                                    {fileName}
                                   </div>
-                                ))}
-                              </div>
+                                );
+                              })}
                             </div>
-                          )}
-                        </div>
+                          </div>
+                        )}
+
+                        {/* Show generated files for completion messages - but only if no appliedFiles already shown */}
+                        {isGenerationComplete && generationProgress.files.length > 0 && idx === chatMessages.length - 1 && !msg.metadata?.appliedFiles && !chatMessages.some(m => m.metadata?.appliedFiles) && (
+                          <div className="mt-2 inline-block bg-gray-100 rounded-[10px] p-3">
+                            <div className="text-xs font-medium mb-1 text-gray-700">Generated Files:</div>
+                            <div className="flex flex-wrap items-start gap-1">
+                              {generationProgress.files.map((file, fileIdx) => (
+                                <div
+                                  key={`complete-${fileIdx}`}
+                                  className="inline-flex items-center gap-1.5 px-2 py-1 bg-[#36322F] text-white rounded-md text-xs animate-fade-in-up"
+                                  style={{ animationDelay: `${fileIdx * 30}ms` }}
+                                >
+                                  <span className={`inline-block w-1.5 h-1.5 rounded-full ${file.type === 'css' ? 'bg-blue-400' :
+                                    file.type === 'javascript' ? 'bg-yellow-400' :
+                                      file.type === 'json' ? 'bg-green-400' :
+                                        'bg-gray-400'
+                                    }`} />
+                                  {file.path.split('/').pop()}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
-                  );
-                })}
+                  </div>
+                );
+              })}
 
-                {/* Code application progress */}
-                {codeApplicationState.stage && (
-                  <CodeApplicationProgress state={codeApplicationState} />
-                )}
+              {/* Code application progress */}
+              {codeApplicationState.stage && (
+                <CodeApplicationProgress state={codeApplicationState} />
+              )}
 
-                {/* File generation progress - inline display (during generation) */}
-                {generationProgress.isGenerating && (
-                  <div className="inline-block bg-gray-100 rounded-lg p-3">
-                    <div className="text-sm font-medium mb-2 text-gray-700">
-                      {generationProgress.status}
-                    </div>
-                    <div className="flex flex-wrap items-start gap-1">
-                      {/* Show completed files */}
-                      {generationProgress.files.map((file, idx) => (
-                        <div
-                          key={`file-${idx}`}
-                          className="inline-flex items-center gap-1.5 px-2 py-1 bg-[#36322F] text-white rounded-md text-xs animate-fade-in-up"
-                          style={{ animationDelay: `${idx * 30}ms` }}
-                        >
-                          <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                          </svg>
-                          {file.path.split('/').pop()}
-                        </div>
-                      ))}
-
-                      {/* Show current file being generated */}
-                      {generationProgress.currentFile && (
-                        <div className="flex items-center gap-1 px-2 py-1 bg-[#36322F]/70 text-white rounded-[10px] text-sm animate-pulse"
-                          style={{ animationDelay: `${generationProgress.files.length * 30}ms` }}>
-                          <div className="w-16 h-16 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                          {generationProgress.currentFile.path.split('/').pop()}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Live streaming response display */}
-                    {generationProgress.streamedCode && (
-                      <motion.div
-                        initial={{ opacity: 0, height: 0 }}
-                        animate={{ opacity: 1, height: 'auto' }}
-                        exit={{ opacity: 0, height: 0 }}
-                        transition={{ duration: 0.3 }}
-                        className="mt-3 border-t border-gray-300 pt-3"
+              {/* File generation progress - inline display (during generation) */}
+              {generationProgress.isGenerating && (
+                <div className="inline-block bg-gray-100 rounded-lg p-3">
+                  <div className="text-sm font-medium mb-2 text-gray-700">
+                    {generationProgress.status}
+                  </div>
+                  <div className="flex flex-wrap items-start gap-1">
+                    {/* Show completed files */}
+                    {generationProgress.files.map((file, idx) => (
+                      <div
+                        key={`file-${idx}`}
+                        className="inline-flex items-center gap-1.5 px-2 py-1 bg-[#36322F] text-white rounded-md text-xs animate-fade-in-up"
+                        style={{ animationDelay: `${idx * 30}ms` }}
                       >
-                        <div className="flex items-center gap-2 mb-2">
-                          <div className="flex items-center gap-1">
-                            <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse" />
-                            <span className="text-xs font-medium text-gray-600">AI Response Stream</span>
-                          </div>
-                          <div className="flex-1 h-px bg-gradient-to-r from-gray-300 to-transparent" />
-                        </div>
-                        <div className="bg-gray-900 border border-gray-700 rounded max-h-128 overflow-y-auto scrollbar-hide">
-                          <SyntaxHighlighter
-                            language="jsx"
-                            style={vscDarkPlus}
-                            customStyle={{
-                              margin: 0,
-                              padding: '0.75rem',
-                              fontSize: '11px',
-                              lineHeight: '1.5',
-                              background: 'transparent',
-                              maxHeight: '8rem',
-                              overflow: 'hidden'
-                            }}
-                          >
-                            {(() => {
-                              const lastContent = generationProgress.streamedCode.slice(-1000);
-                              // Show the last part of the stream, starting from a complete tag if possible
-                              const startIndex = lastContent.indexOf('<');
-                              return startIndex !== -1 ? lastContent.slice(startIndex) : lastContent;
-                            })()}
-                          </SyntaxHighlighter>
-                          <span className="inline-block w-3 h-4 bg-orange-400 ml-3 mb-3 animate-pulse" />
-                        </div>
-                      </motion.div>
+                        <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                        </svg>
+                        {file.path.split('/').pop()}
+                      </div>
+                    ))}
+
+                    {/* Show current file being generated */}
+                    {generationProgress.currentFile && (
+                      <div className="flex items-center gap-1 px-2 py-1 bg-[#36322F]/70 text-white rounded-[10px] text-sm animate-pulse"
+                        style={{ animationDelay: `${generationProgress.files.length * 30}ms` }}>
+                        <div className="w-16 h-16 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        {generationProgress.currentFile.path.split('/').pop()}
+                      </div>
                     )}
                   </div>
-                )}
-              </div>
+
+                  {/* Live streaming response display */}
+                  {generationProgress.streamedCode && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.3 }}
+                      className="mt-3 border-t border-gray-300 pt-3"
+                    >
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className="flex items-center gap-1">
+                          <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse" />
+                          <span className="text-xs font-medium text-gray-600">AI Response Stream</span>
+                        </div>
+                        <div className="flex-1 h-px bg-gradient-to-r from-gray-300 to-transparent" />
+                      </div>
+                      <div className="bg-gray-900 border border-gray-700 rounded max-h-128 overflow-y-auto scrollbar-hide">
+                        <SyntaxHighlighter
+                          language="jsx"
+                          style={vscDarkPlus}
+                          customStyle={{
+                            margin: 0,
+                            padding: '0.75rem',
+                            fontSize: '11px',
+                            lineHeight: '1.5',
+                            background: 'transparent',
+                            maxHeight: '8rem',
+                            overflow: 'hidden'
+                          }}
+                        >
+                          {(() => {
+                            const lastContent = generationProgress.streamedCode.slice(-1000);
+                            // Show the last part of the stream, starting from a complete tag if possible
+                            const startIndex = lastContent.indexOf('<');
+                            return startIndex !== -1 ? lastContent.slice(startIndex) : lastContent;
+                          })()}
+                        </SyntaxHighlighter>
+                        <span className="inline-block w-3 h-4 bg-orange-400 ml-3 mb-3 animate-pulse" />
+                      </div>
+                    </motion.div>
+                  )}
+                </div>
+              )}
+            </div>
             )}
 
             {/* Suggested follow-up actions after generation */}
@@ -5266,28 +6321,6 @@ Focus on the key sections and content, making it clean and modern.`;
                   </div>
                 )}
 
-                {/* Code Review Button - shows when review is available */}
-                {bugbot.lastReview && (
-                  <button
-                    onClick={() => setShowCodeReview(true)}
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all ${bugbot.lastReview.passed
-                        ? 'bg-green-100 border border-green-200 text-green-700 hover:bg-green-200'
-                        : 'bg-amber-100 border border-amber-200 text-amber-700 hover:bg-amber-200'
-                      }`}
-                    title="View code review results"
-                  >
-                    <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    Review
-                    {!bugbot.lastReview.passed && (
-                      <span className="px-1.5 py-0.5 text-[10px] bg-amber-200 text-amber-800 rounded-full">
-                        {bugbot.lastReview.issues.length}
-                      </span>
-                    )}
-                  </button>
-                )}
-
                 {/* Sandbox Status Indicator */}
                 {sandboxData && (
                   <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-gray-100 border border-gray-200 rounded-md text-xs font-medium text-gray-700">
@@ -5355,19 +6388,56 @@ Focus on the key sections and content, making it clean and modern.`;
 
           {showVersionHistory && (
             <div className="w-[280px] border-l border-gray-200 bg-gray-900 flex-shrink-0 overflow-hidden">
-              <VersionHistoryPanel
-                versions={versioning.versions}
-                currentVersionId={versioning.currentProject?.currentVersionId}
-                onRestore={async (versionId) => {
-                  const files = await versioning.restoreVersion(versionId);
-                  if (files && sandboxData) {
-                    const code = files.map(f => `<file path="${f.path}">${f.content}</file>`).join('\n');
-                    await applyGeneratedCode(code, false);
-                    addChatMessage('Version restored successfully!', 'system');
-                  }
-                }}
-                className="h-full"
-              />
+              <div className="flex items-center gap-1 px-2 py-2 border-b border-gray-800">
+                <button
+                  onClick={() => setVersionHistoryTab('plan')}
+                  className={`flex-1 text-xs px-2 py-1.5 rounded transition-colors ${
+                    versionHistoryTab === 'plan'
+                      ? 'bg-orange-600 text-white'
+                      : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
+                  }`}
+                >
+                  Plan
+                </button>
+                <button
+                  onClick={() => setVersionHistoryTab('code')}
+                  className={`flex-1 text-xs px-2 py-1.5 rounded transition-colors ${
+                    versionHistoryTab === 'code'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
+                  }`}
+                >
+                  Code
+                </button>
+              </div>
+
+              {versionHistoryTab === 'plan' ? (
+                <PlanVersionHistoryPanel
+                  versions={planVersions.versions}
+                  currentTickets={kanban.tickets}
+                  isLoading={planVersions.isLoading}
+                  error={planVersions.error}
+                  onRefresh={planVersions.refresh}
+                  onCreateSnapshot={handleCreateManualPlanSnapshot}
+                  onRestore={handleRestorePlanSnapshot}
+                  restoreDisabled={kanbanBuildActive}
+                  className="h-full"
+                />
+              ) : (
+                <VersionHistoryPanel
+                  versions={versioning.versions}
+                  currentVersionId={versioning.currentProject?.currentVersionId}
+                  onRestore={async (versionId) => {
+                    const files = await versioning.restoreVersion(versionId);
+                    if (files && sandboxData) {
+                      const code = files.map(f => `<file path="${f.path}">${f.content}</file>`).join('\n');
+                      await applyGeneratedCode(code, false);
+                      addChatMessage('Version restored successfully!', 'system');
+                    }
+                  }}
+                  className="h-full"
+                />
+              )}
             </div>
           )}
         </div>
@@ -5409,6 +6479,9 @@ Focus on the key sections and content, making it clean and modern.`;
             onCancel={handleRegressionCancel}
           />
         )}
+
+        {/* Load Repo Into Sandbox Progress Modal */}
+        {renderRepoLoadModal()}
 
         {/* Fullscreen Preview Modal */}
         {isFullscreenPreview && sandboxData?.url && (
@@ -5463,38 +6536,6 @@ Focus on the key sections and content, making it clean and modern.`;
               </div>
             </div>
           </div>
-        )}
-
-        {/* Error Correction Agent - monitors sandbox for errors and auto-fixes */}
-        {sandboxData && autoFixEnabled && (
-          <>
-            <ErrorCorrectionAgent
-              iframeRef={iframeRef}
-              sandboxId={sandboxData.sandboxId}
-              enabled={autoFixEnabled}
-              maxRetries={3}
-              onFixApplied={(file, success) => {
-                if (success) {
-                  addChatMessage(`Auto-fixed error in ${file}`, 'system');
-                } else {
-                  addChatMessage(`Could not auto-fix error in ${file}. Manual intervention may be needed.`, 'error');
-                }
-              }}
-              onStatusChange={setAutoFixStatus}
-            />
-            <HMRErrorDetector
-              iframeRef={iframeRef}
-              enableAutoFix={autoFixEnabled}
-              onErrorDetected={(errors) => {
-                errors.forEach(error => {
-                  if (error.type === 'npm-missing' && error.package) {
-                    addChatMessage(`Missing package detected: ${error.package}. Installing...`, 'system');
-                    checkAndInstallPackages();
-                  }
-                });
-              }}
-            />
-          </>
         )}
 
       </div>

@@ -90,11 +90,31 @@ declare global {
 
 export async function POST(request: NextRequest) {
   try {
-    const { prompt, model: requestedModel = 'openai/gpt-oss-20b', context, isEdit = false } = await request.json();
+    const {
+      prompt,
+      model: requestedModel = 'openai/gpt-oss-20b',
+      context,
+      isEdit = false,
+      buildProfile: requestedBuildProfile
+    } = await request.json();
+
+    type BuildProfile = 'full_build' | 'surgical_edit' | 'implement_ticket' | 'fix_validation' | 'scaffold';
+
+    const buildProfile: BuildProfile =
+      requestedBuildProfile === 'surgical_edit' ||
+      requestedBuildProfile === 'implement_ticket' ||
+      requestedBuildProfile === 'fix_validation' ||
+      requestedBuildProfile === 'scaffold' ||
+      requestedBuildProfile === 'full_build'
+        ? requestedBuildProfile
+        : (isEdit ? 'surgical_edit' : 'full_build');
+
+    const isSurgicalEdit = Boolean(isEdit && buildProfile === 'surgical_edit');
+    const isPlannedBuildStep = Boolean(isEdit && buildProfile !== 'surgical_edit');
     
     // OPTIMIZATION: Smart model selection - use faster models for edits
     let model = requestedModel;
-    if (isEdit && !requestedModel.includes('claude') && process.env.GROQ_API_KEY) {
+    if (isSurgicalEdit && !requestedModel.includes('claude') && process.env.GROQ_API_KEY) {
       // For simple edits, prefer Kimi K2 on Groq (fastest for edits)
       const isSimpleEdit = prompt.length < 200 && 
         /\b(change|update|fix|modify|add|remove|delete|color|text|style|button|header|footer|nav)\b/i.test(prompt);
@@ -107,6 +127,7 @@ export async function POST(request: NextRequest) {
     console.log('[generate-ai-code-stream] Received request:');
     console.log('[generate-ai-code-stream] - prompt:', prompt);
     console.log('[generate-ai-code-stream] - isEdit:', isEdit);
+    console.log('[generate-ai-code-stream] - buildProfile:', buildProfile);
     console.log('[generate-ai-code-stream] - requestedModel:', requestedModel);
     console.log('[generate-ai-code-stream] - actualModel:', model);
     console.log('[generate-ai-code-stream] - context.sandboxId:', context?.sandboxId);
@@ -198,7 +219,7 @@ export async function POST(request: NextRequest) {
         let editContext = null;
         let enhancedSystemPrompt = '';
         
-        if (isEdit) {
+        if (isSurgicalEdit) {
           console.log('[generate-ai-code-stream] Edit mode detected - starting agentic search workflow');
           console.log('[generate-ai-code-stream] Has fileCache:', !!global.sandboxState?.fileCache);
           console.log('[generate-ai-code-stream] Has manifest:', !!global.sandboxState?.fileCache?.manifest);
@@ -590,7 +611,7 @@ Remember: You are a SURGEON making a precise incision, not an artist repainting 
         }
         
         // Build system prompt with conversation awareness
-        let systemPrompt = `You are an expert React developer with perfect memory of the conversation. You maintain context across messages and remember scraped websites, generated components, and applied code. Generate clean, modern React code for Vite applications.
+        let systemPrompt = `You are an expert React developer with perfect memory of the conversation. You maintain context across messages and remember scraped websites, generated components, and applied code. Generate clean, modern React code for sandboxed web applications (Vite or Next.js).
 ${conversationContext}
 
 🚨 CRITICAL RULES - YOUR MOST IMPORTANT INSTRUCTIONS:
@@ -598,16 +619,21 @@ ${conversationContext}
    - Don't add features not requested
    - Don't fix unrelated issues
    - Don't improve things not mentioned
-2. **CHECK App.jsx FIRST** - ALWAYS see what components exist before creating new ones
-3. **NAVIGATION LIVES IN Header.jsx** - Don't create Nav.jsx if Header exists with nav
+2. **CHECK THE ENTRYPOINT FIRST**
+   - Vite: src/App.jsx (and src/main.jsx)
+   - Next: app/layout.tsx and app/page.tsx
+3. **REUSE EXISTING NAVIGATION/HEADER PATTERNS**
+   - If a Header/NavBar exists, update it instead of creating a duplicate
 4. **USE STANDARD TAILWIND CLASSES ONLY**:
    - ✅ CORRECT: bg-white, text-black, bg-blue-500, bg-gray-100, text-gray-900
    - ❌ WRONG: bg-background, text-foreground, bg-primary, bg-muted, text-secondary
    - Use ONLY classes from the official Tailwind CSS documentation
-5. **FILE COUNT LIMITS**:
+${isSurgicalEdit ? `5. **FILE COUNT LIMITS**:
    - Simple style/text change = 1 file ONLY
    - New component = 2 files MAX (component + parent)
-   - If >3 files, YOU'RE DOING TOO MUCH
+   - If >3 files, YOU'RE DOING TOO MUCH` : `5. **SCOPE**
+   - You may edit/create multiple files when necessary to fully implement the requested feature/ticket
+   - Keep changes focused; do not refactor unrelated code`}
 6. **DO NOT CREATE SVGs FROM SCRATCH**:
    - NEVER generate custom SVG code unless explicitly asked
    - Use existing icon libraries (lucide-react, heroicons, etc.)
@@ -621,9 +647,9 @@ COMPONENT RELATIONSHIPS (CHECK THESE FIRST):
 - Menu/Hamburger is part of Header, not separate
 
 PACKAGE USAGE RULES:
-- DO NOT use react-router-dom unless user explicitly asks for routing
+- Use routing libraries only when building a multi-page application
 - For simple nav links in a single-page app, use scroll-to-section or href="#"
-- Only add routing if building a multi-page application
+- Only add routing if building a multi-page application (or if the blueprint requires multiple pages)
 - Common packages are auto-installed from your imports
 
 WEBSITE CLONING REQUIREMENTS:
@@ -634,7 +660,19 @@ When recreating/cloning a website, you MUST include:
 4. **Footer** - Contact info, links, copyright (Footer.jsx)
 5. **App.jsx** - Main app component that imports and uses all components
 
-${isEdit ? `CRITICAL: THIS IS AN EDIT TO AN EXISTING APPLICATION
+${isPlannedBuildStep ? `PLANNED BUILD STEP MODE:
+- You are implementing a planned ticket/feature in an existing application.
+- You may modify or create multiple files needed to fully implement the requested ticket.
+- Do NOT regenerate the entire app. Preserve existing routing, navigation, and data adapters.
+- You MAY introduce dependencies (and routing) when required by the blueprint/ticket.
+- Output ONLY the changed/created files as <file path="..."> blocks with complete contents.` : ''}
+
+${isPlannedBuildStep && buildProfile === 'fix_validation' ? `FIX VALIDATION MODE:
+- Only fix build/validation/runtime errors required to make the current app work.
+- Do NOT introduce new features unless required to fix the error.
+- Keep the diff as small as possible.` : ''}
+
+${isSurgicalEdit ? `CRITICAL: THIS IS AN EDIT TO AN EXISTING APPLICATION
 
 YOU MUST FOLLOW THESE EDIT RULES:
 0. NEVER create tailwind.config.js, vite.config.js, package.json, or any other config files - they already exist!
@@ -941,8 +979,8 @@ CRITICAL: When files are provided in the context:
 4. Do NOT ask to see files - they are already provided in the context above
 5. Make the requested change immediately`;
 
-        // If Morph Fast Apply is enabled (edit mode + MORPH_API_KEY), force <edit> block output
-        const morphFastApplyEnabled = Boolean(isEdit && process.env.MORPH_API_KEY);
+        // If Morph Fast Apply is enabled (surgical edits only + MORPH_API_KEY), force <edit> block output
+        const morphFastApplyEnabled = Boolean(isSurgicalEdit && process.env.MORPH_API_KEY);
         if (morphFastApplyEnabled) {
           systemPrompt += `
 
@@ -1029,7 +1067,7 @@ MORPH FAST APPLY MODE (EDIT-ONLY):
                     global.sandboxState.fileCache.manifest = filesData.manifest;
                     
                     // Now try to analyze edit intent with the fetched manifest
-                    if (!editContext) {
+                    if (isSurgicalEdit && !editContext) {
                       console.log('[generate-ai-code-stream] Analyzing edit intent with fetched manifest');
                       try {
                         const intentResponse = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/analyze-edit-intent`, {
@@ -1086,9 +1124,11 @@ MORPH FAST APPLY MODE (EDIT-ONLY):
             } else {
               // Fallback to showing all files if no edit context
               console.log('[generate-ai-code-stream] WARNING: Using fallback mode - no edit context available');
-              contextParts.push('\nEXISTING APPLICATION - TARGETED EDIT REQUIRED');
-              contextParts.push('\nYou MUST analyze the user request and determine which specific file(s) to edit.');
-              contextParts.push('\nCurrent project files (DO NOT regenerate all of these):');
+              contextParts.push(isPlannedBuildStep ? '\nEXISTING APPLICATION - PLANNED BUILD MODE' : '\nEXISTING APPLICATION - TARGETED EDIT REQUIRED');
+              contextParts.push(isPlannedBuildStep
+                ? '\nImplement the requested ticket/feature without regenerating the whole app.'
+                : '\nYou MUST analyze the user request and determine which specific file(s) to edit.');
+              contextParts.push('\nCurrent project files (do not recreate these unnecessarily):');
               
               const fileEntries = Object.entries(backendFiles);
               console.log(`[generate-ai-code-stream] Using backend cache: ${fileEntries.length} files`);
@@ -1098,40 +1138,80 @@ MORPH FAST APPLY MODE (EDIT-ONLY):
               for (const [path] of fileEntries) {
                 contextParts.push(`- ${path}`);
               }
-              
-              // Include ALL files as context in fallback mode
-              contextParts.push('\n### File Contents (ALL FILES FOR CONTEXT):');
-              for (const [path, fileData] of fileEntries) {
-                const content = fileData.content;
-                if (typeof content === 'string') {
-                  contextParts.push(`\n<file path="${path}">\n${content}\n</file>`);
+
+              const truncate = (content: string, maxChars: number) => {
+                if (!content) return '';
+                if (content.length <= maxChars) return content;
+                return content.substring(0, maxChars) + '\n// ... truncated ...';
+              };
+
+              if (isPlannedBuildStep) {
+                // In planned build mode, provide a compact context (key files only) to avoid token overload.
+                const allPaths = fileEntries.map(([p]) => p);
+                const looksNext =
+                  allPaths.some(p => p.startsWith('app/')) ||
+                  allPaths.some(p => p === 'next.config.js') ||
+                  allPaths.some(p => p.endsWith('next-env.d.ts'));
+
+                const keyPaths = looksNext
+                  ? [
+                      'package.json',
+                      'next.config.js',
+                      'app/layout.tsx',
+                      'app/page.tsx',
+                      'components/NavBar.tsx',
+                      'components/DataModeBanner.tsx',
+                      'lib/data/index.ts',
+                    ]
+                  : [
+                      'package.json',
+                      'vite.config.js',
+                      'src/main.jsx',
+                      'src/App.jsx',
+                      'src/components/NavBar.jsx',
+                      'src/pages/Home.jsx',
+                      'src/components/DataModeBanner.jsx',
+                      'src/lib/data/index.js',
+                    ];
+
+                const fileMap = new Map(fileEntries);
+                contextParts.push('\n### Key Files (TRUNCATED):');
+                for (const kp of keyPaths) {
+                  const data = fileMap.get(kp) as any;
+                  const content = data?.content;
+                  if (typeof content === 'string') {
+                    contextParts.push(`\n<file path="${kp}">\n${truncate(content, 2500)}\n</file>`);
+                  }
                 }
+
+                contextParts.push('\nPLANNED BUILD INSTRUCTIONS:');
+                contextParts.push('- Implement the requested ticket/feature completely.');
+                contextParts.push('- You may create or modify multiple files as needed.');
+                contextParts.push('- Preserve existing routes/navigation/data adapters.');
+                contextParts.push('- Output ONLY the files you changed/created as complete <file> blocks.');
+              } else {
+                // Include ALL files as context in fallback mode (surgical edits)
+                contextParts.push('\n### File Contents (ALL FILES FOR CONTEXT):');
+                for (const [path, fileData] of fileEntries) {
+                  const content = (fileData as any).content;
+                  if (typeof content === 'string') {
+                    contextParts.push(`\n<file path="${path}">\n${content}\n</file>`);
+                  }
+                }
+
+                contextParts.push('\n🚨 CRITICAL INSTRUCTIONS - VIOLATION = FAILURE 🚨');
+                contextParts.push('1. Analyze the user request: "' + prompt + '"');
+                contextParts.push('2. Identify the MINIMUM number of files that need editing (usually just ONE)');
+                contextParts.push('3. PRESERVE ALL EXISTING CONTENT in those files');
+                contextParts.push('4. ONLY ADD/MODIFY the specific part requested');
+                contextParts.push('5. DO NOT regenerate entire components from scratch');
+                contextParts.push('6. DO NOT change unrelated parts of any file');
+                contextParts.push('7. Generate ONLY the files that MUST be changed - NO EXTRAS');
+                contextParts.push('\n⚠️ FILE COUNT RULE:');
+                contextParts.push('- Simple change (color, text, spacing) = 1 file ONLY');
+                contextParts.push('- Adding new component = 2 files MAX (new component + parent that imports it)');
+                contextParts.push('- DO NOT exceed these limits unless absolutely necessary');
               }
-              
-              contextParts.push('\n🚨 CRITICAL INSTRUCTIONS - VIOLATION = FAILURE 🚨');
-              contextParts.push('1. Analyze the user request: "' + prompt + '"');
-              contextParts.push('2. Identify the MINIMUM number of files that need editing (usually just ONE)');
-              contextParts.push('3. PRESERVE ALL EXISTING CONTENT in those files');
-              contextParts.push('4. ONLY ADD/MODIFY the specific part requested');
-              contextParts.push('5. DO NOT regenerate entire components from scratch');
-              contextParts.push('6. DO NOT change unrelated parts of any file');
-              contextParts.push('7. Generate ONLY the files that MUST be changed - NO EXTRAS');
-              contextParts.push('\n⚠️ FILE COUNT RULE:');
-              contextParts.push('- Simple change (color, text, spacing) = 1 file ONLY');
-              contextParts.push('- Adding new component = 2 files MAX (new component + parent that imports it)');
-              contextParts.push('- DO NOT exceed these limits unless absolutely necessary');
-              contextParts.push('\nEXAMPLES OF CORRECT BEHAVIOR:');
-              contextParts.push('✅ "add a chart to the hero" → Edit ONLY Hero.jsx, ADD the chart, KEEP everything else');
-              contextParts.push('✅ "change header to black" → Edit ONLY Header.jsx, change ONLY the color');
-              contextParts.push('✅ "fix spacing in footer" → Edit ONLY Footer.jsx, adjust ONLY spacing');
-              contextParts.push('\nEXAMPLES OF FAILURES:');
-              contextParts.push('❌ "change header color" → You edit Header, Footer, and App "for consistency"');
-              contextParts.push('❌ "add chart to hero" → You regenerate the entire Hero component');
-              contextParts.push('❌ "fix button" → You update 5 different component files');
-              contextParts.push('\n⚠️ FINAL WARNING:');
-              contextParts.push('If you generate MORE files than necessary, you have FAILED');
-              contextParts.push('If you DELETE or REWRITE existing functionality, you have FAILED');
-              contextParts.push('ONLY change what was EXPLICITLY requested - NOTHING MORE');
             }
           } else if (context.currentFiles && Object.keys(context.currentFiles).length > 0) {
             // Fallback to frontend-provided files if backend cache is empty
@@ -1148,24 +1228,21 @@ MORPH FAST APPLY MODE (EDIT-ONLY):
             contextParts.push('\nThe above files already exist. When the user asks to modify something (like "change the header color to black"), find the relevant file above and generate ONLY that file with the requested changes.');
           }
           
-          // Add explicit edit mode indicator
-          if (isEdit) {
-            contextParts.push('\nEDIT MODE ACTIVE');
-            contextParts.push('This is an incremental update to an existing application.');
-            contextParts.push('DO NOT regenerate App.jsx, index.css, or other core files unless explicitly requested.');
-            contextParts.push('ONLY create or modify the specific files needed for the user\'s request.');
-            contextParts.push('\n⚠️ CRITICAL FILE OUTPUT FORMAT - VIOLATION = FAILURE:');
-            contextParts.push('YOU MUST OUTPUT EVERY FILE IN THIS EXACT XML FORMAT:');
-            contextParts.push('<file path="src/components/ComponentName.jsx">');
-            contextParts.push('// Complete file content here');
-            contextParts.push('</file>');
-            contextParts.push('<file path="src/index.css">');
-            contextParts.push('/* CSS content here */');
-            contextParts.push('</file>');
-            contextParts.push('\n❌ NEVER OUTPUT: "Generated Files: index.css, App.jsx"');
-            contextParts.push('❌ NEVER LIST FILE NAMES WITHOUT CONTENT');
-            contextParts.push('✅ ALWAYS: One <file> tag per file with COMPLETE content');
-            contextParts.push('✅ ALWAYS: Include EVERY file you modified');
+          // Add explicit build mode indicator
+          if (isSurgicalEdit) {
+            contextParts.push('\nEDIT MODE ACTIVE (SURGICAL)');
+            contextParts.push('This is a targeted edit to an existing application.');
+            contextParts.push('ONLY modify the minimal set of files required.');
+            contextParts.push('Do NOT regenerate core files unless explicitly requested.');
+            contextParts.push('\nCRITICAL FILE OUTPUT FORMAT:');
+            contextParts.push('Return one <file path="..."> block per file you changed, containing COMPLETE file contents.');
+          } else if (isPlannedBuildStep) {
+            contextParts.push('\nPLANNED BUILD MODE ACTIVE');
+            contextParts.push('This is a planned build step (ticket implementation or targeted fixes).');
+            contextParts.push('You may create or modify multiple files needed to satisfy the request.');
+            contextParts.push('Do NOT regenerate the entire application; preserve existing structure.');
+            contextParts.push('\nOUTPUT FORMAT:');
+            contextParts.push('Return one <file path="..."> block per file you changed/created, containing COMPLETE file contents.');
           } else if (!hasBackendFiles) {
             // First generation mode - make it beautiful!
             contextParts.push('\n🎨 FIRST GENERATION MODE - CREATE SOMETHING BEAUTIFUL!');
@@ -1280,8 +1357,8 @@ CRITICAL STRING RULES TO PREVENT SYNTAX ERRORS:
 - NO ellipsis (...) ANYWHERE in code
 
 PACKAGE RULES:
-- For INITIAL generation: Use ONLY React, no external packages
-- For EDITS: You may use packages, specify them with <package> tags
+- Prefer minimal dependencies, but you MAY use external packages when needed to satisfy the request/blueprint.
+- For surgical edits, only add packages if required by the user's request.
 - NEVER install packages like @mendable/firecrawl-js unless explicitly requested
 
 Examples of SYNTAX ERRORS (NEVER DO THIS):

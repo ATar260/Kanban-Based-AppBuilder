@@ -115,12 +115,16 @@ export default function CodeReviewPanel({
         >
           Dismiss
         </button>
-        {result.passed && onApprove && (
+        {onApprove && (
           <button
             onClick={onApprove}
-            className="px-3 py-1.5 text-xs font-medium text-white bg-green-500 rounded hover:bg-green-600 transition-colors"
+            className={`px-3 py-1.5 text-xs font-medium text-white rounded transition-colors ${
+              result.passed
+                ? 'bg-green-500 hover:bg-green-600'
+                : 'bg-amber-500 hover:bg-amber-600'
+            }`}
           >
-            Approve & Continue
+            {result.passed ? 'Approve & Continue' : 'Approve anyway'}
           </button>
         )}
       </div>
