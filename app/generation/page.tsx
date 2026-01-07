@@ -631,7 +631,10 @@ Visual Features: ${uiOption.features.join(', ')}`;
   useEffect(() => {
     const hasHumanGate = showCodeReview || hasTestingOrReviewTickets;
 
-    if (!kanbanBuildActive && !generationProgress.isGenerating && !hasHumanGate) return;
+    const isViewingPreview = activeTab === 'preview' || activeTab === 'split';
+
+    // Keep the sandbox alive while a build is running OR while the user is actively looking at the preview.
+    if (!kanbanBuildActive && !generationProgress.isGenerating && !hasHumanGate && !isViewingPreview) return;
     if (!sandboxData?.sandboxId) return;
 
     const keepAlive = async () => {
@@ -655,7 +658,7 @@ Visual Features: ${uiOption.features.join(', ')}`;
     keepAlive();
 
     return () => clearInterval(interval);
-  }, [kanbanBuildActive, generationProgress.isGenerating, sandboxData?.sandboxId, showCodeReview, hasTestingOrReviewTickets]);
+  }, [kanbanBuildActive, generationProgress.isGenerating, sandboxData?.sandboxId, showCodeReview, hasTestingOrReviewTickets, activeTab]);
 
   // Handle sandbox expiration - auto-recreate if needed
   useEffect(() => {
@@ -679,7 +682,15 @@ Visual Features: ${uiOption.features.join(', ')}`;
 
       const newSandbox = await createSandbox(true, 0, effectiveTemplate);
       if (newSandbox) {
-        addChatMessage('Sandbox was recreated after expiration. Please retry your last action.', 'system');
+        // If we have an existing Kanban plan with ticket code, restore automatically so the preview isn't a blank starter.
+        const hasRestorableTickets = (kanban.tickets || []).some(t =>
+          Boolean(t.generatedCode) && ['done', 'testing', 'pr_review', 'applying', 'generating'].includes(t.status)
+        );
+        if ((kanban.plan as any)?.blueprint && hasRestorableTickets) {
+          await restoreKanbanPlanToSandbox(newSandbox, 'recreate');
+        } else {
+          addChatMessage('Sandbox was recreated after expiration. Please retry your last action.', 'system');
+        }
       }
     };
 

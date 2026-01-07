@@ -271,7 +271,7 @@ export default function KanbanBoard({
       )}
 
       {/* Kanban Columns - Mobile: Single column, Desktop: All columns */}
-      <div className="flex-1 overflow-hidden p-2 sm:p-4">
+      <div className="flex-1 overflow-x-auto overflow-y-hidden p-2 sm:p-4">
         {tickets.length > 0 ? (
           <>
             {/* Mobile View - Single Column */}
@@ -319,8 +319,8 @@ export default function KanbanBoard({
               })}
             </div>
 
-            {/* Desktop View - All Columns */}
-            <div className="hidden sm:flex gap-3 h-full overflow-x-auto" style={{ minWidth: 'max-content' }}>
+            {/* Desktop View - All Columns (horizontal scroll) */}
+            <div className="hidden sm:flex gap-3 h-full" style={{ minWidth: 'max-content' }}>
               {displayColumns.map((column, index) => {
                 const filteredTickets = activeFilter
                   ? ticketsByColumn[column.id].filter(t => t.type === activeFilter)

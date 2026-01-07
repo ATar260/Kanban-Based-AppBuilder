@@ -152,6 +152,11 @@ BUILD BLUEPRINT (required in "blueprint"):
   - description: optional
 - navigation: Object with:
   - items: array of { label, routeId } that covers ALL routes users should reach from nav
+- NAVIGATION QUALITY RULES (critical):
+  - Every nav item MUST resolve to a real route in blueprint.routes. Do NOT invent extra nav items that aren't routable.
+  - NEVER use placeholders like "#" (or route.path exactly "#"). If you want a section, use a real section id like "#features".
+  - For dashboards/admin apps, prefer kind="page" routes (not sections) so clicks are end-to-end navigations.
+  - If you include nav labels like Reports/Users/Settings/Help, you MUST include page routes for them (e.g. "/reports", "/users", "/settings", "/help").
 - entities (optional): Array of data entities with fields
 - flows (optional): Array of user flows, each with steps that describe what \"working\" means
 
@@ -186,6 +191,9 @@ If the user needs persistence or CRUD, default to dataMode="real_optional" and:
 1. Include a \"Data layer (mock-first)\" ticket early that sets up adapters + seeded demo data
 2. Include a separate optional \"Enable Supabase (optional)\" ticket that requires input (do NOT block the build)
 3. Ensure tickets that depend on data depend on the mock-first data layer ticket, not the optional real DB ticket
+
+DASHBOARD DEFAULT ROUTES (when the prompt indicates \"dashboard\"/\"admin\" and the user did not specify pages):
+- Include at least these PAGE routes in the blueprint so nav is end-to-end:\n  - / (Dashboard)\n  - /reports\n  - /users\n  - /settings\n  - /help\n- Ensure navigation.items covers them all.
 
 COMPLEXITY GUIDE:
 - XS: Single simple element (button, icon)
@@ -246,7 +254,9 @@ function normalizeBlueprint(raw: PlanningResponse['blueprint'] | undefined, prom
     .map((r, idx) => {
       const id = typeof r.id === 'string' && r.id.trim().length > 0 ? r.id : `route_${idx}`;
       const kind = r.kind === 'section' ? 'section' : 'page';
-      const path = typeof r.path === 'string' && r.path.trim().length > 0 ? r.path : (kind === 'section' ? '#home' : '/');
+      let path = typeof r.path === 'string' && r.path.trim().length > 0 ? r.path : (kind === 'section' ? '#home' : '/');
+      // Normalize placeholder section anchors.
+      if (kind === 'section' && path.trim() === '#') path = '#home';
       const title = typeof r.title === 'string' && r.title.trim().length > 0 ? r.title : id;
       const navLabel = typeof r.navLabel === 'string' && r.navLabel.trim().length > 0 ? r.navLabel : title;
       return {

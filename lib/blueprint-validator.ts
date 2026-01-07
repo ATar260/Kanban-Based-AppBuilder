@@ -41,6 +41,9 @@ export function validateBlueprint(blueprint: BuildBlueprint | null | undefined):
       errors.push(`Route ${r.id} is page but path is not absolute: ${r.path}`);
     } else if (r.kind === 'section' && !r.path.startsWith('#')) {
       warnings.push(`Route ${r.id} is section but path does not start with '#': ${r.path}`);
+    } else if (r.kind === 'section' && r.path.trim() === '#') {
+      // In practice this is almost always a placeholder (like href="#") and not a real section id.
+      errors.push(`Route ${r.id} has placeholder section path "#"`);
     }
   }
 
@@ -57,6 +60,11 @@ export function validateBlueprint(blueprint: BuildBlueprint | null | undefined):
       errors.push(`Navigation references unknown routeId: ${nav.routeId}`);
     }
     if (!nav.label) warnings.push(`Navigation item for ${nav.routeId} missing label`);
+
+    const target = (blueprint.routes || []).find(r => r.id === nav.routeId);
+    if (target?.kind === 'section') {
+      warnings.push(`Navigation item "${nav.label || nav.routeId}" points to a section route (${target.path}). Consider making this a page route for end-to-end navigation.`);
+    }
   }
 
   const flowsTotal = blueprint.flows?.length || 0;
