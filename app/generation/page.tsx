@@ -128,6 +128,7 @@ function AISandboxPage() {
   const [kanbanBuildActive, setKanbanBuildActive] = useState(false);
   const [isPreviewRefreshing, setIsPreviewRefreshing] = useState(false);
   const [sandboxExpired, setSandboxExpired] = useState(false);
+  const [isRestoringSandbox, setIsRestoringSandbox] = useState(false);
 
   // UI Options state for 3-mockup generation
   const [showUIOptions, setShowUIOptions] = useState(false);
@@ -214,6 +215,7 @@ function AISandboxPage() {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const chatMessagesRef = useRef<HTMLDivElement>(null);
   const codeDisplayRef = useRef<HTMLDivElement>(null);
+  const restoringSandboxRef = useRef(false);
 
   const [codeApplicationState, setCodeApplicationState] = useState<CodeApplicationState>({
     stage: null
@@ -815,7 +817,19 @@ Visual Features: ${uiOption.features.join(', ')}`;
         newParams.delete('sandbox');
         router.replace(`/generation?${newParams.toString()}`, { scroll: false });
         
-        await createSandbox(true, 0, desiredTemplate);
+        const created = await createSandbox(true, 0, desiredTemplate);
+        if (created) {
+          // If we have an existing Kanban plan (often completed), rehydrate the new sandbox
+          // so the preview returns to the generated app instead of the default Vite starter.
+          const hasRestorableTickets = (kanban.tickets || []).some(t =>
+            Boolean(t.generatedCode) && ['done', 'testing', 'pr_review', 'applying', 'generating'].includes(t.status)
+          );
+          if (kanban.plan?.blueprint && hasRestorableTickets) {
+            await restoreKanbanPlanToSandbox(created, 'recreate');
+          } else {
+            addChatMessage('Sandbox was recreated after expiration. Please retry your last action.', 'system');
+          }
+        }
         return;
       }
 
@@ -849,6 +863,133 @@ Visual Features: ${uiOption.features.join(', ')}`;
       } else {
         updateStatus('Status check failed', false);
       }
+    }
+  };
+
+  const restoreKanbanPlanToSandbox = async (
+    overrideSandbox?: SandboxData,
+    reason: 'manual' | 'recreate' = 'manual'
+  ) => {
+    if (restoringSandboxRef.current) return;
+
+    const activeSandbox = overrideSandbox || sandboxData;
+    if (!activeSandbox?.sandboxId) {
+      addChatMessage('No active sandbox to restore into.', 'system');
+      return;
+    }
+
+    const plan = kanban.plan;
+    if (!plan?.blueprint) {
+      addChatMessage('No saved blueprint/plan found to restore. Use “Plan Build” to create a new build plan.', 'system');
+      return;
+    }
+
+    const restorableTickets = (kanban.tickets || [])
+      .filter(t => Boolean(t.generatedCode) && ['done', 'testing', 'pr_review', 'applying', 'generating'].includes(t.status))
+      .sort((a, b) => (a.order || 0) - (b.order || 0));
+
+    if (restorableTickets.length === 0) {
+      addChatMessage('No ticket code found to restore. Use “Plan Build” to rebuild into this sandbox.', 'system');
+      return;
+    }
+
+    const template: 'vite' | 'next' = plan.templateTarget === 'nextjs' ? 'next' : 'vite';
+
+    restoringSandboxRef.current = true;
+    setIsRestoringSandbox(true);
+
+    try {
+      addChatMessage(
+        reason === 'recreate'
+          ? 'Sandbox was recreated — restoring your app into the new sandbox...'
+          : 'Restoring your app into this sandbox...',
+        'system'
+      );
+
+      addChatMessage('Restoring scaffold from blueprint...', 'system');
+      const scaffoldRes = await fetch('/api/scaffold-project', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sandboxId: activeSandbox.sandboxId,
+          template,
+          blueprint: plan.blueprint,
+        }),
+      });
+      const scaffoldData = await scaffoldRes.json().catch(() => ({}));
+      if (!scaffoldRes.ok || !scaffoldData?.success) {
+        throw new Error(scaffoldData?.error || `Failed to scaffold (HTTP ${scaffoldRes.status})`);
+      }
+
+      // Mark scaffolded for this sandbox so future resumes don't try to overwrite unexpectedly.
+      if (kanban.plan) {
+        kanban.setPlan({
+          ...kanban.plan,
+          scaffolded: true,
+          scaffoldedSandboxId: activeSandbox.sandboxId,
+        } as any);
+      }
+
+      for (let i = 0; i < restorableTickets.length; i++) {
+        const ticket = restorableTickets[i];
+        if (!ticket.generatedCode) continue;
+        addChatMessage(`Restoring ${i + 1}/${restorableTickets.length}: ${ticket.title}`, 'system');
+        // Apply sequentially so later tickets can override earlier ones even if files shrink.
+        await applyGeneratedCode(ticket.generatedCode, false, activeSandbox);
+      }
+
+      // Re-apply Supabase env vars if present in any ticket inputs (so the restored preview switches to Supabase mode).
+      const supabaseInputs = (kanban.tickets || [])
+        .map(t => t.userInputs)
+        .find(
+          (inputs: any) =>
+            inputs &&
+            typeof inputs.supabase_url === 'string' &&
+            inputs.supabase_url.trim().length > 0 &&
+            typeof inputs.supabase_anon_key === 'string' &&
+            inputs.supabase_anon_key.trim().length > 0
+        ) as Record<string, string> | undefined;
+
+      if (supabaseInputs) {
+        try {
+          addChatMessage('Re-applying Supabase env vars to sandbox...', 'system');
+          const applyKey = `${activeSandbox.sandboxId}:${template}`;
+          if (supabaseEnvAppliedRef.current !== applyKey) {
+            const envRes = await fetch('/api/apply-sandbox-env', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                sandboxId: activeSandbox.sandboxId,
+                template,
+                userInputs: supabaseInputs,
+              }),
+            });
+            const envData = await envRes.json().catch(() => ({}));
+            if (!envRes.ok || !envData?.success) {
+              throw new Error(envData?.error || `Failed to apply env (HTTP ${envRes.status})`);
+            }
+            supabaseEnvAppliedRef.current = applyKey;
+            addChatMessage('Supabase env vars applied to sandbox.', 'system');
+          }
+        } catch (e: any) {
+          console.warn('[restoreKanbanPlanToSandbox] Failed to apply Supabase env:', e);
+          addChatMessage(
+            `Warning: could not apply Supabase env vars automatically (${e?.message || 'unknown error'}).`,
+            'system'
+          );
+        }
+      }
+
+      addChatMessage('✅ Restore complete. Reloading preview…', 'system');
+      if (iframeRef.current && activeSandbox.url) {
+        iframeRef.current.src = `${activeSandbox.url}?t=${Date.now()}&restored=true`;
+      }
+    } catch (e: any) {
+      console.warn('[restoreKanbanPlanToSandbox] Restore failed:', e);
+      addChatMessage(`Restore failed: ${e?.message || 'unknown error'}`, 'system');
+    } finally {
+      setIsRestoringSandbox(false);
+      restoringSandboxRef.current = false;
     }
   };
 
@@ -3273,37 +3414,70 @@ Tip: I automatically detect and install npm packages from your code imports (lik
               </div>
             )}
 
-            {/* Refresh button */}
-            <button
-              onClick={async () => {
-                if (!sandboxData?.sandboxId) return;
+            {/* Preview controls */}
+            <div className="absolute bottom-4 right-4 flex gap-2">
+              {sandboxData &&
+              kanban.plan?.blueprint &&
+              (kanban.tickets || []).some(t =>
+                Boolean(t.generatedCode) && ['done', 'testing', 'pr_review', 'applying', 'generating'].includes(t.status)
+              ) ? (
+                <button
+                  onClick={() => restoreKanbanPlanToSandbox(undefined, 'manual')}
+                  disabled={isRestoringSandbox}
+                  className={`bg-white/90 hover:bg-white text-gray-700 p-2 rounded-lg shadow-lg transition-all duration-200 hover:scale-105 ${
+                    isRestoringSandbox ? 'opacity-60 cursor-not-allowed pointer-events-none' : ''
+                  }`}
+                  title={isRestoringSandbox ? 'Restoring…' : 'Restore build into this sandbox'}
+                >
+                  <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 6v6l4 2m6-2a10 10 0 11-3.2-7.3"
+                    />
+                  </svg>
+                </button>
+              ) : null}
+              <button
+                disabled={isRestoringSandbox}
+                onClick={async () => {
+                  if (!sandboxData?.sandboxId) return;
 
-                // If the sandbox expired while idle, recreate it instead of just reloading the iframe.
-                try {
-                  const res = await fetch('/api/sandbox-status');
-                  const data = await res.json().catch(() => null);
-                  if (data?.sandboxStopped || !data?.active || data?.sandboxData?.healthStatusCode === 410) {
-                    console.log('[Manual Refresh] Sandbox stopped - recreating...');
-                    await checkSandboxStatus((sandboxData as any)?.templateTarget || 'vite');
-                    return;
+                  // If the sandbox expired while idle, recreate it instead of just reloading the iframe.
+                  try {
+                    const res = await fetch('/api/sandbox-status');
+                    const data = await res.json().catch(() => null);
+                    if (data?.sandboxStopped || !data?.active || data?.sandboxData?.healthStatusCode === 410) {
+                      console.log('[Manual Refresh] Sandbox stopped - recreating...');
+                      await checkSandboxStatus((sandboxData as any)?.templateTarget || 'vite');
+                      return;
+                    }
+                  } catch (e) {
+                    console.warn('[Manual Refresh] Sandbox status check failed:', e);
                   }
-                } catch (e) {
-                  console.warn('[Manual Refresh] Sandbox status check failed:', e);
-                }
 
-                if (iframeRef.current && sandboxData?.url) {
-                  console.log('[Manual Refresh] Forcing iframe reload...');
-                  const newSrc = `${sandboxData.url}?t=${Date.now()}&manual=true`;
-                  iframeRef.current.src = newSrc;
-                }
-              }}
-              className="absolute bottom-4 right-4 bg-white/90 hover:bg-white text-gray-700 p-2 rounded-lg shadow-lg transition-all duration-200 hover:scale-105"
-              title="Refresh sandbox"
-            >
-              <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-            </button>
+                  if (iframeRef.current && sandboxData?.url) {
+                    console.log('[Manual Refresh] Forcing iframe reload...');
+                    const newSrc = `${sandboxData.url}?t=${Date.now()}&manual=true`;
+                    iframeRef.current.src = newSrc;
+                  }
+                }}
+                className={`bg-white/90 hover:bg-white text-gray-700 p-2 rounded-lg shadow-lg transition-all duration-200 hover:scale-105 ${
+                  isRestoringSandbox ? 'opacity-60 cursor-not-allowed pointer-events-none' : ''
+                }`}
+                title={isRestoringSandbox ? 'Restoring…' : 'Refresh sandbox'}
+              >
+                <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                  />
+                </svg>
+              </button>
+            </div>
           </div>
         );
       }
