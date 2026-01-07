@@ -278,6 +278,31 @@ function normalizeBlueprint(raw: PlanningResponse['blueprint'] | undefined, prom
     navLabel: 'Home',
   }];
 
+  // If the prompt is clearly an admin/dashboard request but the model returned only a single page route,
+  // enforce a minimal end-to-end set of common dashboard pages so nav clicks can work.
+  const promptLower = prompt.toLowerCase();
+  const looksLikeDashboard = promptLower.includes('dashboard') || promptLower.includes('admin');
+  const pageCount = safeRoutes.filter(r => r.kind === 'page').length;
+  if (looksLikeDashboard && pageCount < 2) {
+    const ensureRoute = (route: any) => {
+      const existingById = safeRoutes.find(r => r.id === route.id);
+      if (existingById) return;
+      const existingByPath = safeRoutes.find(r => r.kind === 'page' && r.path === route.path);
+      if (existingByPath) {
+        existingByPath.title = existingByPath.title || route.title;
+        (existingByPath as any).navLabel = (existingByPath as any).navLabel || route.navLabel;
+        return;
+      }
+      safeRoutes.push(route);
+    };
+
+    ensureRoute({ id: 'dashboard', kind: 'page', path: '/', title: 'Dashboard', navLabel: 'Dashboard' });
+    ensureRoute({ id: 'reports', kind: 'page', path: '/reports', title: 'Reports', navLabel: 'Reports' });
+    ensureRoute({ id: 'users', kind: 'page', path: '/users', title: 'Users', navLabel: 'Users' });
+    ensureRoute({ id: 'settings', kind: 'page', path: '/settings', title: 'Settings', navLabel: 'Settings' });
+    ensureRoute({ id: 'help', kind: 'page', path: '/help', title: 'Help', navLabel: 'Help' });
+  }
+
   const rawNavItems = (raw?.navigation as any)?.items;
   const navItems = Array.isArray(rawNavItems)
     ? rawNavItems
