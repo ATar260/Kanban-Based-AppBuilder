@@ -1,5 +1,8 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { sandboxManager } from '@/lib/sandbox/sandbox-manager';
+import { getUsageActor } from '@/lib/usage/identity';
+import { recordSandboxPingForActor } from '@/lib/usage/persistence';
+import type { UsageSnapshot } from '@/lib/usage/usage-manager';
 
 declare global {
   var activeSandboxProvider: any;
@@ -7,14 +10,29 @@ declare global {
   var existingFiles: Set<string>;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    // Best-effort usage tracking identity (user or IP)
+    const actor = await getUsageActor(request);
+
     const provider = sandboxManager.getActiveProvider() || global.activeSandboxProvider;
     const sandboxExists = !!provider;
+
+    // Opportunistic lifecycle cleanup (idle sandboxes + stale prewarmed pool entries).
+    // This runs on a hot path (polled by the UI), so it is debounced in the manager.
+    try {
+      const envIdle = Number(process.env.SANDBOX_IDLE_TTL_MS);
+      const idleTtlMs =
+        Number.isFinite(envIdle) && envIdle > 0 ? envIdle : 30 * 60 * 1000; // default 30m
+      await sandboxManager.cleanup(idleTtlMs);
+    } catch (e) {
+      console.warn('[sandbox-status] Cleanup failed (non-fatal):', e);
+    }
 
     let sandboxHealthy = false;
     let sandboxInfo = null;
     let sandboxStopped = false;
+    let usageSnapshot: UsageSnapshot | null = null;
 
     if (sandboxExists && provider) {
       try {
@@ -83,6 +101,15 @@ export async function GET() {
             healthStatusCode,
             healthError,
           };
+
+          // Track sandbox time based on pings (best-effort; in-memory counters)
+          if (sandboxInfo.sandboxId) {
+            try {
+              usageSnapshot = await recordSandboxPingForActor(actor, sandboxInfo.sandboxId);
+            } catch (e) {
+              console.warn('[sandbox-status] Usage tracking ping failed (non-fatal):', e);
+            }
+          }
         }
       } catch (error: any) {
         console.error('[sandbox-status] Health check failed:', error);
@@ -102,6 +129,7 @@ export async function GET() {
       healthy: sandboxHealthy,
       sandboxStopped,
       sandboxData: sandboxInfo,
+      usage: usageSnapshot,
       message: sandboxStopped
         ? 'Sandbox has stopped - please create a new one'
         : sandboxHealthy 

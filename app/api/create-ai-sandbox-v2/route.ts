@@ -3,6 +3,9 @@ import { SandboxFactory } from '@/lib/sandbox/factory';
 // SandboxProvider type is used through SandboxFactory
 import type { SandboxState } from '@/types/sandbox';
 import { sandboxManager } from '@/lib/sandbox/sandbox-manager';
+import { sandboxCreationLimiter } from '@/lib/rateLimit';
+import { getUsageActor } from '@/lib/usage/identity';
+import { getUsageSnapshotForActor, startSandboxSessionForActor } from '@/lib/usage/persistence';
 
 // Store active sandbox globally
 declare global {
@@ -15,6 +18,25 @@ declare global {
 export async function POST(request: NextRequest) {
   try {
     console.log('[create-ai-sandbox-v2] Creating sandbox...');
+
+    // Rate-limit + usage gate (best-effort; in-memory counters by user/ip)
+    const actor = await getUsageActor(request);
+    const rl = await sandboxCreationLimiter(request, actor.userId || actor.key);
+    if (rl instanceof NextResponse) return rl;
+
+    const usage = await getUsageSnapshotForActor(actor);
+    if (usage.exceeded.sandboxMinutes) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Sandbox time usage limit reached for this month. Upgrade to continue.',
+          code: 'USAGE_LIMIT_REACHED',
+          usage,
+          upgradeUrl: '/pricing',
+        },
+        { status: 402 }
+      );
+    }
 
     let templateTarget: 'vite' | 'next' = 'vite';
     try {
@@ -60,6 +82,13 @@ export async function POST(request: NextRequest) {
     
     // Register with sandbox manager
     sandboxManager.registerSandbox(sandboxInfo.sandboxId, provider);
+
+    // Start tracking sandbox time for this user/ip (best-effort)
+    try {
+      await startSandboxSessionForActor(actor, sandboxInfo.sandboxId);
+    } catch (e) {
+      console.warn('[create-ai-sandbox-v2] Failed to start usage tracking session:', e);
+    }
     
     // Also store in legacy global state for backward compatibility
     global.activeSandboxProvider = provider;

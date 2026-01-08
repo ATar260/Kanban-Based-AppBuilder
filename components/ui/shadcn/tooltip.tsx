@@ -87,10 +87,9 @@ export default function Tooltip({
                   },
                 }}
                 className={cn(
-                  "py-10 px-16 rounded-12 max-w-248 absolute w-max text-body-medium text-accent-white bg-black-alpha-64 backdrop-blur-[6px] z-[121]",
+                  "py-10 px-16 rounded-12 max-w-248 absolute w-max text-body-medium text-accent-white bg-black-alpha-64 backdrop-blur-[6px] z-[121] whitespace-pre-line",
                   className,
                 )}
-                dangerouslySetInnerHTML={{ __html: props.description }}
                 exit={{
                   y: -8,
                   opacity: 0,
@@ -110,7 +109,9 @@ export default function Tooltip({
                   damping: 13,
                   filter: { duration: 0.4 },
                 }}
-              />
+              >
+                {props.description}
+              </motion.div>
             </div>
           )}
         </AnimatePresence>

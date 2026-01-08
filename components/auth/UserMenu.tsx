@@ -10,6 +10,38 @@ function UserMenuInner() {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
+  const cleanupSandboxBestEffort = async () => {
+    try {
+      // Prefer sendBeacon so cleanup still fires even if the browser navigates immediately.
+      if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
+        const blob = new Blob([JSON.stringify({ reason: "sign_out" })], {
+          type: "application/json",
+        });
+        navigator.sendBeacon("/api/kill-sandbox", blob);
+        return;
+      }
+    } catch {
+      // ignore
+    }
+
+    try {
+      await fetch("/api/kill-sandbox", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "sign_out" }),
+        // keepalive helps when navigation happens immediately after this call
+        keepalive: true,
+      });
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleSignOut = async () => {
+    await cleanupSandboxBestEffort();
+    await signOut({ callbackUrl: "/" });
+  };
+
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
@@ -57,7 +89,7 @@ function UserMenuInner() {
           </div>
           
           <button
-            onClick={() => signOut({ callbackUrl: "/" })}
+            onClick={handleSignOut}
             className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 transition-colors"
           >
             Sign out

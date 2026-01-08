@@ -24,6 +24,8 @@ interface DeployOptions {
   repoUrl?: string;
   branch?: string;
   envVars?: Record<string, string>;
+  templateTarget?: 'vite' | 'next';
+  target?: 'preview' | 'production';
 }
 
 export function useDeploy() {

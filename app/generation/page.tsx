@@ -29,9 +29,11 @@ import type { KanbanTicket as KanbanTicketType } from '@/components/kanban/types
 import { useVersioning } from '@/hooks/useVersioning';
 import { GitHubConnectButton, VersionHistoryPanel, SaveStatusIndicator, GitSyncToggle } from '@/components/versioning';
 import { saveGitHubConnection } from '@/lib/versioning/github';
+import { DeployPanel } from '@/components/deploy';
 import { useBuildTracker } from '@/hooks/useBuildTracker';
 import { useGitSync } from '@/hooks/useGitSync';
 import { UserMenu, LoginButton } from '@/components/auth';
+import { UsagePill } from '@/components/usage/UsagePill';
 import UIOptionsSelector, { UIOption } from '@/components/ui-options/UIOptionsSelector';
 import { useBugbot, ReviewResult } from '@/hooks/useBugbot';
 import { CodeReviewPanel, RegressionWarningModal } from '@/components/kanban';
@@ -181,6 +183,7 @@ function AISandboxPage() {
 
   const versioning = useVersioning({ enableAutoSave: true, autoSaveInterval: 5 * 60 * 1000 });
   const [showVersionHistory, setShowVersionHistory] = useState(false);
+  const [showDeployModal, setShowDeployModal] = useState(false);
   const [versionHistoryTab, setVersionHistoryTab] = useState<'plan' | 'code'>('plan');
 
   const planVersions = usePlanVersions({
@@ -5530,6 +5533,15 @@ Focus on the key sections and content, making it clean and modern.`;
               </svg>
             </button>
             <button
+              onClick={() => setShowDeployModal(true)}
+              className="p-2 rounded-lg transition-colors bg-gray-50 border border-gray-200 text-gray-700 hover:bg-gray-100"
+              title="Deploy (Vercel/Netlify)"
+            >
+              <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
+              </svg>
+            </button>
+            <button
               onClick={() => setShowVersionHistory(!showVersionHistory)}
               className={`p-2 rounded-lg transition-colors border ${showVersionHistory ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100'}`}
               title="Version History"
@@ -5552,6 +5564,7 @@ Focus on the key sections and content, making it clean and modern.`;
             />
             <LoginButton className="text-sm" />
             <UserMenu />
+            <UsagePill className="mr-1" />
             {versioning.saveStatus.local !== 'idle' && (
               <SaveStatusIndicator status={versioning.saveStatus} />
             )}
@@ -6479,6 +6492,42 @@ Focus on the key sections and content, making it clean and modern.`;
             onCancel={handleRegressionCancel}
           />
         )}
+
+        {/* Deploy Modal */}
+        {showDeployModal &&
+          (() => {
+            const cfg = gitSync.loadConfig();
+            const repoUrl = cfg?.repoFullName ? `https://github.com/${cfg.repoFullName}` : undefined;
+            const branch = cfg?.branch || 'main';
+            const templateTarget: 'vite' | 'next' = sandboxData?.templateTarget === 'next' ? 'next' : 'vite';
+            const projectName = conversationContext.currentProject || 'paynto-app';
+
+            return (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                <div className="w-full max-w-lg">
+                  <div className="flex justify-end mb-2">
+                    <button
+                      onClick={() => setShowDeployModal(false)}
+                      className="h-9 w-9 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors"
+                      title="Close"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <DeployPanel
+                    projectName={projectName}
+                    repoUrl={repoUrl}
+                    branch={branch}
+                    templateTarget={templateTarget}
+                    onDeployComplete={(url) => {
+                      addChatMessage(`🚀 Deployed: ${url}`, 'system');
+                      setShowDeployModal(false);
+                    }}
+                  />
+                </div>
+              </div>
+            );
+          })()}
 
         {/* Load Repo Into Sandbox Progress Modal */}
         {renderRepoLoadModal()}

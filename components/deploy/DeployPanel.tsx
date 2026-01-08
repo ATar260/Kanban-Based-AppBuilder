@@ -7,6 +7,7 @@ interface DeployPanelProps {
   projectName: string;
   repoUrl?: string;
   branch?: string;
+  templateTarget?: 'vite' | 'next';
   onDeployComplete?: (url: string) => void;
   className?: string;
 }
@@ -15,6 +16,7 @@ export default function DeployPanel({
   projectName,
   repoUrl,
   branch = 'main',
+  templateTarget,
   onDeployComplete,
   className = '',
 }: DeployPanelProps) {
@@ -27,6 +29,8 @@ export default function DeployPanel({
       projectName,
       repoUrl,
       branch,
+      templateTarget,
+      target: 'preview',
     });
 
     if (url && onDeployComplete) {

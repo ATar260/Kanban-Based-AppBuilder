@@ -8,6 +8,8 @@ interface DeployRequest {
   repoUrl?: string;
   branch?: string;
   envVars?: Record<string, string>;
+  templateTarget?: 'vite' | 'next';
+  target?: 'preview' | 'production';
 }
 
 interface VercelDeployment {
@@ -29,54 +31,93 @@ async function deployToVercel(options: {
   repoUrl?: string;
   branch?: string;
   envVars?: Record<string, string>;
+  templateTarget?: 'vite' | 'next';
+  target?: 'preview' | 'production';
 }): Promise<{ success: boolean; deploymentUrl?: string; error?: string }> {
   const token = process.env.VERCEL_TOKEN;
   if (!token) {
     return { success: false, error: 'VERCEL_TOKEN not configured' };
   }
 
+  const normalizeGitHubRepo = (input?: string): string | null => {
+    if (!input) return null;
+    const trimmed = input.trim().replace(/\.git$/i, '');
+    try {
+      const u = new URL(trimmed);
+      if (u.hostname === 'github.com' || u.hostname.endsWith('.github.com')) {
+        const repo = u.pathname.replace(/^\/+/, '').replace(/\/+$/, '');
+        return repo && repo.includes('/') ? repo : null;
+      }
+    } catch {
+      // not a URL
+    }
+    // Accept org/repo
+    return /^[^/]+\/[^/]+$/.test(trimmed) ? trimmed : null;
+  };
+
+  const slugifyProjectName = (name: string): string => {
+    const base = String(name || 'paynto-app')
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, '-')
+      .replace(/^-+/, '')
+      .replace(/-+$/, '')
+      .replace(/-+/g, '-');
+    return base.length > 0 ? base.slice(0, 52) : 'paynto-app';
+  };
+
   try {
     const teamId = process.env.VERCEL_TEAM_ID;
     const baseUrl = 'https://api.vercel.com';
 
-    let projectId: string;
-    const projectRes = await fetch(
-      `${baseUrl}/v9/projects?name=${encodeURIComponent(options.projectName)}${teamId ? `&teamId=${teamId}` : ''}`,
-      {
+    const repo = normalizeGitHubRepo(options.repoUrl);
+    if (!repo) {
+      return { success: false, error: 'repoUrl must be a GitHub repo URL or "org/repo"' };
+    }
+
+    const projectName = slugifyProjectName(options.projectName);
+    const framework = options.templateTarget === 'vite' ? 'vite' : 'nextjs';
+
+    // Try to fetch existing project by name first
+    const existingRes = await fetch(
+      `${baseUrl}/v9/projects/${encodeURIComponent(projectName)}${teamId ? `?teamId=${teamId}` : ''}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    let projectId: string | null = null;
+    if (existingRes.ok) {
+      const existing = await existingRes.json();
+      projectId = existing.id;
+    } else if (existingRes.status === 404) {
+      const createRes = await fetch(`${baseUrl}/v9/projects${teamId ? `?teamId=${teamId}` : ''}`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          name: options.projectName,
-          gitRepository: options.repoUrl ? {
-            repo: options.repoUrl,
+          name: projectName,
+          framework,
+          gitRepository: {
             type: 'github',
-          } : undefined,
-          framework: 'nextjs',
+            repo,
+          },
         }),
-      }
-    );
+      });
 
-    if (projectRes.ok) {
-      const project = await projectRes.json();
-      projectId = project.id;
-    } else if (projectRes.status === 409) {
-      const existingRes = await fetch(
-        `${baseUrl}/v9/projects/${options.projectName}${teamId ? `?teamId=${teamId}` : ''}`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      );
-      if (!existingRes.ok) {
-        return { success: false, error: 'Project exists but could not be retrieved' };
+      if (!createRes.ok) {
+        const error = await createRes.json().catch(() => ({}));
+        return { success: false, error: error.error?.message || 'Failed to create Vercel project' };
       }
-      const existing = await existingRes.json();
-      projectId = existing.id;
+
+      const created = await createRes.json();
+      projectId = created.id;
     } else {
-      const error = await projectRes.json();
-      return { success: false, error: error.error?.message || 'Failed to create project' };
+      const error = await existingRes.json().catch(() => ({}));
+      return { success: false, error: error.error?.message || 'Failed to read Vercel project' };
+    }
+
+    if (!projectId) {
+      return { success: false, error: 'Failed to resolve Vercel project id' };
     }
 
     if (options.envVars && Object.keys(options.envVars).length > 0) {
@@ -110,14 +151,14 @@ async function deployToVercel(options: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          name: options.projectName,
+          name: projectName,
           project: projectId,
-          target: 'production',
-          gitSource: options.repoUrl ? {
+          target: options.target || 'preview',
+          gitSource: {
             type: 'github',
-            repo: options.repoUrl,
+            repo,
             ref: options.branch || 'main',
-          } : undefined,
+          },
         }),
       }
     );
@@ -141,6 +182,7 @@ async function deployToNetlify(options: {
   projectName: string;
   repoUrl?: string;
   branch?: string;
+  templateTarget?: 'vite' | 'next';
 }): Promise<{ success: boolean; deploymentUrl?: string; error?: string }> {
   const token = process.env.NETLIFY_TOKEN;
   if (!token) {
@@ -163,7 +205,7 @@ async function deployToNetlify(options: {
           repo: options.repoUrl,
           branch: options.branch || 'main',
           cmd: 'npm run build',
-          dir: '.next',
+          dir: options.templateTarget === 'vite' ? 'dist' : '.next',
         } : undefined,
       }),
     });
@@ -202,7 +244,7 @@ async function deployToNetlify(options: {
 export async function POST(request: NextRequest) {
   try {
     const body: DeployRequest = await request.json();
-    const { provider, projectName, repoUrl, branch, envVars } = body;
+    const { provider, projectName, repoUrl, branch, envVars, templateTarget, target } = body;
 
     if (!provider || !projectName) {
       return NextResponse.json(
@@ -213,9 +255,9 @@ export async function POST(request: NextRequest) {
 
     let result;
     if (provider === 'vercel') {
-      result = await deployToVercel({ projectName, repoUrl, branch, envVars });
+      result = await deployToVercel({ projectName, repoUrl, branch, envVars, templateTarget, target });
     } else if (provider === 'netlify') {
-      result = await deployToNetlify({ projectName, repoUrl, branch });
+      result = await deployToNetlify({ projectName, repoUrl, branch, templateTarget });
     } else {
       return NextResponse.json(
         { error: 'Invalid provider. Use "vercel" or "netlify"' },

@@ -4,6 +4,10 @@ import { generateText } from 'ai';
 import { validateAIProvider } from '@/lib/api-validation';
 import { appConfig } from '@/config/app.config';
 import type { BuildBlueprint, DataMode, TemplateTarget } from '@/types/build-blueprint';
+import { aiGenerationLimiter } from '@/lib/rateLimit';
+import { getUsageActor } from '@/lib/usage/identity';
+import { consumeAiGenerationForActor } from '@/lib/usage/persistence';
+import { PROMPT_INJECTION_GUARDRAILS } from '@/lib/prompt-security';
 
 export const dynamic = 'force-dynamic';
 
@@ -102,7 +106,9 @@ function ensureSupabaseInputs(ticket: PlanTicket): PlanTicket {
   };
 }
 
-const PLANNING_PROMPT = `You are a build planner for a React application generator. Analyze the user's request and break it down into discrete, buildable feature tickets.
+const PLANNING_PROMPT = `${PROMPT_INJECTION_GUARDRAILS}
+
+You are a build planner for a React application generator. Analyze the user's request and break it down into discrete, buildable feature tickets.
 
 RULES:
 1. Create FINE-GRAINED tickets (12-15 tickets for a typical landing page)
@@ -447,6 +453,24 @@ export async function POST(request: NextRequest) {
 
     if (!prompt) {
       return NextResponse.json({ error: 'Prompt is required' }, { status: 400 });
+    }
+
+    // Rate-limit + monthly usage limit gate (best-effort; in-memory counters by user/ip)
+    const actor = await getUsageActor(request);
+    const rl = await aiGenerationLimiter(request, actor.userId || actor.key);
+    if (rl instanceof NextResponse) return rl;
+
+    const usage = await consumeAiGenerationForActor(actor, 1);
+    if (!usage.allowed) {
+      return NextResponse.json(
+        {
+          error: 'Usage limit reached for this month. Upgrade to continue.',
+          code: 'USAGE_LIMIT_REACHED',
+          usage: usage.snapshot,
+          upgradeUrl: '/pricing',
+        },
+        { status: 402 }
+      );
     }
 
     const encoder = new TextEncoder();

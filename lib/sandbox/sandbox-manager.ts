@@ -24,6 +24,14 @@ class SandboxManager {
   private sandboxPool: PooledSandbox[] = [];
   private readonly MAX_POOL_SIZE = 2;
   private isPrewarming = false;
+  private lastCleanupAt: number = 0;
+  
+  // Resource limiting / lifecycle controls
+  private readonly POOL_ENABLED = process.env.SANDBOX_POOL_ENABLED === 'true';
+  private readonly PREWARM_ENABLED =
+    process.env.SANDBOX_PREWARM_ENABLED === 'true' || process.env.SANDBOX_PREWARM === 'true';
+  private readonly DEFAULT_POOL_TTL_MS = 10 * 60 * 1000; // 10 minutes
+  private readonly CLEANUP_DEBOUNCE_MS = 30 * 1000; // avoid thrashing when many requests hit
 
   /**
    * Get or create a sandbox provider for the given sandbox ID
@@ -80,8 +88,10 @@ class SandboxManager {
     });
     this.activeSandboxId = sandboxId;
     
-    // Start pre-warming another sandbox in background
-    this.prewarmSandbox();
+    // Start pre-warming another sandbox in background (optional; can be expensive)
+    if (this.POOL_ENABLED && this.PREWARM_ENABLED) {
+      this.prewarmSandbox();
+    }
   }
 
   /**
@@ -166,12 +176,26 @@ class SandboxManager {
     await Promise.all(promises);
     this.sandboxes.clear();
     this.activeSandboxId = null;
+
+    // Also terminate any pooled sandboxes (they may still be running)
+    const pooled = this.sandboxPool.splice(0, this.sandboxPool.length);
+    await Promise.all(
+      pooled.map(p => p.provider.terminate().catch(err =>
+        console.error(`[SandboxManager] Error terminating pooled sandbox ${p.sandboxId}:`, err)
+      ))
+    );
   }
 
   /**
    * Clean up old sandboxes (older than maxAge milliseconds)
    */
   async cleanup(maxAge: number = 3600000): Promise<void> {
+    const nowMs = Date.now();
+    if (nowMs - this.lastCleanupAt < this.CLEANUP_DEBOUNCE_MS) {
+      return;
+    }
+    this.lastCleanupAt = nowMs;
+
     const now = new Date();
     const toDelete: string[] = [];
     
@@ -185,17 +209,47 @@ class SandboxManager {
     for (const id of toDelete) {
       await this.terminateSandbox(id);
     }
+
+    // Also clean up pooled sandboxes that have been sitting around too long (resource limit)
+    const poolTtlMs = (() => {
+      const env = Number(process.env.SANDBOX_POOL_TTL_MS);
+      if (Number.isFinite(env) && env > 0) return env;
+      return this.DEFAULT_POOL_TTL_MS;
+    })();
+
+    if (this.sandboxPool.length > 0) {
+      const keep: PooledSandbox[] = [];
+      const kill: PooledSandbox[] = [];
+      for (const pooled of this.sandboxPool) {
+        const ageMs = now.getTime() - pooled.createdAt.getTime();
+        if (ageMs > poolTtlMs) {
+          kill.push(pooled);
+        } else {
+          keep.push(pooled);
+        }
+      }
+      this.sandboxPool = keep;
+      await Promise.all(
+        kill.map(p => p.provider.terminate().catch(err =>
+          console.error(`[SandboxManager] Error terminating stale pooled sandbox ${p.sandboxId}:`, err)
+        ))
+      );
+    }
   }
 
   // OPTIMIZATION: Get a sandbox from pool or create new
   async getPooledSandbox(): Promise<SandboxProvider | null> {
+    if (!this.POOL_ENABLED) return null;
+
     // Check if we have a warmed sandbox in the pool
     const pooled = this.sandboxPool.shift();
     if (pooled) {
       console.log(`[SandboxManager] OPTIMIZATION: Reusing pooled sandbox ${pooled.sandboxId}`);
       
       // Start pre-warming another sandbox in background
-      this.prewarmSandbox();
+      if (this.PREWARM_ENABLED) {
+        this.prewarmSandbox();
+      }
       
       return pooled.provider;
     }
@@ -205,6 +259,8 @@ class SandboxManager {
 
   // OPTIMIZATION: Pre-warm a sandbox in background
   async prewarmSandbox(): Promise<void> {
+    if (!this.POOL_ENABLED) return;
+
     if (this.isPrewarming || this.sandboxPool.length >= this.MAX_POOL_SIZE) {
       return;
     }
@@ -234,6 +290,8 @@ class SandboxManager {
 
   // OPTIMIZATION: Return sandbox to pool for reuse
   async returnToPool(sandboxId: string): Promise<boolean> {
+    if (!this.POOL_ENABLED) return false;
+
     const sandbox = this.sandboxes.get(sandboxId);
     if (!sandbox || this.sandboxPool.length >= this.MAX_POOL_SIZE) {
       return false;

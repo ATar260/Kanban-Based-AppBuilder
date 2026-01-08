@@ -162,6 +162,37 @@ export type Database = {
           git_commit_url?: string | null;
         };
       };
+      usage_monthly: {
+        Row: {
+          id: string;
+          user_id: string;
+          period: string; // YYYY-MM
+          ai_generations: number;
+          sandbox_seconds: number;
+          last_sandbox_ping_at: string | null;
+          last_sandbox_id: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          period: string;
+          ai_generations?: number;
+          sandbox_seconds?: number;
+          last_sandbox_ping_at?: string | null;
+          last_sandbox_id?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          ai_generations?: number;
+          sandbox_seconds?: number;
+          last_sandbox_ping_at?: string | null;
+          last_sandbox_id?: string | null;
+          updated_at?: string;
+        };
+      };
     };
   };
 };
