@@ -369,15 +369,15 @@ Behavior: After ticket completion → Auto-push to selected repo
 ---
 
 ### 2.4 Plan Versioning
-**Status:** 🔴 Not Started  
+**Status:** ✅ Complete  
 **Priority:** P1 - Important  
 **Estimated Effort:** M
 
 **Tasks:**
-- [ ] Add plan snapshot on "Move to Pipeline"
-- [ ] Store plan versions in database
-- [ ] Plan revert capability
-- [ ] Plan comparison view between versions
+- [x] Add plan snapshot on "Move to Pipeline"
+- [x] Store plan versions in database
+- [x] Plan revert capability
+- [x] Plan comparison view between versions
 
 ---
 
@@ -1019,26 +1019,26 @@ npx prisma db push
 | "Export to GitHub" Button | ✅ Done | High |
 | Create New Repo Modal | ✅ Done | High |
 | Push to Existing Repo | ✅ Done | Medium |
-| Auto-commit Toggle | 🔴 Not Started | P0 |
+| Auto-commit Toggle | ✅ Done | P0 |
 | **Planning** | | |
-| "Come up with 3 UIs" Button | 🔴 Not Started | P0 |
+| "Come up with 3 UIs" Button | ✅ Done | P0 |
 | "Move to Pipeline" Button | ✅ Done | Critical |
 | Plan Edit Mode | ✅ Done | High |
-| Plan Versioning | 🔴 Not Started | P1 |
+| Plan Versioning | ✅ Done | P1 |
 | **Build Execution** | | |
 | "Auto-Build" Button | ✅ Done | Critical |
 | Pause/Resume Buttons | ✅ Done | Critical |
 | "Manual Build" Toggle | ✅ Done | High |
 | **Quality Assurance** | | |
-| PR Review Column | 🔴 Not Started | P0 |
-| Bugbot Agent | 🔴 Not Started | P0 |
+| PR Review Column | ✅ Done | P0 |
+| Bugbot Agent | ✅ Done | P0 |
 | **Views & Navigation** | | |
 | View Toggle (Kanban/Preview) | ✅ Done | Critical |
-| Split View Option | 🔴 Not Started | P2 |
+| Split View Option | ✅ Done | P2 |
 | **Guardrails** | | |
 | Warning Modals (backward movement) | ✅ Done | High |
 | Drag-Drop Restrictions | ✅ Done | High |
-| Soft Deletion | 🔴 Not Started | P1 |
+| Soft Deletion | ✅ Done | P1 |
 | **Auth & Multi-Tenant** | | |
 | Login Button | ✅ Done | Critical |
 | User Menu | ✅ Done | Critical |

@@ -464,9 +464,9 @@ User clicks "Deploy"
 ### Phase 3: Safety & Quality 🟡 In Progress
 - [x] Drag-drop validation
 - [x] Regression warnings
-- [ ] Soft deletion (code commenting)
-- [ ] PR Review agents (Bugbot)
-- [ ] Background Git sync
+- [x] Soft deletion (code commenting)
+- [x] PR Review agents (Bugbot)
+- [x] Background Git sync
 
 ### Phase 4: Deployment System 🔴 Not Started
 - [ ] Vercel deployment integration
