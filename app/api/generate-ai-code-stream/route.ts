@@ -13,6 +13,8 @@ import { appConfig } from '@/config/app.config';
 import { aiGenerationLimiter } from '@/lib/rateLimit';
 import { getUsageActor } from '@/lib/usage/identity';
 import { checkAndConsumeAiGeneration } from '@/lib/usage/usage-manager';
+import { getCorsHeaders } from '@/lib/cors';
+import { PROMPT_INJECTION_GUARDRAILS, sanitizeUntrustedTextForPrompt } from '@/lib/prompt-security';
 
 // Force dynamic route to enable streaming
 export const dynamic = 'force-dynamic';
@@ -637,6 +639,9 @@ Remember: You are a SURGEON making a precise incision, not an artist repainting 
         
         // Build system prompt with conversation awareness
         let systemPrompt = `You are an expert React developer with perfect memory of the conversation. You maintain context across messages and remember scraped websites, generated components, and applied code. Generate clean, modern React code for sandboxed web applications (Vite or Next.js).
+
+${PROMPT_INJECTION_GUARDRAILS}
+
 ${conversationContext}
 
 🚨 CRITICAL RULES - YOUR MOST IMPORTANT INSTRUCTIONS:
@@ -1292,10 +1297,11 @@ MORPH FAST APPLY MODE (EDIT-ONLY):
                 contextParts.push(`Scraped: ${new Date(site.timestamp).toLocaleString()}`);
                 if (site.content) {
                   // Include a summary of the scraped content
-                  const contentPreview = typeof site.content === 'string' 
-                    ? site.content.substring(0, 1000) 
-                    : JSON.stringify(site.content).substring(0, 1000);
-                  contextParts.push(`Content Preview: ${contentPreview}...`);
+                  const rawPreview = typeof site.content === 'string'
+                    ? site.content
+                    : JSON.stringify(site.content);
+                  const contentPreview = sanitizeUntrustedTextForPrompt(rawPreview, 1000);
+                  contextParts.push(`Content Preview (UNTRUSTED):\n<<<\n${contentPreview}\n>>>`);
                 }
               });
             }
@@ -1996,9 +2002,10 @@ Provide the complete file content without any truncation. Include all necessary 
         'Transfer-Encoding': 'chunked',
         'Content-Encoding': 'none', // Prevent compression that can break streaming
         'X-Accel-Buffering': 'no', // Disable nginx buffering
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        ...getCorsHeaders(request, {
+          methods: 'GET, POST, OPTIONS',
+          headers: 'Content-Type, Authorization',
+        }),
       },
     });
     

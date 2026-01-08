@@ -7,6 +7,7 @@ import type { BuildBlueprint, DataMode, TemplateTarget } from '@/types/build-blu
 import { aiGenerationLimiter } from '@/lib/rateLimit';
 import { getUsageActor } from '@/lib/usage/identity';
 import { checkAndConsumeAiGeneration } from '@/lib/usage/usage-manager';
+import { PROMPT_INJECTION_GUARDRAILS } from '@/lib/prompt-security';
 
 export const dynamic = 'force-dynamic';
 
@@ -105,7 +106,9 @@ function ensureSupabaseInputs(ticket: PlanTicket): PlanTicket {
   };
 }
 
-const PLANNING_PROMPT = `You are a build planner for a React application generator. Analyze the user's request and break it down into discrete, buildable feature tickets.
+const PLANNING_PROMPT = `${PROMPT_INJECTION_GUARDRAILS}
+
+You are a build planner for a React application generator. Analyze the user's request and break it down into discrete, buildable feature tickets.
 
 RULES:
 1. Create FINE-GRAINED tickets (12-15 tickets for a typical landing page)
