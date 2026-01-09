@@ -33,6 +33,7 @@ type UiTheme = {
   codeText: string;
   accentSolid: string; // button bg + hover + focus ring
   accentText: string;
+  accentRing: string; // focus ring color (e.g., focus-visible:ring-indigo-500)
 };
 
 interface ScaffoldRequest {
@@ -161,6 +162,16 @@ function resolveTheme(blueprint: BuildBlueprint, template: TemplateTarget, uiSty
     violet: 'text-violet-700',
   };
 
+  const accentRingMap: Record<ThemeAccent, string> = {
+    indigo: 'focus-visible:ring-indigo-500',
+    blue: 'focus-visible:ring-blue-500',
+    emerald: 'focus-visible:ring-emerald-500',
+    rose: 'focus-visible:ring-rose-500',
+    amber: 'focus-visible:ring-amber-500',
+    cyan: 'focus-visible:ring-cyan-500',
+    violet: 'focus-visible:ring-violet-500',
+  };
+
   const cs = uiStyle?.colorScheme;
   const customPrimary = normalizeHex(cs?.primary ?? cs?.accent);
   const customAccent = normalizeHex(cs?.accent ?? cs?.primary);
@@ -189,6 +200,8 @@ function resolveTheme(blueprint: BuildBlueprint, template: TemplateTarget, uiSty
     ? `text-[${customAccent}]`
     : (isDark ? accentTextMapDark[accent] : accentTextMapLight[accent]);
 
+  const accentRing = customPrimary ? `focus-visible:ring-[${customPrimary}]` : accentRingMap[accent];
+
   return {
     preset,
     accent,
@@ -211,6 +224,7 @@ function resolveTheme(blueprint: BuildBlueprint, template: TemplateTarget, uiSty
     codeText: isDark ? 'text-gray-200' : 'text-gray-700',
     accentSolid,
     accentText,
+    accentRing,
   };
 }
 
@@ -451,6 +465,209 @@ function buildBackdropComponent(template: TemplateTarget, ui: UiTheme, uiStyle?:
   };
 }
 
+function buildUiKitFiles(template: TemplateTarget, ui: UiTheme): Array<{ filePath: string; content: string }> {
+  if (template === 'next') {
+    const headingTextClass = ui.isDark ? 'text-white' : 'text-gray-900';
+    const bodyTextClass = ui.isDark ? 'text-gray-200' : 'text-gray-700';
+    const cardDividerClass = ui.isDark ? 'border-white/10' : 'border-black/10';
+    const inputBgClass = ui.isDark ? 'bg-black/30' : 'bg-white/70';
+    const placeholderClass = ui.isDark ? 'placeholder:text-gray-400' : 'placeholder:text-gray-500';
+
+    return [
+      {
+        filePath: 'lib/cn.ts',
+        content: `export function cn(...classes: Array<string | false | null | undefined>) {\n  return classes.filter(Boolean).join(' ');\n}\n`,
+      },
+      {
+        filePath: 'components/ui/Button.tsx',
+        content:
+          `import type * as React from 'react';\n` +
+          `import { cn } from '@/lib/cn';\n\n` +
+          `export type ButtonVariant = 'primary' | 'secondary' | 'outline' | 'ghost' | 'danger';\n` +
+          `export type ButtonSize = 'sm' | 'md' | 'lg';\n\n` +
+          `export function buttonClasses(opts?: { variant?: ButtonVariant; size?: ButtonSize; className?: string }) {\n` +
+          `  const variant = opts?.variant || 'primary';\n` +
+          `  const size = opts?.size || 'md';\n` +
+          `  const base = 'inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-0 disabled:pointer-events-none disabled:opacity-50';\n` +
+          `  const sizes: Record<ButtonSize, string> = {\n` +
+          `    sm: 'h-9 px-3 text-sm',\n` +
+          `    md: 'h-10 px-4 text-sm',\n` +
+          `    lg: 'h-11 px-5 text-base',\n` +
+          `  };\n` +
+          `  const variants: Record<ButtonVariant, string> = {\n` +
+          `    primary: ${JSON.stringify(`${ui.accentSolid} shadow-sm hover:shadow-md`)},\n` +
+          `    secondary: ${JSON.stringify(
+            `border ${ui.border} ${ui.cardBg} ${headingTextClass} ${ui.isDark ? 'hover:bg-gray-950/40' : 'hover:bg-white/90'} shadow-sm hover:shadow-md`
+          )},\n` +
+          `    outline: ${JSON.stringify(
+            `border ${ui.border} bg-transparent ${headingTextClass} ${ui.isDark ? 'hover:bg-white/5' : 'hover:bg-black/5'}`
+          )},\n` +
+          `    ghost: ${JSON.stringify(
+            `${headingTextClass} ${ui.isDark ? 'hover:bg-white/5' : 'hover:bg-black/5'}`
+          )},\n` +
+          `    danger: 'bg-rose-600 text-white hover:bg-rose-500 focus-visible:ring-rose-500 shadow-sm hover:shadow-md',\n` +
+          `  };\n` +
+          `  return cn(base, sizes[size], variants[variant], opts?.className);\n` +
+          `}\n\n` +
+          `export function Button({\n` +
+          `  variant = 'primary',\n` +
+          `  size = 'md',\n` +
+          `  className,\n` +
+          `  ...props\n` +
+          `}: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant; size?: ButtonSize }) {\n` +
+          `  return <button className={buttonClasses({ variant, size, className })} {...props} />;\n` +
+          `}\n`,
+      },
+      {
+        filePath: 'components/ui/Card.tsx',
+        content:
+          `import type * as React from 'react';\n` +
+          `import { cn } from '@/lib/cn';\n\n` +
+          `export function Card({ title, subtitle, children, className }: { title?: string; subtitle?: string; children: React.ReactNode; className?: string }) {\n` +
+          `  return (\n` +
+          `    <section className={cn('rounded-2xl border ${ui.border} ${ui.cardBg} shadow-sm hover:shadow-md transition-shadow', className)}>\n` +
+          `      {title ? (\n` +
+          `        <header className={cn('px-4 py-3 border-b ${cardDividerClass}')}>\n` +
+          `          <div className={cn('text-sm font-semibold ${headingTextClass}')}>{title}</div>\n` +
+          `          {subtitle ? <div className={cn('mt-1 text-xs ${ui.mutedText}')}>{subtitle}</div> : null}\n` +
+          `        </header>\n` +
+          `      ) : null}\n` +
+          `      <div className=\"p-4\">{children}</div>\n` +
+          `    </section>\n` +
+          `  );\n` +
+          `}\n`,
+      },
+      {
+        filePath: 'components/ui/Input.tsx',
+        content:
+          `import type * as React from 'react';\n` +
+          `import { cn } from '@/lib/cn';\n\n` +
+          `export function Input({ className, ...props }: React.InputHTMLAttributes<HTMLInputElement>) {\n` +
+          `  return (\n` +
+          `    <input\n` +
+          `      className={cn(\n` +
+          `        'w-full rounded-lg border ${ui.border} ${inputBgClass} px-3 py-2 text-sm ${headingTextClass} ${placeholderClass} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-0 ${ui.accentRing} disabled:cursor-not-allowed disabled:opacity-50',\n` +
+          `        className\n` +
+          `      )}\n` +
+          `      {...props}\n` +
+          `    />\n` +
+          `  );\n` +
+          `}\n`,
+      },
+      {
+        filePath: 'components/ui/Badge.tsx',
+        content:
+          `import type * as React from 'react';\n` +
+          `import { cn } from '@/lib/cn';\n\n` +
+          `export function Badge({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) {\n` +
+          `  return (\n` +
+          `    <span\n` +
+          `      className={cn(\n` +
+          `        'inline-flex items-center rounded-full border ${ui.border} ${ui.isDark ? 'bg-white/5' : 'bg-black/5'} px-2.5 py-1 text-xs font-medium ${ui.accentText}',\n` +
+          `        className\n` +
+          `      )}\n` +
+          `      {...props}\n` +
+          `    />\n` +
+          `  );\n` +
+          `}\n`,
+      },
+    ];
+  }
+
+  const headingTextClass = ui.isDark ? 'text-white' : 'text-gray-900';
+  const cardDividerClass = ui.isDark ? 'border-white/10' : 'border-black/10';
+  const inputBgClass = ui.isDark ? 'bg-black/30' : 'bg-white/70';
+  const placeholderClass = ui.isDark ? 'placeholder:text-gray-400' : 'placeholder:text-gray-500';
+
+  return [
+    {
+      filePath: 'src/lib/cn.js',
+      content: `export function cn(...classes) {\n  return classes.flat().filter(Boolean).join(' ');\n}\n`,
+    },
+    {
+      filePath: 'src/components/ui/Button.jsx',
+      content:
+        `import { cn } from '../../lib/cn.js';\n\n` +
+        `export function buttonClasses(opts = {}) {\n` +
+        `  const { variant = 'primary', size = 'md', className } = opts;\n` +
+        `  const base = 'inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-0 disabled:pointer-events-none disabled:opacity-50';\n` +
+        `  const sizes = {\n` +
+        `    sm: 'h-9 px-3 text-sm',\n` +
+        `    md: 'h-10 px-4 text-sm',\n` +
+        `    lg: 'h-11 px-5 text-base',\n` +
+        `  };\n` +
+        `  const variants = {\n` +
+        `    primary: ${JSON.stringify(`${ui.accentSolid} shadow-sm hover:shadow-md`)},\n` +
+        `    secondary: ${JSON.stringify(
+          `border ${ui.border} ${ui.cardBg} ${headingTextClass} ${ui.isDark ? 'hover:bg-gray-950/40' : 'hover:bg-white/90'} shadow-sm hover:shadow-md`
+        )},\n` +
+        `    outline: ${JSON.stringify(
+          `border ${ui.border} bg-transparent ${headingTextClass} ${ui.isDark ? 'hover:bg-white/5' : 'hover:bg-black/5'}`
+        )},\n` +
+        `    ghost: ${JSON.stringify(
+          `${headingTextClass} ${ui.isDark ? 'hover:bg-white/5' : 'hover:bg-black/5'}`
+        )},\n` +
+        `    danger: 'bg-rose-600 text-white hover:bg-rose-500 focus-visible:ring-rose-500 shadow-sm hover:shadow-md',\n` +
+        `  };\n` +
+        `  return cn(base, sizes[size] || sizes.md, variants[variant] || variants.primary, className);\n` +
+        `}\n\n` +
+        `export function Button({ variant = 'primary', size = 'md', className, ...props }) {\n` +
+        `  return <button className={buttonClasses({ variant, size, className })} {...props} />;\n` +
+        `}\n`,
+    },
+    {
+      filePath: 'src/components/ui/Card.jsx',
+      content:
+        `import { cn } from '../../lib/cn.js';\n\n` +
+        `export function Card({ title, subtitle, children, className }) {\n` +
+        `  return (\n` +
+        `    <section className={cn('rounded-2xl border ${ui.border} ${ui.cardBg} shadow-sm hover:shadow-md transition-shadow', className)}>\n` +
+        `      {title ? (\n` +
+        `        <header className={cn('px-4 py-3 border-b ${cardDividerClass}')}>\n` +
+        `          <div className={cn('text-sm font-semibold ${headingTextClass}')}>{title}</div>\n` +
+        `          {subtitle ? <div className={cn('mt-1 text-xs ${ui.mutedText}')}>{subtitle}</div> : null}\n` +
+        `        </header>\n` +
+        `      ) : null}\n` +
+        `      <div className=\"p-4\">{children}</div>\n` +
+        `    </section>\n` +
+        `  );\n` +
+        `}\n`,
+    },
+    {
+      filePath: 'src/components/ui/Input.jsx',
+      content:
+        `import { cn } from '../../lib/cn.js';\n\n` +
+        `export function Input({ className, ...props }) {\n` +
+        `  return (\n` +
+        `    <input\n` +
+        `      className={cn(\n` +
+        `        'w-full rounded-lg border ${ui.border} ${inputBgClass} px-3 py-2 text-sm ${headingTextClass} ${placeholderClass} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-0 ${ui.accentRing} disabled:cursor-not-allowed disabled:opacity-50',\n` +
+        `        className\n` +
+        `      )}\n` +
+        `      {...props}\n` +
+        `    />\n` +
+        `  );\n` +
+        `}\n`,
+    },
+    {
+      filePath: 'src/components/ui/Badge.jsx',
+      content:
+        `import { cn } from '../../lib/cn.js';\n\n` +
+        `export function Badge({ className, ...props }) {\n` +
+        `  return (\n` +
+        `    <span\n` +
+        `      className={cn(\n` +
+        `        'inline-flex items-center rounded-full border ${ui.border} ${ui.isDark ? 'bg-white/5' : 'bg-black/5'} px-2.5 py-1 text-xs font-medium ${ui.accentText}',\n` +
+        `        className\n` +
+        `      )}\n` +
+        `      {...props}\n` +
+        `    />\n` +
+        `  );\n` +
+        `}\n`,
+    },
+  ];
+}
+
 function buildNextNav(blueprint: BuildBlueprint, ui: UiTheme): { filePath: string; content: string } {
   const items = blueprint.navigation?.items || [];
   const navLinks = items.map(i => {
@@ -507,6 +724,7 @@ function buildViteNav(blueprint: BuildBlueprint, useRouter: boolean, ui: UiTheme
 function buildVitePages(blueprint: BuildBlueprint, ui: UiTheme): Array<{ filePath: string; content: string }> {
   const pageRoutes = blueprint.routes.filter(r => r.kind === 'page');
   const sectionRoutes = blueprint.routes.filter(r => r.kind === 'section');
+  const useRouter = pageRoutes.length > 1;
 
   const pages: Array<{ filePath: string; content: string }> = [];
 
@@ -530,29 +748,22 @@ function buildVitePages(blueprint: BuildBlueprint, ui: UiTheme): Array<{ filePat
   const tableHeadClass = ui.isDark ? 'text-gray-400' : 'text-gray-500';
   const rowTextClass = ui.isDark ? 'text-gray-200' : 'text-gray-700';
   const rowDividerClass = ui.isDark ? 'divide-gray-800' : 'divide-gray-100';
-  const cardDividerClass = ui.isDark ? 'border-gray-800' : 'border-gray-100';
-  const actionButtonClass = ui.isDark
-    ? `inline-flex items-center rounded-lg border ${ui.border} bg-black/20 px-3 py-2 text-sm font-medium text-white hover:bg-black/30 transition-colors`
-    : `inline-flex items-center rounded-lg border ${ui.border} ${ui.cardBg} px-3 py-2 text-sm font-medium text-gray-900 hover:bg-gray-50 transition-colors`;
-  const primaryButtonClass = `inline-flex items-center rounded-lg px-3 py-2 text-sm font-medium ${ui.accentSolid} shadow-sm`;
+
+  const settingsAction = useRouter
+    ? `<Link to="/settings" className={buttonClasses({ variant: 'primary' })}>Open Settings</Link>`
+    : `<a href="/settings" className={buttonClasses({ variant: 'primary' })}>Open Settings</a>`;
+  const helpAction = useRouter
+    ? `<Link to="/help" className={buttonClasses({ variant: 'secondary' })}>Open Help</Link>`
+    : `<a href="/help" className={buttonClasses({ variant: 'secondary' })}>Open Help</a>`;
 
   const homePageContent =
     `import { useEffect, useMemo, useState } from 'react';\n` +
+    (useRouter ? `import { Link } from 'react-router-dom';\n` : '') +
     `import { DataModeBanner } from '../components/DataModeBanner.jsx';\n` +
+    `import { Card } from '../components/ui/Card.jsx';\n` +
+    `import { buttonClasses } from '../components/ui/Button.jsx';\n` +
     `import { seedData } from '../lib/data/seed.js';\n` +
     `import { createDataClient } from '../lib/data/index.js';\n\n` +
-    `function Card({ title, children }) {\n` +
-    `  return (\n` +
-    `    <div className="rounded-xl border ${ui.border} ${ui.cardBg} shadow-sm">\n` +
-    `      {title ? (\n` +
-    `        <div className="px-4 py-3 border-b ${cardDividerClass}">\n` +
-    `          <div className="text-sm font-semibold ${headingClass}">{title}</div>\n` +
-    `        </div>\n` +
-    `      ) : null}\n` +
-    `      <div className="p-4">{children}</div>\n` +
-    `    </div>\n` +
-    `  );\n` +
-    `}\n\n` +
     `export default function Home() {\n` +
     `  const entityNames = Object.keys(seedData || {});\n` +
     `  const primaryEntity = entityNames[0] || null;\n\n` +
@@ -599,8 +810,8 @@ function buildVitePages(blueprint: BuildBlueprint, ui: UiTheme): Array<{ filePat
     `          </Card>\n` +
     `          <Card title="Quick actions">\n` +
     `            <div className="flex flex-wrap gap-2">\n` +
-    `              <a href="/settings" className=${JSON.stringify(primaryButtonClass)}>Open Settings</a>\n` +
-    `              <a href="/help" className=${JSON.stringify(actionButtonClass)}>Open Help</a>\n` +
+    `              ${settingsAction}\n` +
+    `              ${helpAction}\n` +
     `            </div>\n` +
     `          </Card>\n` +
     `          <Card title="Data preview">\n` +
@@ -660,9 +871,49 @@ function buildVitePages(blueprint: BuildBlueprint, ui: UiTheme): Array<{ filePat
     const otherRoute = pageRoutes.find(r => r.path !== route.path) || pageRoutes[0] || { path: '/', title: 'Home' };
     const otherHref = otherRoute?.path || '/';
     const otherLabel = otherRoute?.title || otherHref;
+
+    const goHomeAction = useRouter
+      ? `<Link to="/" className={buttonClasses({ variant: 'secondary' })}>Go to Home</Link>`
+      : `<a href="/" className={buttonClasses({ variant: 'secondary' })}>Go to Home</a>`;
+    const openOtherAction = useRouter
+      ? `<Link to="${otherHref}" className={buttonClasses({ variant: 'primary' })}>Open ${otherLabel}</Link>`
+      : `<a href="${otherHref}" className={buttonClasses({ variant: 'primary' })}>Open ${otherLabel}</a>`;
+
     pages.push({
       filePath: `src/pages/${name}.jsx`,
-      content: `import { DataModeBanner } from '../components/DataModeBanner.jsx';\n\nfunction Card({ title, children }) {\n  return (\n    <div className="rounded-xl border ${ui.border} ${ui.cardBg} shadow-sm">\n      {title ? (\n        <div className="px-4 py-3 border-b ${cardDividerClass}">\n          <div className="text-sm font-semibold ${headingClass}">{title}</div>\n        </div>\n      ) : null}\n      <div className="p-4">{children}</div>\n    </div>\n  );\n}\n\nexport default function ${name}() {\n  return (\n    <div className="mx-auto w-full max-w-6xl px-4 py-10">\n      <div className="flex flex-col gap-2">\n        <h1 className="text-3xl font-semibold ${headingClass}">${route.title}</h1>\n        <p className="text-sm ${ui.mutedText}">${route.description || 'This page is ready to be filled with app-specific UI and logic.'}</p>\n      </div>\n\n      <div className="mt-6">\n        <DataModeBanner />\n      </div>\n\n      <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4">\n        <Card title="Overview">\n          <div className="text-sm ${bodyTextClass}">Start by defining the key actions and data for this page.</div>\n          <div className="mt-2 text-xs ${ui.mutedText}">Keep UI consistent with the selected theme and palette.</div>\n        </Card>\n        <Card title="Quick actions">\n          <div className="flex flex-wrap gap-2">\n            <a href="/" className=${JSON.stringify(actionButtonClass)}>Go to Home</a>\n            <a href="${otherHref}" className=${JSON.stringify(primaryButtonClass)}>Open ${otherLabel}</a>\n          </div>\n        </Card>\n        <Card title="Notes">\n          <div className="text-sm ${ui.mutedText}">This starter layout will be refined as tickets are implemented.</div>\n        </Card>\n      </div>\n    </div>\n  );\n}\n`,
+      content:
+        `${useRouter ? `import { Link } from 'react-router-dom';\n` : ''}` +
+        `import { DataModeBanner } from '../components/DataModeBanner.jsx';\n` +
+        `import { Card } from '../components/ui/Card.jsx';\n` +
+        `import { buttonClasses } from '../components/ui/Button.jsx';\n\n` +
+        `export default function ${name}() {\n` +
+        `  return (\n` +
+        `    <div className="mx-auto w-full max-w-6xl px-4 py-10">\n` +
+        `      <div className="flex flex-col gap-2">\n` +
+        `        <h1 className="text-3xl font-semibold ${headingClass}">${route.title}</h1>\n` +
+        `        <p className="text-sm ${ui.mutedText}">${route.description || 'This page is ready to be filled with app-specific UI and logic.'}</p>\n` +
+        `      </div>\n\n` +
+        `      <div className="mt-6">\n` +
+        `        <DataModeBanner />\n` +
+        `      </div>\n\n` +
+        `      <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4">\n` +
+        `        <Card title="Overview">\n` +
+        `          <div className="text-sm ${bodyTextClass}">Start by defining the key actions and data for this page.</div>\n` +
+        `          <div className="mt-2 text-xs ${ui.mutedText}">Keep UI consistent with the selected theme and palette.</div>\n` +
+        `        </Card>\n` +
+        `        <Card title="Quick actions">\n` +
+        `          <div className="flex flex-wrap gap-2">\n` +
+        `            ${goHomeAction}\n` +
+        `            ${openOtherAction}\n` +
+        `          </div>\n` +
+        `        </Card>\n` +
+        `        <Card title="Notes">\n` +
+        `          <div className="text-sm ${ui.mutedText}">This starter layout will be refined as tickets are implemented.</div>\n` +
+        `        </Card>\n` +
+        `      </div>\n` +
+        `    </div>\n` +
+        `  );\n` +
+        `}\n`,
     });
   }
 
@@ -709,13 +960,12 @@ function buildNextPages(blueprint: BuildBlueprint, ui: UiTheme): Array<{ filePat
   const pages: Array<{ filePath: string; content: string }> = [];
   const headingClass = ui.isDark ? 'text-white' : 'text-gray-900';
   const bodyTextClass = ui.isDark ? 'text-gray-300' : 'text-gray-700';
-  const cardDividerClass = ui.isDark ? 'border-gray-800' : 'border-gray-100';
-  const actionButtonClass = ui.isDark
-    ? `inline-flex items-center rounded-lg border ${ui.border} bg-black/20 px-3 py-2 text-sm font-medium text-white hover:bg-black/30 transition-colors`
-    : `inline-flex items-center rounded-lg border ${ui.border} ${ui.cardBg} px-3 py-2 text-sm font-medium text-gray-900 hover:bg-gray-50 transition-colors`;
-  const primaryButtonClass = `inline-flex items-center rounded-lg px-3 py-2 text-sm font-medium ${ui.accentSolid} shadow-sm`;
 
   for (const route of pageRoutes) {
+    const otherRoute = pageRoutes.find(r => r.path !== route.path) || pageRoutes[0] || { path: '/', title: 'Home' };
+    const otherHref = otherRoute?.path || '/';
+    const otherLabel = otherRoute?.title || otherHref;
+
     const folder = route.path === '/' ? '' : stripLeadingSlash(route.path);
     const safeFolder = folder
       .split('/')
@@ -727,7 +977,39 @@ function buildNextPages(blueprint: BuildBlueprint, ui: UiTheme): Array<{ filePat
     const filePath = route.path === '/' ? 'app/page.tsx' : `app/${safeFolder}/page.tsx`;
     pages.push({
       filePath,
-      content: `import { DataModeBanner } from '@/components/DataModeBanner';\n\nfunction Card({ title, children }: { title?: string; children: React.ReactNode }) {\n  return (\n    <div className=\"rounded-xl border ${ui.border} ${ui.cardBg} shadow-sm\">\n      {title ? (\n        <div className=\"px-4 py-3 border-b ${cardDividerClass}\">\n          <div className=\"text-sm font-semibold ${headingClass}\">{title}</div>\n        </div>\n      ) : null}\n      <div className=\"p-4\">{children}</div>\n    </div>\n  );\n}\n\nexport default function Page() {\n  return (\n    <main className=\"mx-auto w-full max-w-6xl px-4 py-10\">\n      <div className=\"flex flex-col gap-2\">\n        <h1 className=\"text-3xl font-semibold ${headingClass}\">${route.title}</h1>\n        <p className=\"text-sm ${ui.mutedText}\">${route.description || 'This page is ready to be filled with app-specific UI and logic.'}</p>\n      </div>\n\n      <div className=\"mt-6\">\n        <DataModeBanner />\n      </div>\n\n      <div className=\"mt-8 grid grid-cols-1 md:grid-cols-3 gap-4\">\n        <Card title=\"Overview\">\n          <div className=\"text-sm ${bodyTextClass}\">Start by defining the key actions and data for this page.</div>\n          <div className=\"mt-2 text-xs ${ui.mutedText}\">Keep UI consistent with the selected theme and palette.</div>\n        </Card>\n        <Card title=\"Quick actions\">\n          <div className=\"flex flex-wrap gap-2\">\n            <a href=\"/\" className=${JSON.stringify(actionButtonClass)}>Go to Home</a>\n            <a href=\"/help\" className=${JSON.stringify(primaryButtonClass)}>Open Help</a>\n          </div>\n        </Card>\n        <Card title=\"Notes\">\n          <div className=\"text-sm ${ui.mutedText}\">This starter layout will be refined as tickets are implemented.</div>\n        </Card>\n      </div>\n    </main>\n  );\n}\n`,
+      content:
+        `import Link from 'next/link';\n` +
+        `import { DataModeBanner } from '@/components/DataModeBanner';\n` +
+        `import { Card } from '@/components/ui/Card';\n` +
+        `import { buttonClasses } from '@/components/ui/Button';\n\n` +
+        `export default function Page() {\n` +
+        `  return (\n` +
+        `    <main className=\"mx-auto w-full max-w-6xl px-4 py-10\">\n` +
+        `      <div className=\"flex flex-col gap-2\">\n` +
+        `        <h1 className=\"text-3xl font-semibold ${headingClass}\">${route.title}</h1>\n` +
+        `        <p className=\"text-sm ${ui.mutedText}\">${route.description || 'This page is ready to be filled with app-specific UI and logic.'}</p>\n` +
+        `      </div>\n\n` +
+        `      <div className=\"mt-6\">\n` +
+        `        <DataModeBanner />\n` +
+        `      </div>\n\n` +
+        `      <div className=\"mt-8 grid grid-cols-1 md:grid-cols-3 gap-4\">\n` +
+        `        <Card title=\"Overview\">\n` +
+        `          <div className=\"text-sm ${bodyTextClass}\">Start by defining the key actions and data for this page.</div>\n` +
+        `          <div className=\"mt-2 text-xs ${ui.mutedText}\">Keep UI consistent with the selected theme and palette.</div>\n` +
+        `        </Card>\n` +
+        `        <Card title=\"Quick actions\">\n` +
+        `          <div className=\"flex flex-wrap gap-2\">\n` +
+        `            <Link href=\"/\" className={buttonClasses({ variant: 'secondary' })}>Go to Home</Link>\n` +
+        `            <Link href=${JSON.stringify(otherHref)} className={buttonClasses({ variant: 'primary' })}>Open ${otherLabel}</Link>\n` +
+        `          </div>\n` +
+        `        </Card>\n` +
+        `        <Card title=\"Notes\">\n` +
+        `          <div className=\"text-sm ${ui.mutedText}\">This starter layout will be refined as tickets are implemented.</div>\n` +
+        `        </Card>\n` +
+        `      </div>\n` +
+        `    </main>\n` +
+        `  );\n` +
+        `}\n`,
     });
   }
 
@@ -823,6 +1105,7 @@ export async function POST(request: NextRequest) {
     files.push(...buildMockClientFiles(template));
     files.push(buildDataModeBanner(template, ui));
     files.push(buildBackdropComponent(template, ui, body.uiStyle));
+    files.push(...buildUiKitFiles(template, ui));
     files.push(buildSupabaseSchemaFile(blueprint, template));
 
     if (template === 'next') {

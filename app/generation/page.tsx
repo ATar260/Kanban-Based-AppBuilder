@@ -1910,7 +1910,7 @@ Requirements:
 
         const uiStyleForPrompt = (kanban.plan as any)?.uiStyle;
         const uiStyleBlock = uiStyleForPrompt
-          ? `\n\nUI STYLE (apply consistently across all tickets):\n${JSON.stringify(uiStyleForPrompt, null, 2)}\n\nUI RULES:\n- Keep the UI visually rich (layered sections, modern spacing/typography, hover+focus states, and polished empty/loading states).\n- Do NOT drift to a generic default look; follow the selected style + blueprint theme.\n`
+          ? `\n\nUI STYLE (apply consistently across all tickets):\n${JSON.stringify(uiStyleForPrompt, null, 2)}\n\nUI RULES:\n- Keep the UI visually rich (layered sections, modern spacing/typography, hover+focus states, and polished empty/loading states).\n- Do NOT drift to a generic default look; follow the selected style + blueprint theme.\n- Reuse the existing UI primitives in the codebase. Do NOT create duplicate Button/Card/Input components.\n  - Vite: src/components/ui/* and src/lib/cn.js\n  - Next: components/ui/* and lib/cn.ts\n- If you need a new primitive, extend the existing components in those folders instead of introducing a parallel UI kit.\n`
           : '';
 
         const ticketPrompt = `Implement the following ticket in the existing application.\n\nTemplate: ${desiredTemplate}\n${uiStyleBlock}\nBlueprint (high-level contract):\n${planBlueprint ? JSON.stringify(planBlueprint, null, 2) : '(none)'}\n\nTicket:\n- Title: ${nextTicket.title}\n- Description: ${nextTicket.description}${credentialText}\n\nRules:\n- Implement the ticket completely.\n- Preserve existing routes/navigation and the mock-first data layer.\n- Create new files if required by this ticket.\n- Output ONLY <file path=\"...\"> blocks for files you changed/created.`;
