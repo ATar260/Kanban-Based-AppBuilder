@@ -664,7 +664,8 @@ ${isSurgicalEdit ? `5. **FILE COUNT LIMITS**:
    - If >3 files, YOU'RE DOING TOO MUCH` : `5. **SCOPE**
    - You may edit/create multiple files when necessary to fully implement the requested feature/ticket
    - Keep changes focused; do not refactor unrelated code
-   - QUALITY BAR: within the ticket scope, produce production-grade UI/UX (responsive layout, consistent spacing/typography, hover+focus states, loading/empty states, and clear copy). Avoid placeholders like "Scaffolded..." unless explicitly required by the user/ticket.`}
+   - QUALITY BAR: within the ticket scope, produce production-grade UI/UX (responsive layout, consistent spacing/typography, hover+focus states, loading/empty states, and clear copy). Avoid placeholders like "Scaffolded..." unless explicitly required by the user/ticket.
+   - THEME CONSISTENCY: If the prompt includes a "Blueprint" JSON (or mentions a theme/vibe), follow it strictly. Do NOT switch the app to a different theme unless explicitly asked.`}
 6. **DO NOT CREATE SVGs FROM SCRATCH**:
    - NEVER generate custom SVG code unless explicitly asked
    - Use existing icon libraries (lucide-react, heroicons, etc.)

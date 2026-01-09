@@ -3,7 +3,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { generateText } from 'ai';
 import { validateAIProvider } from '@/lib/api-validation';
 import { appConfig } from '@/config/app.config';
-import type { BuildBlueprint, BlueprintRoute, DataMode, RouteKind, TemplateTarget } from '@/types/build-blueprint';
+import type { BuildBlueprint, BlueprintRoute, DataMode, RouteKind, TemplateTarget, ThemeAccent, ThemePreset } from '@/types/build-blueprint';
 import { aiGenerationLimiter } from '@/lib/rateLimit';
 import { getUsageActor } from '@/lib/usage/identity';
 import { consumeAiGenerationForActor } from '@/lib/usage/persistence';
@@ -149,6 +149,16 @@ BUILD BLUEPRINT (required in "blueprint"):
   - Choose "next" for multi-page apps, auth, dashboards, server APIs, database-backed apps
 - dataMode: One of ["mock","real_optional","real_required"]
   - Default to "real_optional" unless the user explicitly requires a real DB before anything can work
+- theme (required): Object describing the visual design system/vibe for the generated app:
+  - preset: One of ["modern_light","modern_dark","fintech_dark","playful_light","editorial_light"]
+  - accent: One of ["indigo","blue","emerald","rose","amber","cyan","violet"]
+  - vibe: 2-5 words describing the style (e.g., "sleek, premium, minimal")
+  THEME RULES:
+  - Pick a theme that matches the user's request/vibe (not the same for every app)
+  - Dashboards/admin apps often work best with modern_dark or fintech_dark
+  - Blogs/content apps often work best with editorial_light
+  - Playful/consumer apps can use playful_light
+  - Keep the theme consistent across scaffolding + all tickets unless the user asks to change it
 - routes: Array of routes the user should be able to navigate to, each with:
   - id: stable identifier (snake_case)
   - kind: "page" or "section"
@@ -241,6 +251,26 @@ function inferTemplateTarget(prompt: string): TemplateTarget {
   ];
   if (nextSignals.some(s => text.includes(s))) return 'next';
   return 'vite';
+}
+
+function inferThemePreset(prompt: string): ThemePreset {
+  const text = prompt.toLowerCase();
+  if (/\b(dark|night|cyber|neo|terminal|hacker|devtool)\b/.test(text)) return 'modern_dark';
+  if (/\b(fintech|finance|bank|banking|payments|crypto|trading|portfolio|invoice)\b/.test(text)) return 'fintech_dark';
+  if (/\b(blog|editorial|magazine|news|writer|writing|publishing)\b/.test(text)) return 'editorial_light';
+  if (/\b(playful|kids|children|toy|fun|cute)\b/.test(text)) return 'playful_light';
+  return 'modern_light';
+}
+
+function inferThemeAccent(prompt: string): ThemeAccent {
+  const text = prompt.toLowerCase();
+  if (/\b(emerald|green)\b/.test(text)) return 'emerald';
+  if (/\b(rose|pink|magenta)\b/.test(text)) return 'rose';
+  if (/\b(amber|orange|gold|yellow)\b/.test(text)) return 'amber';
+  if (/\b(cyan|teal)\b/.test(text)) return 'cyan';
+  if (/\b(violet|purple)\b/.test(text)) return 'violet';
+  if (/\b(blue)\b/.test(text)) return 'blue';
+  return 'indigo';
 }
 
 function normalizeBlueprint(raw: PlanningResponse['blueprint'] | undefined, prompt: string): BuildBlueprint {
@@ -376,9 +406,29 @@ function normalizeBlueprint(raw: PlanningResponse['blueprint'] | undefined, prom
         })
     : undefined;
 
+  const allowedPresets: ThemePreset[] = ['modern_light', 'modern_dark', 'fintech_dark', 'playful_light', 'editorial_light'];
+  const allowedAccents: ThemeAccent[] = ['indigo', 'blue', 'emerald', 'rose', 'amber', 'cyan', 'violet'];
+
+  const rawTheme: any = (raw as any)?.theme;
+  const preset: ThemePreset =
+    rawTheme && typeof rawTheme === 'object' && allowedPresets.includes(rawTheme.preset)
+      ? rawTheme.preset
+      : inferThemePreset(prompt);
+
+  const accent: ThemeAccent =
+    rawTheme && typeof rawTheme === 'object' && allowedAccents.includes(rawTheme.accent)
+      ? rawTheme.accent
+      : inferThemeAccent(prompt);
+
+  const vibe: string | undefined =
+    rawTheme && typeof rawTheme === 'object' && typeof rawTheme.vibe === 'string' && rawTheme.vibe.trim().length > 0
+      ? rawTheme.vibe.trim().slice(0, 60)
+      : undefined;
+
   return {
     templateTarget,
     dataMode,
+    theme: { preset, accent, vibe },
     routes: safeRoutes,
     navigation: { items: mergedNavItems },
     entities: entities as any,

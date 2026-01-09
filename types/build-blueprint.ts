@@ -5,6 +5,32 @@ export type TemplateTarget = 'vite' | 'next';
 // real_required: blocks build until credentials are provided
 export type DataMode = 'mock' | 'real_optional' | 'real_required';
 
+export type ThemePreset =
+  | 'modern_light'
+  | 'modern_dark'
+  | 'fintech_dark'
+  | 'playful_light'
+  | 'editorial_light';
+
+export type ThemeAccent = 'indigo' | 'blue' | 'emerald' | 'rose' | 'amber' | 'cyan' | 'violet';
+
+export interface BlueprintTheme {
+  /**
+   * A high-level design system preset. Used to keep the app visually consistent end-to-end.
+   * This should be chosen based on the user's request ("vibe").
+   */
+  preset: ThemePreset;
+  /**
+   * Primary accent color used for CTAs/highlights.
+   */
+  accent: ThemeAccent;
+  /**
+   * 2-5 words describing the intended vibe (e.g., "sleek, premium, minimal").
+   * Helpful for the generator to keep UI consistent.
+   */
+  vibe?: string;
+}
+
 export type RouteKind = 'page' | 'section';
 
 export interface BlueprintRoute {
@@ -62,6 +88,7 @@ export interface BlueprintFlow {
 export interface BuildBlueprint {
   templateTarget: TemplateTarget;
   dataMode: DataMode;
+  theme?: BlueprintTheme;
   routes: BlueprintRoute[];
   navigation: BlueprintNavigation;
   entities?: BlueprintEntity[];

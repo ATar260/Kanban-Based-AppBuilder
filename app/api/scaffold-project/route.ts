@@ -6,6 +6,33 @@ import { sandboxManager } from '@/lib/sandbox/sandbox-manager';
 export const dynamic = 'force-dynamic';
 
 type TemplateTarget = 'vite' | 'next';
+type ThemePreset = 'modern_light' | 'modern_dark' | 'fintech_dark' | 'playful_light' | 'editorial_light';
+type ThemeAccent = 'indigo' | 'blue' | 'emerald' | 'rose' | 'amber' | 'cyan' | 'violet';
+
+type UiTheme = {
+  preset: ThemePreset;
+  accent: ThemeAccent;
+  isDark: boolean;
+  // Common tokens
+  appBg: string;
+  text: string;
+  mutedText: string;
+  border: string;
+  cardBg: string;
+  headerBg: string;
+  headerBorder: string;
+  headerText: string;
+  headerLink: string;
+  bannerBg: string;
+  bannerBorder: string;
+  bannerText: string;
+  bannerMuted: string;
+  codeBg: string;
+  codeBorder: string;
+  codeText: string;
+  accentSolid: string; // button bg + hover + focus ring
+  accentText: string;
+};
 
 interface ScaffoldRequest {
   sandboxId: string;
@@ -37,6 +64,78 @@ function stripLeadingSlash(p: string): string {
 
 function getDir(filePath: string): string {
   return path.posix.dirname(filePath);
+}
+
+function resolveTheme(blueprint: BuildBlueprint, template: TemplateTarget): UiTheme {
+  const allowedPresets: ThemePreset[] = ['modern_light', 'modern_dark', 'fintech_dark', 'playful_light', 'editorial_light'];
+  const allowedAccents: ThemeAccent[] = ['indigo', 'blue', 'emerald', 'rose', 'amber', 'cyan', 'violet'];
+
+  const rawTheme: any = (blueprint as any)?.theme;
+  const preset: ThemePreset =
+    rawTheme && typeof rawTheme === 'object' && allowedPresets.includes(rawTheme.preset)
+      ? rawTheme.preset
+      : (template === 'next' ? 'modern_dark' : 'modern_light');
+
+  const accent: ThemeAccent =
+    rawTheme && typeof rawTheme === 'object' && allowedAccents.includes(rawTheme.accent)
+      ? rawTheme.accent
+      : 'indigo';
+
+  const isDark = preset.endsWith('_dark');
+
+  const accentSolidMap: Record<ThemeAccent, string> = {
+    indigo: 'bg-indigo-600 hover:bg-indigo-500 focus-visible:ring-indigo-500',
+    blue: 'bg-blue-600 hover:bg-blue-500 focus-visible:ring-blue-500',
+    emerald: 'bg-emerald-600 hover:bg-emerald-500 focus-visible:ring-emerald-500',
+    rose: 'bg-rose-600 hover:bg-rose-500 focus-visible:ring-rose-500',
+    amber: 'bg-amber-600 hover:bg-amber-500 focus-visible:ring-amber-500',
+    cyan: 'bg-cyan-600 hover:bg-cyan-500 focus-visible:ring-cyan-500',
+    violet: 'bg-violet-600 hover:bg-violet-500 focus-visible:ring-violet-500',
+  };
+
+  const accentTextMapDark: Record<ThemeAccent, string> = {
+    indigo: 'text-indigo-300',
+    blue: 'text-blue-300',
+    emerald: 'text-emerald-300',
+    rose: 'text-rose-300',
+    amber: 'text-amber-300',
+    cyan: 'text-cyan-300',
+    violet: 'text-violet-300',
+  };
+
+  const accentTextMapLight: Record<ThemeAccent, string> = {
+    indigo: 'text-indigo-700',
+    blue: 'text-blue-700',
+    emerald: 'text-emerald-700',
+    rose: 'text-rose-700',
+    amber: 'text-amber-700',
+    cyan: 'text-cyan-700',
+    violet: 'text-violet-700',
+  };
+
+  return {
+    preset,
+    accent,
+    isDark,
+    appBg: isDark ? 'bg-gradient-to-b from-gray-950 via-gray-950 to-black' : 'bg-gradient-to-b from-gray-50 to-white',
+    text: isDark ? 'text-gray-100' : 'text-gray-900',
+    mutedText: isDark ? 'text-gray-400' : 'text-gray-600',
+    border: isDark ? 'border-gray-800' : 'border-gray-200',
+    cardBg: isDark ? 'bg-gray-900/40' : 'bg-white',
+    headerBg: isDark ? 'bg-black/40' : 'bg-white/80',
+    headerBorder: isDark ? 'border-gray-900' : 'border-gray-200',
+    headerText: isDark ? 'text-white' : 'text-gray-900',
+    headerLink: isDark ? 'text-gray-300 hover:text-white' : 'text-gray-700 hover:text-gray-900',
+    bannerBg: isDark ? 'bg-gray-900/40' : 'bg-gray-50',
+    bannerBorder: isDark ? 'border-gray-800' : 'border-gray-200',
+    bannerText: isDark ? 'text-gray-200' : 'text-gray-700',
+    bannerMuted: isDark ? 'text-gray-400' : 'text-gray-600',
+    codeBg: isDark ? 'bg-black/40' : 'bg-white',
+    codeBorder: isDark ? 'border-gray-800' : 'border-gray-200',
+    codeText: isDark ? 'text-gray-200' : 'text-gray-700',
+    accentSolid: `${accentSolidMap[accent]} text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-0`,
+    accentText: isDark ? accentTextMapDark[accent] : accentTextMapLight[accent],
+  };
 }
 
 function makeSeedValue(fieldName: string, idx: number): any {
@@ -200,21 +299,21 @@ function buildMockClientFiles(template: TemplateTarget): Array<{ filePath: strin
   ];
 }
 
-function buildDataModeBanner(template: TemplateTarget): { filePath: string; content: string } {
+function buildDataModeBanner(template: TemplateTarget, ui: UiTheme): { filePath: string; content: string } {
   if (template === 'next') {
     return {
       filePath: 'components/DataModeBanner.tsx',
-      content: `export function DataModeBanner() {\n  const hasSupabase = Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);\n\n  return (\n    <div className=\"w-full border border-gray-800 bg-gray-900/40 rounded-lg p-4\">\n      <div className=\"text-sm font-medium\">Data mode</div>\n      <div className=\"mt-1 text-sm text-gray-300\">\n        {hasSupabase ? 'Supabase env vars detected — real database mode enabled.' : 'Using seeded demo data (mock-first).'}\n      </div>\n      {!hasSupabase ? (\n        <div className=\"mt-2 text-xs text-gray-400\">\n          To enable Supabase, add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.\n        </div>\n      ) : (\n        <div className=\"mt-2 text-xs text-gray-400\">\n          If you haven’t created tables yet, see <code className=\"px-1 py-0.5 bg-black/40 rounded\">supabase/schema.sql</code>.\n        </div>\n      )}\n    </div>\n  );\n}\n`,
+      content: `export function DataModeBanner() {\n  const hasSupabase = Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);\n\n  return (\n    <div className=\"w-full border rounded-lg p-4 ${ui.bannerBorder} ${ui.bannerBg}\">\n      <div className=\"text-sm font-medium ${ui.isDark ? 'text-white' : 'text-gray-900'}\">Data mode</div>\n      <div className=\"mt-1 text-sm ${ui.bannerText}\">\n        {hasSupabase ? 'Supabase env vars detected — real database mode enabled.' : 'Using seeded demo data (mock-first).'}\n      </div>\n      {!hasSupabase ? (\n        <div className=\"mt-2 text-xs ${ui.bannerMuted}\">\n          To enable Supabase, add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.\n        </div>\n      ) : (\n        <div className=\"mt-2 text-xs ${ui.bannerMuted}\">\n          If you haven’t created tables yet, see <code className=\"px-1 py-0.5 border rounded ${ui.codeBg} ${ui.codeBorder} ${ui.codeText}\">supabase/schema.sql</code>.\n        </div>\n      )}\n    </div>\n  );\n}\n`,
     };
   }
 
   return {
     filePath: 'src/components/DataModeBanner.jsx',
-    content: `export function DataModeBanner() {\n  const hasSupabase = Boolean(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY);\n\n  return (\n    <div className=\"w-full border border-gray-200 bg-gray-50 rounded-lg p-4\">\n      <div className=\"text-sm font-medium text-gray-900\">Data mode</div>\n      <div className=\"mt-1 text-sm text-gray-700\">\n        {hasSupabase ? 'Supabase env vars detected — real database mode enabled.' : 'Using seeded demo data (mock-first).'}\n      </div>\n      {!hasSupabase ? (\n        <div className=\"mt-2 text-xs text-gray-600\">\n          To enable Supabase, add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.\n        </div>\n      ) : (\n        <div className=\"mt-2 text-xs text-gray-600\">\n          If you haven’t created tables yet, see <code className=\"px-1 py-0.5 bg-white border border-gray-200 rounded\">supabase/schema.sql</code>.\n        </div>\n      )}\n    </div>\n  );\n}\n`,
+    content: `export function DataModeBanner() {\n  const hasSupabase = Boolean(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY);\n\n  return (\n    <div className=\"w-full border rounded-lg p-4 ${ui.bannerBorder} ${ui.bannerBg}\">\n      <div className=\"text-sm font-medium ${ui.isDark ? 'text-white' : 'text-gray-900'}\">Data mode</div>\n      <div className=\"mt-1 text-sm ${ui.bannerText}\">\n        {hasSupabase ? 'Supabase env vars detected — real database mode enabled.' : 'Using seeded demo data (mock-first).'}\n      </div>\n      {!hasSupabase ? (\n        <div className=\"mt-2 text-xs ${ui.bannerMuted}\">\n          To enable Supabase, add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.\n        </div>\n      ) : (\n        <div className=\"mt-2 text-xs ${ui.bannerMuted}\">\n          If you haven’t created tables yet, see <code className=\"px-1 py-0.5 border rounded ${ui.codeBg} ${ui.codeBorder} ${ui.codeText}\">supabase/schema.sql</code>.\n        </div>\n      )}\n    </div>\n  );\n}\n`,
   };
 }
 
-function buildNextNav(blueprint: BuildBlueprint): { filePath: string; content: string } {
+function buildNextNav(blueprint: BuildBlueprint, ui: UiTheme): { filePath: string; content: string } {
   const items = blueprint.navigation?.items || [];
   const navLinks = items.map(i => {
     const route = blueprint.routes.find(r => r.id === i.routeId);
@@ -226,11 +325,11 @@ function buildNextNav(blueprint: BuildBlueprint): { filePath: string; content: s
 
   return {
     filePath: 'components/NavBar.tsx',
-    content: `import Link from 'next/link';\n\nconst navItems = [\n  ${navLinks}\n];\n\nexport function NavBar() {\n  return (\n    <header className=\"w-full border-b border-gray-900 bg-black/40 backdrop-blur\">\n      <div className=\"mx-auto w-full max-w-5xl px-4 py-4 flex items-center justify-between\">\n        <div className=\"text-sm font-semibold\">App</div>\n        <nav className=\"flex items-center gap-4\">\n          {navItems.map(item => (\n            <Link key={item.href} href={item.href} className=\"text-sm text-gray-300 hover:text-white transition-colors\">\n              {item.label}\n            </Link>\n          ))}\n        </nav>\n      </div>\n    </header>\n  );\n}\n`,
+    content: `import Link from 'next/link';\n\nconst navItems = [\n  ${navLinks}\n];\n\nexport function NavBar() {\n  return (\n    <header className=\"w-full border-b backdrop-blur ${ui.headerBorder} ${ui.headerBg}\">\n      <div className=\"mx-auto w-full max-w-5xl px-4 py-4 flex items-center justify-between\">\n        <div className={\"text-sm font-semibold flex items-center gap-2 \" + (${JSON.stringify(ui.headerText)} as const)}>\n          <span>App</span>\n          <span className={\"text-xs \" + (${JSON.stringify(ui.accentText)} as const)}>●</span>\n        </div>\n        <nav className=\"flex items-center gap-4\">\n          {navItems.map(item => (\n            <Link key={item.href} href={item.href} className={\"text-sm transition-colors \" + (${JSON.stringify(ui.headerLink)} as const)}>\n              {item.label}\n            </Link>\n          ))}\n        </nav>\n      </div>\n    </header>\n  );\n}\n`,
   };
 }
 
-function buildViteNav(blueprint: BuildBlueprint, useRouter: boolean): { filePath: string; content: string } {
+function buildViteNav(blueprint: BuildBlueprint, useRouter: boolean, ui: UiTheme): { filePath: string; content: string } {
   const items = blueprint.navigation?.items || [];
   const resolved = items.map(i => {
     const route = blueprint.routes.find(r => r.id === i.routeId);
@@ -245,38 +344,40 @@ function buildViteNav(blueprint: BuildBlueprint, useRouter: boolean): { filePath
     const linkItems = resolved.map(i => {
       if (i.kind === 'section') {
         const href = i.path.startsWith('#') ? `/${i.path}` : i.path;
-        return `<a key="${href}" href="${href}" className="text-sm text-gray-700 hover:text-gray-900 transition-colors">${i.label}</a>`;
+        return `<a key="${href}" href="${href}" className="text-sm ${ui.headerLink} transition-colors">${i.label}</a>`;
       }
-      return `<Link key="${i.path}" to="${i.path}" className="text-sm text-gray-700 hover:text-gray-900 transition-colors">${i.label}</Link>`;
+      return `<Link key="${i.path}" to="${i.path}" className="text-sm ${ui.headerLink} transition-colors">${i.label}</Link>`;
     }).join('\n          ');
 
     return {
       filePath: 'src/components/NavBar.jsx',
-      content: `import { Link } from 'react-router-dom';\n\nexport function NavBar() {\n  return (\n    <header className="w-full border-b border-gray-200 bg-white/80 backdrop-blur">\n      <div className="mx-auto w-full max-w-5xl px-4 py-4 flex items-center justify-between">\n        <div className="text-sm font-semibold text-gray-900">App</div>\n        <nav className="flex items-center gap-4">\n          ${linkItems}\n        </nav>\n      </div>\n    </header>\n  );\n}\n`,
+      content: `import { Link } from 'react-router-dom';\n\nexport function NavBar() {\n  return (\n    <header className="w-full border-b backdrop-blur ${ui.headerBorder} ${ui.headerBg}">\n      <div className="mx-auto w-full max-w-5xl px-4 py-4 flex items-center justify-between">\n        <div className={"text-sm font-semibold flex items-center gap-2 " + ${JSON.stringify(ui.headerText)}}>\n          <span>App</span>\n          <span className={"text-xs " + ${JSON.stringify(ui.accentText)}}>●</span>\n        </div>\n        <nav className="flex items-center gap-4">\n          ${linkItems}\n        </nav>\n      </div>\n    </header>\n  );\n}\n`,
     };
   }
 
   const linkItems = resolved.map(i => {
     const href = i.kind === 'section' ? (i.path.startsWith('#') ? i.path : `#${i.path}`) : (i.path || '#');
-    return `<a key="${href}" href="${href}" className="text-sm text-gray-700 hover:text-gray-900 transition-colors">${i.label}</a>`;
+    return `<a key="${href}" href="${href}" className="text-sm ${ui.headerLink} transition-colors">${i.label}</a>`;
   }).join('\n          ');
 
   return {
     filePath: 'src/components/NavBar.jsx',
-    content: `export function NavBar() {\n  return (\n    <header className="w-full border-b border-gray-200 bg-white/80 backdrop-blur">\n      <div className="mx-auto w-full max-w-5xl px-4 py-4 flex items-center justify-between">\n        <div className="text-sm font-semibold text-gray-900">App</div>\n        <nav className="flex items-center gap-4">\n          ${linkItems}\n        </nav>\n      </div>\n    </header>\n  );\n}\n`,
+    content: `export function NavBar() {\n  return (\n    <header className="w-full border-b backdrop-blur ${ui.headerBorder} ${ui.headerBg}">\n      <div className="mx-auto w-full max-w-5xl px-4 py-4 flex items-center justify-between">\n        <div className={"text-sm font-semibold flex items-center gap-2 " + ${JSON.stringify(ui.headerText)}}>\n          <span>App</span>\n          <span className={"text-xs " + ${JSON.stringify(ui.accentText)}}>●</span>\n        </div>\n        <nav className="flex items-center gap-4">\n          ${linkItems}\n        </nav>\n      </div>\n    </header>\n  );\n}\n`,
   };
 }
 
-function buildVitePages(blueprint: BuildBlueprint): Array<{ filePath: string; content: string }> {
+function buildVitePages(blueprint: BuildBlueprint, ui: UiTheme): Array<{ filePath: string; content: string }> {
   const pageRoutes = blueprint.routes.filter(r => r.kind === 'page');
   const sectionRoutes = blueprint.routes.filter(r => r.kind === 'section');
 
   const pages: Array<{ filePath: string; content: string }> = [];
 
   // Home page
+  const sectionTitleClass = ui.isDark ? 'text-white' : 'text-gray-900';
+  const sectionTextClass = ui.isDark ? 'text-gray-300' : 'text-gray-700';
   const homeSections = sectionRoutes.map(r => {
     const id = r.path.startsWith('#') ? r.path.slice(1) : r.path.replace(/^#/, '');
-    return `      <section id="${id}" className="py-16 border-t border-gray-200">\n        <h2 className="text-2xl font-semibold text-gray-900">${r.title}</h2>\n        <p className="mt-2 text-sm text-gray-700">${r.description || 'Section content goes here.'}</p>\n      </section>`;
+    return `      <section id="${id}" className="py-16 border-t ${ui.border}">\n        <h2 className="text-2xl font-semibold ${sectionTitleClass}">${r.title}</h2>\n        <p className="mt-2 text-sm ${sectionTextClass}">${r.description || 'Section content goes here.'}</p>\n      </section>`;
   }).join('\n\n');
 
   /*
@@ -286,6 +387,17 @@ function buildVitePages(blueprint: BuildBlueprint): Array<{ filePath: string; co
   });
   */
 
+  const headingClass = ui.isDark ? 'text-white' : 'text-gray-900';
+  const bodyTextClass = ui.isDark ? 'text-gray-300' : 'text-gray-700';
+  const tableHeadClass = ui.isDark ? 'text-gray-400' : 'text-gray-500';
+  const rowTextClass = ui.isDark ? 'text-gray-200' : 'text-gray-700';
+  const rowDividerClass = ui.isDark ? 'divide-gray-800' : 'divide-gray-100';
+  const cardDividerClass = ui.isDark ? 'border-gray-800' : 'border-gray-100';
+  const actionButtonClass = ui.isDark
+    ? `inline-flex items-center rounded-lg border ${ui.border} bg-black/20 px-3 py-2 text-sm font-medium text-white hover:bg-black/30 transition-colors`
+    : `inline-flex items-center rounded-lg border ${ui.border} ${ui.cardBg} px-3 py-2 text-sm font-medium text-gray-900 hover:bg-gray-50 transition-colors`;
+  const primaryButtonClass = `inline-flex items-center rounded-lg px-3 py-2 text-sm font-medium ${ui.accentSolid} shadow-sm`;
+
   const homePageContent =
     `import { useEffect, useMemo, useState } from 'react';\n` +
     `import { DataModeBanner } from '../components/DataModeBanner.jsx';\n` +
@@ -293,10 +405,10 @@ function buildVitePages(blueprint: BuildBlueprint): Array<{ filePath: string; co
     `import { createDataClient } from '../lib/data/index.js';\n\n` +
     `function Card({ title, children }) {\n` +
     `  return (\n` +
-    `    <div className="rounded-xl border border-gray-200 bg-white shadow-sm">\n` +
+    `    <div className="rounded-xl border ${ui.border} ${ui.cardBg} shadow-sm">\n` +
     `      {title ? (\n` +
-    `        <div className="px-4 py-3 border-b border-gray-100">\n` +
-    `          <div className="text-sm font-semibold text-gray-900">{title}</div>\n` +
+    `        <div className="px-4 py-3 border-b ${cardDividerClass}">\n` +
+    `          <div className="text-sm font-semibold ${headingClass}">{title}</div>\n` +
     `        </div>\n` +
     `      ) : null}\n` +
     `      <div className="p-4">{children}</div>\n` +
@@ -332,53 +444,53 @@ function buildVitePages(blueprint: BuildBlueprint): Array<{ filePath: string; co
     `    };\n` +
     `  }, [client, primaryEntity]);\n\n` +
     `  return (\n` +
-    `    <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white">\n` +
+    `    <div className="min-h-screen ${ui.appBg} ${ui.text}">\n` +
     `      <div className="mx-auto w-full max-w-6xl px-4 py-10">\n` +
     `        <div className="flex flex-col gap-2">\n` +
-    `          <h1 className="text-3xl font-semibold text-gray-900">Home</h1>\n` +
-    `          <p className="text-sm text-gray-600">Scaffolded from blueprint routes and navigation — this is the starting point before the build fills in real features.</p>\n` +
+    `          <h1 className="text-3xl font-semibold ${headingClass}">Home</h1>\n` +
+    `          <p className="text-sm ${ui.mutedText}">Scaffolded from blueprint routes and navigation — this is the starting point before the build fills in real features.</p>\n` +
     `        </div>\n\n` +
     `        <div className="mt-6">\n` +
     `          <DataModeBanner />\n` +
     `        </div>\n\n` +
     `        <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4">\n` +
     `          <Card title="Blueprint">\n` +
-    `            <div className="text-sm text-gray-700">Routes: <span className="font-medium text-gray-900">${pageRoutes.length}</span></div>\n` +
-    `            <div className="mt-1 text-sm text-gray-700">Entities: <span className="font-medium text-gray-900">{entityNames.length || 0}</span></div>\n` +
-    `            <div className="mt-3 text-xs text-gray-500">Tip: run the build to replace scaffolding with app-specific UI &amp; logic.</div>\n` +
+    `            <div className="text-sm ${bodyTextClass}">Routes: <span className={"font-medium " + ${JSON.stringify(headingClass)}}>${pageRoutes.length}</span></div>\n` +
+    `            <div className="mt-1 text-sm ${bodyTextClass}">Entities: <span className={"font-medium " + ${JSON.stringify(headingClass)}}>{entityNames.length || 0}</span></div>\n` +
+    `            <div className={"mt-3 text-xs " + ${JSON.stringify(ui.mutedText)}}>Tip: run the build to replace scaffolding with app-specific UI &amp; logic.</div>\n` +
     `          </Card>\n` +
     `          <Card title="Quick actions">\n` +
     `            <div className="flex flex-wrap gap-2">\n` +
-    `              <a href="/settings" className="inline-flex items-center rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-900 hover:bg-gray-50">Open Settings</a>\n` +
-    `              <a href="/help" className="inline-flex items-center rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-900 hover:bg-gray-50">Open Help</a>\n` +
+    `              <a href="/settings" className=${JSON.stringify(primaryButtonClass)}>Open Settings</a>\n` +
+    `              <a href="/help" className=${JSON.stringify(actionButtonClass)}>Open Help</a>\n` +
     `            </div>\n` +
     `          </Card>\n` +
     `          <Card title="Data preview">\n` +
-    `            <div className="text-sm text-gray-700">Entity: <span className="font-medium text-gray-900">{primaryEntity || '—'}</span></div>\n` +
-    `            <div className="mt-1 text-xs text-gray-500">Shows mock seed data by default, and Supabase data when configured.</div>\n` +
+    `            <div className="text-sm ${bodyTextClass}">Entity: <span className={"font-medium " + ${JSON.stringify(headingClass)}}>{primaryEntity || '—'}</span></div>\n` +
+    `            <div className={"mt-1 text-xs " + ${JSON.stringify(ui.mutedText)}}>Shows mock seed data by default, and Supabase data when configured.</div>\n` +
     `          </Card>\n` +
     `        </div>\n\n` +
     `        <div className="mt-8">\n` +
     `          <Card title={primaryEntity ? ('Sample ' + primaryEntity + ' records') : 'Sample records'}>\n` +
     `            {!primaryEntity ? (\n` +
-    `              <div className="text-sm text-gray-600">No entities found in the blueprint seed.</div>\n` +
+    `              <div className={"text-sm " + ${JSON.stringify(ui.mutedText)}}>No entities found in the blueprint seed.</div>\n` +
     `            ) : loading ? (\n` +
-    `              <div className="text-sm text-gray-600">Loading...</div>\n` +
+    `              <div className={"text-sm " + ${JSON.stringify(ui.mutedText)}}>Loading...</div>\n` +
     `            ) : rows.length === 0 ? (\n` +
-    `              <div className="text-sm text-gray-600">No rows returned yet.</div>\n` +
+    `              <div className={"text-sm " + ${JSON.stringify(ui.mutedText)}}>No rows returned yet.</div>\n` +
     `            ) : (\n` +
     `              <div className="overflow-x-auto">\n` +
     `                <table className="min-w-full text-sm">\n` +
     `                  <thead>\n` +
-    `                    <tr className="text-left text-gray-500">\n` +
+    `                    <tr className={"text-left " + ${JSON.stringify(tableHeadClass)}}>\n` +
     `                      {Object.keys(rows[0] || {}).slice(0, 4).map((k) => (\n` +
     `                        <th key={k} className="py-2 pr-4 font-medium">{k}</th>\n` +
     `                      ))}\n` +
     `                    </tr>\n` +
     `                  </thead>\n` +
-    `                  <tbody className="divide-y divide-gray-100">\n` +
+    `                  <tbody className={"divide-y " + ${JSON.stringify(rowDividerClass)}}>\n` +
     `                    {rows.map((r, idx) => (\n` +
-    `                      <tr key={String(r?.id || idx)} className="text-gray-700">\n` +
+    `                      <tr key={String(r?.id || idx)} className=${JSON.stringify(rowTextClass)}>\n` +
     `                        {Object.keys(rows[0] || {}).slice(0, 4).map((k) => (\n` +
     `                          <td key={k} className="py-2 pr-4">{String(r?.[k] ?? '')}</td>\n` +
     `                        ))}\n` +
@@ -388,8 +500,8 @@ function buildVitePages(blueprint: BuildBlueprint): Array<{ filePath: string; co
     `                </table>\n` +
     `              </div>\n` +
     `            )}\n` +
-    `            <div className="mt-4 text-xs text-gray-500">\n` +
-    `              If you enabled Supabase, create tables by running <code className="px-1 py-0.5 bg-gray-50 border border-gray-200 rounded">supabase/schema.sql</code> in Supabase.\n` +
+    `            <div className={"mt-4 text-xs " + ${JSON.stringify(ui.mutedText)}}>\n` +
+    `              If you enabled Supabase, create tables by running <code className="px-1 py-0.5 border rounded ${ui.codeBg} ${ui.codeBorder} ${ui.codeText}">supabase/schema.sql</code> in Supabase.\n` +
     `            </div>\n` +
     `          </Card>\n` +
     `        </div>\n\n` +
@@ -409,14 +521,14 @@ function buildVitePages(blueprint: BuildBlueprint): Array<{ filePath: string; co
     const name = safeRouteIdToComponentName(route.id);
     pages.push({
       filePath: `src/pages/${name}.jsx`,
-      content: `import { DataModeBanner } from '../components/DataModeBanner.jsx';\n\nexport default function ${name}() {\n  return (\n    <div className="mx-auto w-full max-w-5xl px-4 py-10">\n      <h1 className="text-3xl font-semibold text-gray-900">${route.title}</h1>\n      <p className="mt-2 text-sm text-gray-700">${route.description || 'Page scaffolded from blueprint.'}</p>\n\n      <div className="mt-6">\n        <DataModeBanner />\n      </div>\n    </div>\n  );\n}\n`,
+      content: `import { DataModeBanner } from '../components/DataModeBanner.jsx';\n\nexport default function ${name}() {\n  return (\n    <div className="mx-auto w-full max-w-5xl px-4 py-10">\n      <h1 className="text-3xl font-semibold ${headingClass}">${route.title}</h1>\n      <p className="mt-2 text-sm ${ui.mutedText}">${route.description || 'Page scaffolded from blueprint.'}</p>\n\n      <div className="mt-6">\n        <DataModeBanner />\n      </div>\n    </div>\n  );\n}\n`,
     });
   }
 
   return pages;
 }
 
-function buildViteApp(blueprint: BuildBlueprint): { filePath: string; content: string; packagesToInstall: string[] } {
+function buildViteApp(blueprint: BuildBlueprint, ui: UiTheme): { filePath: string; content: string; packagesToInstall: string[] } {
   const pageRoutes = blueprint.routes.filter(r => r.kind === 'page');
   const useRouter = pageRoutes.length > 1;
 
@@ -430,7 +542,7 @@ function buildViteApp(blueprint: BuildBlueprint): { filePath: string; content: s
     return {
       filePath: 'src/App.jsx',
       packagesToInstall,
-      content: `import { NavBar } from './components/NavBar.jsx';\nimport Home from './pages/Home.jsx';\n\nexport default function App() {\n  return (\n    <div className=\"min-h-screen bg-white\">\n      <NavBar />\n      <Home />\n    </div>\n  );\n}\n`,
+      content: `import { NavBar } from './components/NavBar.jsx';\nimport Home from './pages/Home.jsx';\n\nexport default function App() {\n  return (\n    <div className=\"min-h-screen ${ui.appBg} ${ui.text}\">\n      <NavBar />\n      <Home />\n    </div>\n  );\n}\n`,
     };
   }
 
@@ -447,13 +559,14 @@ function buildViteApp(blueprint: BuildBlueprint): { filePath: string; content: s
   return {
     filePath: 'src/App.jsx',
     packagesToInstall,
-    content: `import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';\nimport { NavBar } from './components/NavBar.jsx';\n${routeImports.join('\n')}\n\nexport default function App() {\n  return (\n    <BrowserRouter>\n      <div className=\"min-h-screen bg-white\">\n        <NavBar />\n        <main>\n          <Routes>\n            ${routeElements.join('\n            ')}\n            <Route path=\"*\" element={<Navigate to=\"/\" replace />} />\n          </Routes>\n        </main>\n      </div>\n    </BrowserRouter>\n  );\n}\n`,
+    content: `import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';\nimport { NavBar } from './components/NavBar.jsx';\n${routeImports.join('\n')}\n\nexport default function App() {\n  return (\n    <BrowserRouter>\n      <div className=\"min-h-screen ${ui.appBg} ${ui.text}\">\n        <NavBar />\n        <main>\n          <Routes>\n            ${routeElements.join('\n            ')}\n            <Route path=\"*\" element={<Navigate to=\"/\" replace />} />\n          </Routes>\n        </main>\n      </div>\n    </BrowserRouter>\n  );\n}\n`,
   };
 }
 
-function buildNextPages(blueprint: BuildBlueprint): Array<{ filePath: string; content: string }> {
+function buildNextPages(blueprint: BuildBlueprint, ui: UiTheme): Array<{ filePath: string; content: string }> {
   const pageRoutes = blueprint.routes.filter(r => r.kind === 'page');
   const pages: Array<{ filePath: string; content: string }> = [];
+  const headingClass = ui.isDark ? 'text-white' : 'text-gray-900';
 
   for (const route of pageRoutes) {
     const folder = route.path === '/' ? '' : stripLeadingSlash(route.path);
@@ -467,17 +580,17 @@ function buildNextPages(blueprint: BuildBlueprint): Array<{ filePath: string; co
     const filePath = route.path === '/' ? 'app/page.tsx' : `app/${safeFolder}/page.tsx`;
     pages.push({
       filePath,
-      content: `import { DataModeBanner } from '@/components/DataModeBanner';\n\nexport default function Page() {\n  return (\n    <main className=\"mx-auto w-full max-w-5xl px-4 py-10\">\n      <h1 className=\"text-3xl font-semibold\">${route.title}</h1>\n      <p className=\"mt-2 text-sm text-gray-300\">${route.description || 'Page scaffolded from blueprint.'}</p>\n      <div className=\"mt-6\">\n        <DataModeBanner />\n      </div>\n    </main>\n  );\n}\n`,
+      content: `import { DataModeBanner } from '@/components/DataModeBanner';\n\nexport default function Page() {\n  return (\n    <main className=\"mx-auto w-full max-w-5xl px-4 py-10\">\n      <h1 className=\"text-3xl font-semibold ${headingClass}\">${route.title}</h1>\n      <p className=\"mt-2 text-sm ${ui.mutedText}\">${route.description || 'Page scaffolded from blueprint.'}</p>\n      <div className=\"mt-6\">\n        <DataModeBanner />\n      </div>\n    </main>\n  );\n}\n`,
     });
   }
 
   return pages;
 }
 
-function buildNextLayoutOverride(): { filePath: string; content: string } {
+function buildNextLayoutOverride(ui: UiTheme): { filePath: string; content: string } {
   return {
     filePath: 'app/layout.tsx',
-    content: `import './globals.css';\nimport { NavBar } from '@/components/NavBar';\n\nexport default function RootLayout({ children }: { children: React.ReactNode }) {\n  return (\n    <html lang=\"en\">\n      <body className=\"min-h-screen bg-gray-950 text-white\">\n        <NavBar />\n        {children}\n      </body>\n    </html>\n  );\n}\n`,
+    content: `import './globals.css';\nimport { NavBar } from '@/components/NavBar';\n\nexport default function RootLayout({ children }: { children: React.ReactNode }) {\n  return (\n    <html lang=\"en\">\n      <body className=\"min-h-screen ${ui.appBg} ${ui.text}\">\n        <NavBar />\n        {children}\n      </body>\n    </html>\n  );\n}\n`,
   };
 }
 
@@ -556,26 +669,27 @@ export async function POST(request: NextRequest) {
 
     const files: Array<{ filePath: string; content: string }> = [];
     const packagesToInstall: string[] = [];
+    const ui = resolveTheme(blueprint, template);
 
     // Shared: mock-first data adapter + seed data + data mode banner
     files.push(buildMockSeedFile(blueprint, template));
     files.push(...buildMockClientFiles(template));
-    files.push(buildDataModeBanner(template));
+    files.push(buildDataModeBanner(template, ui));
     files.push(buildSupabaseSchemaFile(blueprint, template));
 
     if (template === 'next') {
-      files.push(buildNextNav(blueprint));
-      files.push(buildNextLayoutOverride());
-      files.push(...buildNextPages(blueprint));
+      files.push(buildNextNav(blueprint, ui));
+      files.push(buildNextLayoutOverride(ui));
+      files.push(...buildNextPages(blueprint, ui));
 
       // Next template also uses the Supabase adapter file; ensure dependency exists.
       packagesToInstall.push('@supabase/supabase-js');
     } else {
       const pageRoutes = blueprint.routes.filter(r => r.kind === 'page');
       const useRouter = pageRoutes.length > 1;
-      files.push(buildViteNav(blueprint, useRouter));
-      files.push(...buildVitePages(blueprint));
-      const appFile = buildViteApp(blueprint);
+      files.push(buildViteNav(blueprint, useRouter, ui));
+      files.push(...buildVitePages(blueprint, ui));
+      const appFile = buildViteApp(blueprint, ui);
       files.push({ filePath: appFile.filePath, content: appFile.content });
       packagesToInstall.push(...appFile.packagesToInstall);
     }

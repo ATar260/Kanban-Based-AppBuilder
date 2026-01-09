@@ -24,6 +24,13 @@ export function validateBlueprint(blueprint: BuildBlueprint | null | undefined):
     };
   }
 
+  if (!blueprint.theme) {
+    warnings.push('Blueprint missing theme. The scaffold may look generic until a theme is chosen.');
+  } else {
+    if (!(blueprint.theme as any).preset) warnings.push('Blueprint theme missing preset.');
+    if (!(blueprint.theme as any).accent) warnings.push('Blueprint theme missing accent.');
+  }
+
   const routeIds = new Set<string>();
   for (const r of blueprint.routes || []) {
     if (!r?.id) {
