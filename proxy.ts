@@ -4,6 +4,11 @@ import { NextResponse } from "next/server";
 const isProtectedRoute = createRouteMatcher(["/dashboard(.*)"]);
 
 export default clerkMiddleware(async (auth, req) => {
+  // Protect dashboard routes - redirects to sign-in if not authenticated
+  if (isProtectedRoute(req)) {
+    await auth.protect();
+  }
+
   // Add security headers
   const response = NextResponse.next();
   response.headers.set("X-Content-Type-Options", "nosniff");
@@ -18,11 +23,6 @@ export default clerkMiddleware(async (auth, req) => {
     "Strict-Transport-Security",
     "max-age=31536000; includeSubDomains"
   );
-
-  // Protect dashboard routes
-  if (isProtectedRoute(req)) {
-    await auth.protect();
-  }
 
   return response;
 });
