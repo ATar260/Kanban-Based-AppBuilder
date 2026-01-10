@@ -951,7 +951,7 @@ Visual Features: ${uiOption.features.join(', ')}`;
         if (!ticket.generatedCode) continue;
         addChatMessage(`Restoring ${i + 1}/${restorableTickets.length}: ${ticket.title}`, 'system');
         // Apply sequentially so later tickets can override earlier ones even if files shrink.
-        await applyGeneratedCode(ticket.generatedCode, false, activeSandbox);
+        await applyGeneratedCode(ticket.generatedCode, false, activeSandbox, { throwOnError: true });
       }
 
       // Re-apply Supabase env vars if present in any ticket inputs (so the restored preview switches to Supabase mode).
@@ -1971,12 +1971,17 @@ Requirements:
         kanban.updateTicketProgress(nextTicket.id, 90);
         setGenerationProgress(prev => ({ ...prev, status: `Applying: ${nextTicket.title}` }));
         setActiveTab('preview');
-        await applyGeneratedCode(generatedCode, true, activeSandbox);
+        const applyOutcome = await applyGeneratedCode(generatedCode, true, activeSandbox, { throwOnError: true });
 
-        const allFiles = Array.from(generatedCode.matchAll(/<file path="([^"]+)">/g)).map(m => m[1]);
+        const appliedFiles = Array.from(new Set(applyOutcome.appliedFiles || []));
+        const allFiles =
+          appliedFiles.length > 0
+            ? appliedFiles
+            : Array.from(generatedCode.matchAll(/<file path="([^"]+)">/g)).map(m => m[1]);
         if (allFiles.length > 0) {
           kanban.updateTicketFiles(nextTicket.id, allFiles);
         }
+        const appliedFilesSet = new Set(allFiles);
 
         // Code review gate (Bugbot)
         kanban.updateTicketStatus(nextTicket.id, 'pr_review');
@@ -2051,7 +2056,10 @@ Requirements:
           }
 
           // Apply the fix patch (incremental edit)
-          await applyGeneratedCode(fixCode, true, activeSandbox);
+          const fixApplyOutcome = await applyGeneratedCode(fixCode, true, activeSandbox, { throwOnError: true });
+          for (const p of fixApplyOutcome.appliedFiles || []) {
+            appliedFilesSet.add(p);
+          }
 
           // Update the in-memory file set for the next Bugbot pass using the returned <file> blocks.
           const updatedMap = new Map(currentFiles.map(f => [f.path, f.content]));
@@ -2067,6 +2075,23 @@ Requirements:
             ticketTitle: nextTicket.title,
             files: currentFiles,
           });
+        }
+
+        // Persist the final ticket code after any auto-fixes so restore + traceability remain accurate.
+        if (currentFiles.length > 0) {
+          const finalGeneratedCode = currentFiles
+            .map(f => `<file path="${f.path}">\n${f.content}\n</file>`)
+            .join('\n\n');
+          kanban.updateTicketCode(nextTicket.id, finalGeneratedCode);
+          const finalFiles = Array.from(
+            new Set([
+              ...Array.from(appliedFilesSet),
+              ...currentFiles.map(f => f.path),
+            ])
+          );
+          if (finalFiles.length > 0) {
+            kanban.updateTicketFiles(nextTicket.id, finalFiles);
+          }
         }
 
         if (hasBlockingIssues(currentReview)) {
@@ -2106,7 +2131,7 @@ Requirements:
         kanban.updateTicketStatus(nextTicket.id, 'done');
         kanban.updateTicketProgress(nextTicket.id, 100);
 
-        if (gitSync.isEnabled && fileContents.length > 0) {
+        if (gitSync.isEnabled && currentFiles.length > 0) {
           gitSync.syncTicketCompletion(
             {
               id: nextTicket.id,
@@ -2115,7 +2140,7 @@ Requirements:
               type: nextTicket.type,
               priority: nextTicket.priority,
             },
-            fileContents
+            currentFiles
           );
         }
 
@@ -2471,7 +2496,20 @@ Tip: I automatically detect and install npm packages from your code imports (lik
     }
   };
 
-  const applyGeneratedCode = async (code: string, isEdit: boolean = false, overrideSandboxData?: SandboxData) => {
+  type ApplyGeneratedCodeOutcome = {
+    success: boolean;
+    results?: any;
+    appliedFiles?: string[];
+    error?: string;
+  };
+
+  const applyGeneratedCode = async (
+    code: string,
+    isEdit: boolean = false,
+    overrideSandboxData?: SandboxData,
+    opts?: { throwOnError?: boolean }
+  ): Promise<ApplyGeneratedCodeOutcome> => {
+    const throwOnError = Boolean(opts?.throwOnError);
     setLoading(true);
     log('Applying AI-generated code...');
 
@@ -2508,6 +2546,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
       let finalData: any = null;
+      let streamError: string | null = null;
 
       while (reader) {
         const { done, value } = await reader.read();
@@ -2607,6 +2646,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
 
                 case 'error':
                   addChatMessage(`Error: ${data.message || data.error || 'Unknown error'}`, 'system');
+                  streamError = data.message || data.error || 'Unknown error';
                   // Reset loading state on error
                   setLoading(false);
                   break;
@@ -2629,6 +2669,10 @@ Tip: I automatically detect and install npm packages from your code imports (lik
         }
       }
 
+      if (streamError) {
+        throw new Error(streamError);
+      }
+
       // Process final data
       if (finalData && finalData.type === 'complete') {
         const data: any = {
@@ -2644,8 +2688,13 @@ Tip: I automatically detect and install npm packages from your code imports (lik
           debug: finalData.debug
         };
 
+        const results = data.results || {};
+        const appliedFiles = [
+          ...(results.filesCreated || []),
+          ...(results.filesUpdated || []),
+        ];
+
         if (data.success) {
-          const { results } = data;
 
           // Log package installation results without duplicate messages
           if (results.packagesInstalled?.length > 0) {
@@ -2697,6 +2746,18 @@ Tip: I automatically detect and install npm packages from your code imports (lik
             results.errors.forEach((err: string) => {
               log(err, 'error');
             });
+          }
+
+          // In strict mode (used by Kanban builds/restores), treat any apply errors as blocking.
+          if (throwOnError) {
+            const fatal: string[] = [];
+            if (results.errors?.length > 0) fatal.push(...results.errors);
+            if (results.packagesFailed?.length > 0) {
+              fatal.push(`Packages failed to install: ${results.packagesFailed.join(', ')}`);
+            }
+            if (fatal.length > 0) {
+              throw new Error(fatal.slice(0, 3).join(' | '));
+            }
           }
 
           if (data.structure) {
@@ -2862,12 +2923,22 @@ Tip: I automatically detect and install npm packages from your code imports (lik
         } else {
           throw new Error(finalData?.error || 'Failed to apply code');
         }
+
+        return { success: true, results: data.results, appliedFiles };
       } else {
-        // If no final data was received, still close loading
+        const msg = 'No completion event received from code application stream.';
         addChatMessage('Code application may have partially succeeded. Check the preview.', 'system');
+        if (throwOnError) {
+          throw new Error(msg);
+        }
+        return { success: false, error: msg };
       }
     } catch (error: any) {
       log(`Failed to apply code: ${error.message}`, 'error');
+      if (throwOnError) {
+        throw error;
+      }
+      return { success: false, error: error?.message || 'Failed to apply code' };
     } finally {
       setLoading(false);
       // Clear isEdit flag after applying code
