@@ -1617,7 +1617,7 @@ Requirements:
     }
     params.set('model', aiModel);
     router.push(`/generation?${params.toString()}`);
-  }, [kanban, sandboxData, aiModel, router]);
+  }, [kanban, sandboxData, aiModel, router, setConversationContext, setChatMessages, setHasInitialSubmission, setPendingPrompt]);
 
   const handleStartKanbanBuild = async (opts?: { onlyTicketId?: string }) => {
     const backlogTickets = kanban.tickets.filter(t => t.status === 'backlog');
