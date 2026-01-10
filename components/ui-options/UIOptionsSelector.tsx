@@ -45,9 +45,9 @@ export default function UIOptionsSelector({
   if (isLoading) {
     return (
       <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center">
-        <div className="bg-white rounded-2xl p-8 max-w-4xl w-full mx-4 shadow-2xl">
+        <div className="bg-white rounded-2xl p-8 max-w-5xl w-full mx-4 shadow-2xl">
           <div className="text-center">
-            <div className="w-12 h-12 border-3 border-orange-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+            <div className="w-12 h-12 border-3 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
             <h2 className="text-xl font-semibold text-gray-900 mb-2">Generating UI Options</h2>
             <p className="text-gray-500">Creating 3 unique design approaches for your app...</p>
           </div>
@@ -63,14 +63,17 @@ export default function UIOptionsSelector({
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center">
-      <div className="bg-white rounded-2xl p-8 max-w-5xl w-full mx-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+      <div className="bg-white rounded-2xl p-8 max-w-6xl w-full mx-4 shadow-2xl max-h-[90vh] overflow-y-auto">
         <div className="text-center mb-8">
+          <div className="inline-flex items-center px-3 py-1.5 mb-4 text-sm font-medium text-emerald-700 bg-emerald-100 rounded-full border border-emerald-300">
+            3 Design Options
+          </div>
           <h2 className="text-2xl font-bold text-gray-900 mb-2">Choose Your Design Style</h2>
           <p className="text-gray-500">Select one of these 3 unique UI approaches for your application</p>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          {options.map((option, index) => (
+          {options.slice(0, 3).map((option, index) => (
             <div
               key={option.id}
               onClick={() => setSelectedId(option.id)}
@@ -78,45 +81,45 @@ export default function UIOptionsSelector({
               onMouseLeave={() => setHoveredId(null)}
               className={`
                 relative rounded-xl border-2 cursor-pointer transition-all duration-300
-                ${selectedId === option.id 
-                  ? 'border-orange-500 shadow-lg shadow-orange-500/20 scale-[1.02]' 
+                ${selectedId === option.id
+                  ? 'border-emerald-500 shadow-lg shadow-emerald-500/20 scale-[1.02]'
                   : hoveredId === option.id
-                    ? 'border-gray-300 shadow-md'
+                    ? 'border-emerald-300 shadow-md'
                     : 'border-gray-200'
                 }
               `}
             >
               {selectedId === option.id && (
-                <div className="absolute -top-3 -right-3 w-8 h-8 bg-orange-500 rounded-full flex items-center justify-center shadow-lg z-10">
+                <div className="absolute -top-3 -right-3 w-8 h-8 bg-emerald-500 rounded-full flex items-center justify-center shadow-lg z-10">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3">
                     <polyline points="20 6 9 17 4 12" />
                   </svg>
                 </div>
               )}
 
-              <div 
+              <div
                 className="aspect-[4/3] rounded-t-xl relative overflow-hidden"
                 style={{ background: `linear-gradient(135deg, ${option.colorScheme.primary}, ${option.colorScheme.secondary})` }}
               >
                 <div className="absolute inset-0 flex items-center justify-center">
-                  <div 
+                  <div
                     className="w-3/4 h-3/4 rounded-lg shadow-xl"
                     style={{ backgroundColor: option.colorScheme.background }}
                   >
                     <div className="p-4">
-                      <div 
+                      <div
                         className="h-3 w-1/2 rounded mb-2"
                         style={{ backgroundColor: option.colorScheme.primary }}
                       />
-                      <div 
+                      <div
                         className="h-2 w-3/4 rounded mb-1"
                         style={{ backgroundColor: option.colorScheme.text + '40' }}
                       />
-                      <div 
+                      <div
                         className="h-2 w-2/3 rounded"
                         style={{ backgroundColor: option.colorScheme.text + '30' }}
                       />
-                      <div 
+                      <div
                         className="mt-4 h-6 w-1/3 rounded"
                         style={{ backgroundColor: option.colorScheme.accent }}
                       />
@@ -131,13 +134,13 @@ export default function UIOptionsSelector({
               <div className="p-4">
                 <h3 className="font-semibold text-gray-900 mb-1">{option.name}</h3>
                 <p className="text-sm text-gray-500 mb-3 line-clamp-2">{option.description}</p>
-                
+
                 <div className="flex flex-wrap gap-1 mb-3">
                   {option.features.slice(0, 3).map((feature, i) => (
-                    <span 
+                    <span
                       key={i}
                       className="text-xs px-2 py-0.5 rounded-full"
-                      style={{ 
+                      style={{
                         backgroundColor: option.colorScheme.primary + '15',
                         color: option.colorScheme.primary
                       }}
@@ -175,7 +178,7 @@ export default function UIOptionsSelector({
             className={`
               px-8 py-2.5 text-sm font-medium rounded-lg transition-all
               ${selectedId
-                ? 'bg-orange-500 hover:bg-orange-600 text-white shadow-lg shadow-orange-500/25'
+                ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg shadow-emerald-500/25'
                 : 'bg-gray-100 text-gray-400 cursor-not-allowed'
               }
             `}

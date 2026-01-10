@@ -31,24 +31,29 @@ interface UIOption {
   previewPrompt: string;
 }
 
-const UI_OPTIONS_PROMPT = `You are a UI/UX designer generating 3 distinct visual design options for a web application.
+const UI_OPTIONS_PROMPT = `You are an elite UI/UX designer generating 3 stunning, visually distinct design options for a web application.
 
-Given the user's description, create 3 VERY DIFFERENT design approaches. Each should be visually distinct and appeal to different tastes.
+Given the user's description, create 3 DRAMATICALLY DIFFERENT design approaches. Each must be unique, creative, and push design boundaries while remaining professional and usable.
 
 For each option provide:
 - id: "option-1", "option-2", "option-3"
-- name: A catchy name for the style (e.g., "Modern Minimal", "Bold & Vibrant", "Elegant Classic")
-- description: 2-3 sentences describing the visual approach
-- style: One of [modern, playful, professional, artistic, minimalist, bold, elegant, futuristic]
-- colorScheme: Object with primary, secondary, accent, background, text (hex colors)
-- layout: Brief description of layout approach (e.g., "Centered hero with asymmetric sections")
-- features: Array of 3-4 visual features (e.g., "Glassmorphism cards", "Gradient backgrounds")
-- previewPrompt: A detailed prompt to generate a preview image of this design
+- name: A memorable, evocative name for the style (e.g., "Aurora Glass", "Midnight Luxe", "Solar Burst")
+- description: 3-4 rich sentences describing the visual philosophy, mood, and user experience. Paint a picture of what using this interface feels like.
+- style: One of [modern, playful, professional, artistic, minimalist, bold, elegant, futuristic, neomorphic, glassmorphic, brutalist, organic]
+- colorScheme: Object with primary, secondary, accent, background, text (hex colors) - use sophisticated, intentional color palettes
+- layout: Detailed description of layout approach including spacing philosophy, visual hierarchy, and component arrangement
+- features: Array of 5-6 specific visual features (e.g., "Soft gradient overlays", "Animated micro-interactions", "Floating card shadows", "Subtle texture patterns")
+- previewPrompt: A detailed, creative prompt to generate a stunning preview image of this design
 
-Make the 3 options VERY DIFFERENT from each other:
-- Option 1: Should be clean, professional, safe choice
-- Option 2: Should be bold, creative, attention-grabbing
-- Option 3: Should be unique, artistic, memorable
+Make the 3 options DRAMATICALLY DIFFERENT:
+- Option 1: Clean, sophisticated, professional - think premium SaaS, Apple-inspired minimalism
+- Option 2: Bold, creative, memorable - think cutting-edge startups, unique visual identity
+- Option 3: Artistic, innovative, boundary-pushing - think award-winning designs, experimental yet usable
+
+Be creative with color palettes! Go beyond basic blues and grays. Consider:
+- Rich jewel tones, earthy naturals, neon accents
+- Unexpected color combinations that still work harmoniously
+- Dark mode and light mode considerations
 
 Return ONLY valid JSON:
 {
@@ -73,9 +78,9 @@ export async function POST(request: NextRequest) {
       model: openai(modelId),
       messages: [
         { role: 'system', content: UI_OPTIONS_PROMPT },
-        { 
-          role: 'user', 
-          content: `Generate 3 UI design options for: ${prompt}${context ? `\n\nAdditional context: ${context}` : ''}` 
+        {
+          role: 'user',
+          content: `Generate 3 stunning, creative UI design options for: ${prompt}${context ? `\n\nAdditional context: ${context}` : ''}`
         }
       ],
       temperature: 0.8,

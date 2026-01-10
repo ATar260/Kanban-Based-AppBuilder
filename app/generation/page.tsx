@@ -35,6 +35,7 @@ import { useGitSync } from '@/hooks/useGitSync';
 import { UserMenu, LoginButton } from '@/components/auth';
 import { UsagePill } from '@/components/usage/UsagePill';
 import UIOptionsSelector, { UIOption } from '@/components/ui-options/UIOptionsSelector';
+import ViewPaneUISelector from '@/components/ui-options/ViewPaneUISelector';
 import { useBugbot, ReviewResult } from '@/hooks/useBugbot';
 import { CodeReviewPanel, RegressionWarningModal } from '@/components/kanban';
 import { useSoftDelete } from '@/hooks/useSoftDelete';
@@ -1013,6 +1014,7 @@ Visual Features: ${uiOption.features.join(', ')}`;
     setIsLoadingUIOptions(true);
     setShowUIOptions(true);
     setPendingPrompt(prompt);
+    setActiveTab('preview'); // Switch to preview tab to show inline selector
 
     try {
       const response = await fetch('/api/generate-ui-options', {
@@ -3074,7 +3076,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
                                       <span className={`text-xs flex items-center gap-1 ${isSelected ? 'font-medium' : ''}`}>
                                         {fileInfo.name}
                                         {fileInfo.edited && (
-                                          <span className={`text-[10px] px-1 rounded ${isSelected ? 'bg-blue-400' : 'bg-orange-500 text-white'
+                                          <span className={`text-[10px] px-1 rounded ${isSelected ? 'bg-blue-400' : 'bg-emerald-500 text-white'
                                             }`}>✓</span>
                                         )}
                                       </span>
@@ -3191,7 +3193,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
                       <div className="bg-black border border-gray-200 rounded-lg overflow-hidden">
                         <div className="px-4 py-2 bg-gray-100 text-gray-900 flex items-center justify-between">
                           <div className="flex items-center gap-2">
-                            <div className="w-16 h-16 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
+                            <div className="w-16 h-16 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
                             <span className="font-mono text-sm">Streaming code...</span>
                           </div>
                         </div>
@@ -3209,7 +3211,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
                           >
                             {generationProgress.streamedCode || 'Starting code generation...'}
                           </SyntaxHighlighter>
-                          <span className="inline-block w-3 h-5 bg-orange-400 ml-1 animate-pulse" />
+                          <span className="inline-block w-3 h-5 bg-emerald-400 ml-1 animate-pulse" />
                         </div>
                       </div>
                     )
@@ -3250,7 +3252,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
                             >
                               {generationProgress.currentFile.content}
                             </SyntaxHighlighter>
-                            <span className="inline-block w-3 h-4 bg-orange-400 ml-4 mb-4 animate-pulse" />
+                            <span className="inline-block w-3 h-4 bg-emerald-400 ml-4 mb-4 animate-pulse" />
                           </div>
                         </div>
                       )}
@@ -3344,7 +3346,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
               <div className="mx-6 mb-6">
                 <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
                   <div
-                    className="h-full bg-gradient-to-r from-orange-500 to-orange-400 transition-all duration-300"
+                    className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300"
                     style={{
                       width: `${(generationProgress.currentComponent / Math.max(generationProgress.components.length, 1)) * 100}%`
                     }}
@@ -3356,6 +3358,22 @@ Tip: I automatically detect and install npm packages from your code imports (lik
         </div>
       );
     } else if (activeTab === 'preview') {
+      // Show UI Options selector in view pane when generating options
+      if (showUIOptions) {
+        return (
+          <ViewPaneUISelector
+            options={uiOptions}
+            onSelect={(option) => {
+              setHasInitialSubmission(true);
+              handleUIOptionSelect(option);
+            }}
+            onCancel={handleUIOptionsCancel}
+            isLoading={isLoadingUIOptions}
+            prompt={pendingPrompt}
+          />
+        );
+      }
+
       // Show loading state for initial generation or when starting a new generation with existing sandbox
       const isInitialGeneration = !sandboxData?.url && (urlScreenshot || isCapturingScreenshot || isPreparingDesign || loadingStage);
       const isNewGenerationWithSandbox = isStartingNewGeneration && sandboxData?.url;
@@ -3446,14 +3464,14 @@ Tip: I automatically detect and install npm packages from your code imports (lik
             {sandboxExpired && (
               <div className="absolute inset-0 bg-white/95 backdrop-blur-sm flex items-center justify-center z-30">
                 <div className="text-center max-w-md p-6">
-                  <div className="w-16 h-16 mx-auto mb-4 text-orange-500">
+                  <div className="w-16 h-16 mx-auto mb-4 text-emerald-500">
                     <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
                     </svg>
                   </div>
                   <h3 className="text-lg font-semibold text-gray-900 mb-2">Sandbox Expired</h3>
                   <p className="text-sm text-gray-600 mb-4">The sandbox session has timed out. Creating a new one...</p>
-                  <div className="w-8 h-8 mx-auto border-3 border-orange-500 border-t-transparent rounded-full animate-spin" />
+                  <div className="w-8 h-8 mx-auto border-3 border-emerald-500 border-t-transparent rounded-full animate-spin" />
                 </div>
               </div>
             )}
@@ -3462,7 +3480,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
             {isPreviewRefreshing && !sandboxExpired && (
               <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-20">
                 <div className="text-center">
-                  <div className="w-10 h-10 mx-auto mb-3 border-3 border-orange-500 border-t-transparent rounded-full animate-spin" />
+                  <div className="w-10 h-10 mx-auto mb-3 border-3 border-emerald-500 border-t-transparent rounded-full animate-spin" />
                   <p className="text-sm font-medium text-gray-700">Updating preview...</p>
                 </div>
               </div>
@@ -5668,7 +5686,7 @@ Focus on the key sections and content, making it clean and modern.`;
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                       {isPlanning && (
-                        <div className="w-3 h-3 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
+                        <div className="w-3 h-3 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
                       )}
                       <span className="text-xs font-semibold text-gray-700">
                         {isPlanning ? 'Planning Build...' : `Build Plan (${kanban.tickets.length} tasks)`}
@@ -5693,7 +5711,7 @@ Focus on the key sections and content, making it clean and modern.`;
                       {!isPlanning && kanban.tickets.length > 0 && !kanbanBuildActive && (
                         <button
                           onClick={() => handleStartKanbanBuild()}
-                          className="px-2 py-1 text-[10px] font-medium rounded bg-orange-500 text-white hover:bg-orange-600 transition-colors"
+                          className="px-2 py-1 text-[10px] font-medium rounded bg-emerald-500 text-white hover:bg-emerald-600 transition-colors"
                         >
                           Start Build
                         </button>
@@ -5704,7 +5722,7 @@ Focus on the key sections and content, making it clean and modern.`;
                     <div className="mt-2">
                       <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden">
                         <div 
-                          className="h-full bg-gradient-to-r from-orange-400 to-orange-500 transition-all duration-500"
+                          className="h-full bg-gradient-to-r from-emerald-400 to-emerald-500 transition-all duration-500"
                           style={{ width: `${kanban.tickets.length > 0 ? (kanban.tickets.filter(t => t.status === 'done').length / kanban.tickets.length) * 100 : 0}%` }}
                         />
                       </div>
@@ -5720,7 +5738,7 @@ Focus on the key sections and content, making it clean and modern.`;
                       transition={{ delay: idx * 0.05 }}
                       className={`p-2.5 rounded-lg border transition-all ${
                         ticket.status === 'done' ? 'bg-green-50 border-green-200' :
-                        ticket.status === 'generating' ? 'bg-orange-50 border-orange-200' :
+                        ticket.status === 'generating' ? 'bg-emerald-50 border-emerald-200' :
                         ticket.status === 'failed' ? 'bg-red-50 border-red-200' :
                         'bg-white border-gray-200 hover:border-gray-300'
                       }`}
@@ -5739,7 +5757,7 @@ Focus on the key sections and content, making it clean and modern.`;
                           {ticket.status === 'generating' && ticket.progress !== undefined && (
                             <div className="mt-1.5 w-full h-1 bg-gray-200 rounded-full overflow-hidden">
                               <div 
-                                className="h-full bg-orange-400 transition-all duration-300"
+                                className="h-full bg-emerald-400 transition-all duration-300"
                                 style={{ width: `${ticket.progress}%` }}
                               />
                             </div>
@@ -6234,7 +6252,7 @@ Focus on the key sections and content, making it clean and modern.`;
                             return startIndex !== -1 ? lastContent.slice(startIndex) : lastContent;
                           })()}
                         </SyntaxHighlighter>
-                        <span className="inline-block w-3 h-4 bg-orange-400 ml-3 mb-3 animate-pulse" />
+                        <span className="inline-block w-3 h-4 bg-emerald-400 ml-3 mb-3 animate-pulse" />
                       </div>
                     </motion.div>
                   )}
@@ -6470,7 +6488,7 @@ Focus on the key sections and content, making it clean and modern.`;
                   onClick={() => setVersionHistoryTab('plan')}
                   className={`flex-1 text-xs px-2 py-1.5 rounded transition-colors ${
                     versionHistoryTab === 'plan'
-                      ? 'bg-orange-600 text-white'
+                      ? 'bg-emerald-600 text-white'
                       : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
                   }`}
                 >
@@ -6519,18 +6537,7 @@ Focus on the key sections and content, making it clean and modern.`;
           )}
         </div>
 
-        {/* UI Options Selector Modal */}
-        {showUIOptions && (
-          <UIOptionsSelector
-            options={uiOptions}
-            onSelect={(option) => {
-              setHasInitialSubmission(true);
-              handleUIOptionSelect(option);
-            }}
-            onCancel={handleUIOptionsCancel}
-            isLoading={isLoadingUIOptions}
-          />
-        )}
+        {/* UI Options Selector - Now rendered inline in the View pane (see renderMainContent) */}
 
         {/* Code Review Panel Modal */}
         {showCodeReview && bugbot.lastReview && (
