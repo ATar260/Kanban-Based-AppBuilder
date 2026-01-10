@@ -42,12 +42,12 @@ export default function Navbar() {
         initial={{ y: -100 }}
         animate={{ y: 0 }}
         transition={{ duration: 0.5 }}
-        className="fixed top-5 left-5 right-5 z-50"
+        className="fixed top-4 left-4 right-4 z-50"
       >
         <nav
-          className={`max-w-6xl mx-auto px-6 sm:px-8 lg:px-12 rounded-2xl transition-all duration-300 ${isScrolled
-              ? 'bg-white/95 backdrop-blur-md shadow-lg border border-comfort-beige-200'
-              : 'bg-white/90 backdrop-blur-sm shadow-md border border-comfort-beige-200/50'
+          className={`max-w-5xl mx-auto px-5 sm:px-6 lg:px-8 rounded-xl transition-all duration-300 ${isScrolled
+              ? 'bg-white shadow-xl shadow-black/10 border border-comfort-sage-300'
+              : 'bg-white shadow-lg shadow-black/5 border border-comfort-sage-200'
             }`}
         >
           <div className="flex items-center justify-between h-14 md:h-16">
@@ -72,7 +72,7 @@ export default function Navbar() {
                   key={link.href}
                   href={link.href}
                   onClick={(e) => handleNavClick(e, link.href)}
-                  className="px-4 py-2 text-sm font-medium text-comfort-charcoal-500 hover:text-comfort-charcoal-800 hover:bg-comfort-beige-200/50 rounded-[12px] transition-all"
+                  className="px-4 py-2 text-sm font-medium text-comfort-charcoal-500 hover:text-comfort-charcoal-800 hover:bg-comfort-sage-200/50 rounded-[12px] transition-all"
                 >
                   {link.label}
                 </a>
@@ -97,7 +97,7 @@ export default function Navbar() {
               {/* Mobile Menu Button */}
               <button
                 onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-                className="lg:hidden p-2.5 text-comfort-charcoal-600 hover:text-comfort-charcoal-800 hover:bg-comfort-beige-200/50 rounded-[12px] transition-all"
+                className="lg:hidden p-2.5 text-comfort-charcoal-600 hover:text-comfort-charcoal-800 hover:bg-comfort-sage-200/50 rounded-[12px] transition-all"
                 aria-label="Toggle menu"
               >
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -123,7 +123,7 @@ export default function Navbar() {
             transition={{ duration: 0.2 }}
             className="fixed inset-x-0 top-[72px] md:top-20 z-40 lg:hidden"
           >
-            <div className="bg-comfort-beige-50 shadow-lg shadow-comfort-charcoal-800/5 mx-4 rounded-[20px] overflow-hidden">
+            <div className="bg-comfort-sage-50 shadow-lg shadow-comfort-charcoal-800/5 mx-4 rounded-[20px] overflow-hidden">
               <div className="p-4 space-y-1">
                 {navLinks.map((link) => (
                   <a
@@ -135,7 +135,7 @@ export default function Navbar() {
                     {link.label}
                   </a>
                 ))}
-                <div className="pt-2 mt-2 border-t border-comfort-beige-300">
+                <div className="pt-2 mt-2 border-t border-comfort-sage-300">
                   <Link
                     href="/sign-in"
                     className="block px-4 py-3 text-base font-medium text-comfort-charcoal-600 hover:text-comfort-sage-700 hover:bg-comfort-sage-50 rounded-[12px] transition-all"

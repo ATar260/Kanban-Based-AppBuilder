@@ -13,7 +13,7 @@ const socialLinks = [
 
 export default function Footer() {
   return (
-    <footer className="bg-comfort-beige-100 border-t border-comfort-beige-300">
+    <footer className="bg-comfort-sage-50 border-t border-comfort-sage-200">
       <motion.div
         initial={{ opacity: 0, y: 40 }}
         whileInView={{ opacity: 1, y: 0 }}
@@ -69,7 +69,7 @@ export default function Footer() {
                   whileInView={{ opacity: 1, y: 0 }}
                   viewport={{ once: true }}
                   transition={{ delay: i * 0.1 }}
-                  className="w-10 h-10 rounded-xl bg-comfort-beige-50 border border-comfort-beige-300 flex items-center justify-center text-lg hover:bg-comfort-beige-200 transition-colors"
+                  className="w-10 h-10 rounded-xl bg-white border border-comfort-sage-200 flex items-center justify-center text-lg hover:bg-comfort-sage-100 transition-colors"
                   aria-label={social.name}
                 >
                   {social.icon}
@@ -102,11 +102,11 @@ export default function Footer() {
         {/* Fun animated divider */}
         <div className="relative py-4 mb-4">
           <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-comfort-beige-300" />
+            <div className="w-full border-t border-comfort-sage-200" />
           </div>
           <div className="relative flex justify-center">
             <motion.span
-              className="px-4 bg-comfort-beige-100 text-2xl"
+              className="px-4 bg-comfort-sage-50 text-2xl"
               animate={{ rotate: [0, 360] }}
               transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
             >

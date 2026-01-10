@@ -61,7 +61,7 @@ export default function PricingSection() {
   ]
 
   return (
-    <section id="pricing" className="py-20 md:py-28 bg-comfort-beige-100">
+    <section id="pricing" className="py-20 md:py-28 bg-comfort-sage-100">
       <div className="max-w-6xl mx-auto px-6 sm:px-8 lg:px-12">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -141,7 +141,7 @@ export default function PricingSection() {
                   className={`w-full py-4 px-6 rounded-[16px] font-semibold transition-all duration-300 ${
                     plan.popular
                       ? 'bg-comfort-sage-500 hover:bg-comfort-sage-600 text-white shadow-lg shadow-comfort-sage-500/25 hover:shadow-xl'
-                      : 'bg-comfort-beige-100 hover:bg-comfort-beige-200 text-comfort-charcoal-700'
+                      : 'bg-comfort-sage-100 hover:bg-comfort-sage-200 text-comfort-charcoal-700'
                   }`}
                 >
                   {plan.cta}

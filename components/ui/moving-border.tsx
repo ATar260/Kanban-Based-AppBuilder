@@ -93,7 +93,7 @@ export function GlowingCard({
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
       className={cn(
-        "relative overflow-hidden rounded-2xl border border-comfort-beige-200 bg-white",
+        "relative overflow-hidden rounded-2xl border border-comfort-sage-200 bg-white",
         className
       )}
     >

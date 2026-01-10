@@ -53,12 +53,12 @@ export default function ContactForm() {
 
   if (isSubmitted) {
     return (
-      <section id="contact" className="py-12 md:py-16 bg-gradient-to-b from-comfort-beige-100 to-comfort-beige-50">
+      <section id="contact" className="py-12 md:py-16 bg-gradient-to-b from-comfort-sage-100 to-comfort-sage-50">
         <div className="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
           <motion.div
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="bg-white border border-comfort-beige-300 rounded-2xl p-12"
+            className="bg-white border border-comfort-sage-300 rounded-2xl p-12"
           >
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gradient-to-br from-comfort-sage-500 to-comfort-sage-600 mb-6">
               <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -74,7 +74,7 @@ export default function ContactForm() {
   }
 
   return (
-    <section id="contact" className="py-12 md:py-16 bg-gradient-to-b from-comfort-beige-100 to-comfort-beige-50">
+    <section id="contact" className="py-12 md:py-16 bg-gradient-to-b from-comfort-sage-100 to-comfort-sage-50">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -100,7 +100,7 @@ export default function ContactForm() {
           viewport={{ once: true }}
           transition={{ delay: 0.2, duration: 0.8 }}
           onSubmit={handleSubmit}
-          className="bg-comfort-beige-50 border border-comfort-beige-300 rounded-2xl p-8 md:p-10 max-w-2xl mx-auto shadow-sm"
+          className="bg-comfort-sage-50 border border-comfort-sage-300 rounded-2xl p-8 md:p-10 max-w-2xl mx-auto shadow-sm"
         >
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
             <div>
@@ -114,7 +114,7 @@ export default function ContactForm() {
                 required
                 value={formData.name}
                 onChange={handleChange}
-                className="w-full px-4 py-3 rounded-xl border border-comfort-beige-300 bg-white text-comfort-charcoal-800 placeholder-comfort-charcoal-400 focus:ring-2 focus:ring-comfort-sage-500 focus:border-transparent transition-all duration-200"
+                className="w-full px-4 py-3 rounded-xl border border-comfort-sage-300 bg-white text-comfort-charcoal-800 placeholder-comfort-charcoal-400 focus:ring-2 focus:ring-comfort-sage-500 focus:border-transparent transition-all duration-200"
                 placeholder="Your name"
               />
             </div>
@@ -130,7 +130,7 @@ export default function ContactForm() {
                 required
                 value={formData.email}
                 onChange={handleChange}
-                className="w-full px-4 py-3 rounded-xl border border-comfort-beige-300 bg-white text-comfort-charcoal-800 placeholder-comfort-charcoal-400 focus:ring-2 focus:ring-comfort-sage-500 focus:border-transparent transition-all duration-200"
+                className="w-full px-4 py-3 rounded-xl border border-comfort-sage-300 bg-white text-comfort-charcoal-800 placeholder-comfort-charcoal-400 focus:ring-2 focus:ring-comfort-sage-500 focus:border-transparent transition-all duration-200"
                 placeholder="you@company.com"
               />
             </div>
@@ -147,7 +147,7 @@ export default function ContactForm() {
                 name="company"
                 value={formData.company}
                 onChange={handleChange}
-                className="w-full px-4 py-3 rounded-xl border border-comfort-beige-300 bg-white text-comfort-charcoal-800 placeholder-comfort-charcoal-400 focus:ring-2 focus:ring-comfort-sage-500 focus:border-transparent transition-all duration-200"
+                className="w-full px-4 py-3 rounded-xl border border-comfort-sage-300 bg-white text-comfort-charcoal-800 placeholder-comfort-charcoal-400 focus:ring-2 focus:ring-comfort-sage-500 focus:border-transparent transition-all duration-200"
                 placeholder="Your company"
               />
             </div>
@@ -161,7 +161,7 @@ export default function ContactForm() {
                 name="role"
                 value={formData.role}
                 onChange={handleChange}
-                className="w-full px-4 py-3 rounded-xl border border-comfort-beige-300 bg-white text-comfort-charcoal-800 focus:ring-2 focus:ring-comfort-sage-500 focus:border-transparent transition-all duration-200"
+                className="w-full px-4 py-3 rounded-xl border border-comfort-sage-300 bg-white text-comfort-charcoal-800 focus:ring-2 focus:ring-comfort-sage-500 focus:border-transparent transition-all duration-200"
               >
                 <option value="">Select role</option>
                 <option value="founder">Founder / CEO</option>
@@ -185,7 +185,7 @@ export default function ContactForm() {
               rows={4}
               value={formData.message}
               onChange={handleChange}
-              className="w-full px-4 py-3 rounded-xl border border-comfort-beige-300 bg-white text-comfort-charcoal-800 placeholder-comfort-charcoal-400 focus:ring-2 focus:ring-comfort-sage-500 focus:border-transparent transition-all duration-200"
+              className="w-full px-4 py-3 rounded-xl border border-comfort-sage-300 bg-white text-comfort-charcoal-800 placeholder-comfort-charcoal-400 focus:ring-2 focus:ring-comfort-sage-500 focus:border-transparent transition-all duration-200"
               placeholder="Tell us about your dream project..."
             />
           </div>

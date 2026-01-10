@@ -45,9 +45,9 @@ const benefits = [
 
 export default function CareersPage() {
   return (
-    <div className="min-h-screen bg-comfort-beige-50">
+    <div className="min-h-screen bg-comfort-sage-50">
       {/* Hero Section */}
-      <div className="bg-gradient-to-b from-comfort-beige-100 to-comfort-beige-50 py-16">
+      <div className="bg-gradient-to-b from-comfort-sage-100 to-comfort-sage-50 py-16">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
           <Link
             href="/"
@@ -97,7 +97,7 @@ export default function CareersPage() {
                 whileInView={{ opacity: 1, y: 0 }}
                 viewport={{ once: true }}
                 transition={{ delay: index * 0.1 }}
-                className="bg-white border border-comfort-beige-200 rounded-xl p-6 hover:shadow-md transition-shadow"
+                className="bg-white border border-comfort-sage-200 rounded-xl p-6 hover:shadow-md transition-shadow"
               >
                 <div className="text-3xl mb-3">{benefit.icon}</div>
                 <h3 className="font-semibold text-comfort-charcoal-800 mb-1">{benefit.title}</h3>
@@ -109,7 +109,7 @@ export default function CareersPage() {
       </div>
 
       {/* Open Positions */}
-      <div className="bg-comfort-beige-100 py-16">
+      <div className="bg-comfort-sage-100 py-16">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -126,7 +126,7 @@ export default function CareersPage() {
                   whileInView={{ opacity: 1, x: 0 }}
                   viewport={{ once: true }}
                   transition={{ delay: index * 0.1 }}
-                  className="bg-white border border-comfort-beige-200 rounded-xl p-6 hover:shadow-md hover:border-comfort-sage-300 transition-all cursor-pointer group"
+                  className="bg-white border border-comfort-sage-200 rounded-xl p-6 hover:shadow-md hover:border-comfort-sage-300 transition-all cursor-pointer group"
                 >
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                     <div>
@@ -135,13 +135,13 @@ export default function CareersPage() {
                       </h3>
                       <p className="text-sm text-comfort-charcoal-500 mt-1">{position.description}</p>
                       <div className="flex flex-wrap gap-2 mt-3">
-                        <span className="inline-flex items-center px-2.5 py-0.5 text-xs font-medium text-comfort-charcoal-600 bg-comfort-beige-100 rounded-full">
+                        <span className="inline-flex items-center px-2.5 py-0.5 text-xs font-medium text-comfort-charcoal-600 bg-comfort-sage-100 rounded-full">
                           {position.department}
                         </span>
-                        <span className="inline-flex items-center px-2.5 py-0.5 text-xs font-medium text-comfort-charcoal-600 bg-comfort-beige-100 rounded-full">
+                        <span className="inline-flex items-center px-2.5 py-0.5 text-xs font-medium text-comfort-charcoal-600 bg-comfort-sage-100 rounded-full">
                           {position.location}
                         </span>
-                        <span className="inline-flex items-center px-2.5 py-0.5 text-xs font-medium text-comfort-charcoal-600 bg-comfort-beige-100 rounded-full">
+                        <span className="inline-flex items-center px-2.5 py-0.5 text-xs font-medium text-comfort-charcoal-600 bg-comfort-sage-100 rounded-full">
                           {position.type}
                         </span>
                       </div>
@@ -179,7 +179,7 @@ export default function CareersPage() {
           </p>
           <a
             href="mailto:careers@paynto.ai"
-            className="inline-flex items-center px-6 py-3 bg-white text-comfort-sage-600 font-semibold rounded-xl hover:bg-comfort-beige-50 transition-colors"
+            className="inline-flex items-center px-6 py-3 bg-white text-comfort-sage-600 font-semibold rounded-xl hover:bg-comfort-sage-50 transition-colors"
           >
             Get in Touch
             <svg className="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">

@@ -118,7 +118,7 @@ export default function AgentTypesSection() {
   ]
 
   return (
-    <section id="agents" className="py-12 md:py-16 bg-comfort-beige-50 relative overflow-hidden">
+    <section id="agents" className="py-12 md:py-16 bg-comfort-sage-50 relative overflow-hidden">
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-comfort-sage-100/40 via-transparent to-transparent pointer-events-none" />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative">
@@ -179,7 +179,7 @@ export default function AgentTypesSection() {
                     whileHover={{ y: -8, transition: { duration: 0.2 } }}
                     onHoverStart={() => setActiveAgent(index)}
                     onHoverEnd={() => setActiveAgent(null)}
-                    className="group relative bg-white/80 border border-comfort-beige-200 rounded-2xl p-6 hover:border-comfort-sage-300 transition-all duration-300 hover:shadow-xl hover:shadow-comfort-sage-500/10"
+                    className="group relative bg-white/80 border border-comfort-sage-200 rounded-2xl p-6 hover:border-comfort-sage-300 transition-all duration-300 hover:shadow-xl hover:shadow-comfort-sage-500/10"
                   >
                     <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-comfort-sage-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
 
@@ -211,7 +211,7 @@ export default function AgentTypesSection() {
                       {agent.description}
                     </p>
 
-                    <div className="pt-4 border-t border-comfort-beige-200">
+                    <div className="pt-4 border-t border-comfort-sage-200">
                       <div className="flex items-center justify-between">
                         <span className="text-xs text-comfort-charcoal-400">{agent.stats}</span>
                         <motion.div
@@ -238,7 +238,7 @@ export default function AgentTypesSection() {
           transition={{ delay: 0.6, duration: 0.6 }}
           className="mt-16"
         >
-          <div className="relative bg-gradient-to-r from-comfort-beige-50 via-comfort-sage-50/50 to-comfort-beige-50 border border-comfort-beige-200 rounded-2xl p-6 md:p-8 overflow-hidden">
+          <div className="relative bg-gradient-to-r from-comfort-sage-50 via-comfort-sage-50/50 to-comfort-sage-50 border border-comfort-sage-200 rounded-2xl p-6 md:p-8 overflow-hidden">
             <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full h-px bg-gradient-to-r from-transparent via-comfort-sage-500 to-transparent" />
 
             <div className="flex flex-col md:flex-row items-center gap-6">
@@ -276,7 +276,7 @@ export default function AgentTypesSection() {
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -10 }}
                     transition={{ duration: 0.3 }}
-                    className="bg-white border border-comfort-beige-200 rounded-xl p-4 shadow-sm"
+                    className="bg-white border border-comfort-sage-200 rounded-xl p-4 shadow-sm"
                   >
                     <div className="flex items-center gap-3 mb-3">
                       <div className={`w-9 h-9 rounded-full bg-gradient-to-br ${agentColors[collaborationMessages[activeMessage].from]} flex items-center justify-center shadow-md`}>
@@ -318,7 +318,7 @@ export default function AgentTypesSection() {
               {collaborationMessages.map((_, i) => (
                 <div
                   key={i}
-                  className={`w-1.5 h-1.5 rounded-full transition-colors ${i === activeMessage ? 'bg-comfort-sage-500' : 'bg-comfort-beige-300'
+                  className={`w-1.5 h-1.5 rounded-full transition-colors ${i === activeMessage ? 'bg-comfort-sage-500' : 'bg-comfort-sage-300'
                     }`}
                 />
               ))}

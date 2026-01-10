@@ -88,7 +88,7 @@ export function InfiniteMovingCards({
         {items.map((item, idx) => (
           <li
             key={idx}
-            className="w-[350px] max-w-full relative rounded-2xl border border-comfort-beige-200 bg-white px-8 py-6 md:w-[450px] flex-shrink-0 shadow-sm hover:shadow-md transition-shadow"
+            className="w-[350px] max-w-full relative rounded-2xl border border-comfort-sage-200 bg-white px-8 py-6 md:w-[450px] flex-shrink-0 shadow-sm hover:shadow-md transition-shadow"
           >
             <blockquote>
               <div className="relative z-20 text-sm leading-relaxed text-comfort-charcoal-600 font-normal">

@@ -64,7 +64,7 @@ export default function HowItWorksSection() {
       color: "from-comfort-sage-500 to-comfort-sage-600",
       visual: (
         <motion.div
-          className="bg-white/80 rounded-xl p-4 border border-comfort-beige-200"
+          className="bg-white/80 rounded-xl p-4 border border-comfort-sage-200"
           whileHover={{ scale: 1.02 }}
         >
           <div className="flex items-center gap-2 mb-3">
@@ -74,7 +74,7 @@ export default function HowItWorksSection() {
               transition={{ repeat: Infinity, duration: 2 }}
             />
             <motion.div
-              className="w-3 h-3 rounded-full bg-comfort-beige-400"
+              className="w-3 h-3 rounded-full bg-comfort-sage-400"
               animate={{ scale: [1, 1.2, 1] }}
               transition={{ repeat: Infinity, duration: 2, delay: 0.2 }}
             />
@@ -85,7 +85,7 @@ export default function HowItWorksSection() {
             />
           </div>
           <motion.div
-            className="bg-comfort-beige-50 rounded-lg p-4 border-2 border-dashed border-comfort-sage-300"
+            className="bg-comfort-sage-50 rounded-lg p-4 border-2 border-dashed border-comfort-sage-300"
             animate={activeStep === 0 ? {
               borderColor: ['#7c9a82', '#9bb5a0', '#7c9a82'],
               boxShadow: ['0 0 0px #7c9a82', '0 0 20px #7c9a82', '0 0 0px #7c9a82']
@@ -119,7 +119,7 @@ export default function HowItWorksSection() {
               </motion.span>
               <motion.span
                 whileHover={{ scale: 1.1 }}
-                className="text-xs px-2 py-1 bg-comfort-beige-200 text-comfort-charcoal-600 rounded cursor-pointer"
+                className="text-xs px-2 py-1 bg-comfort-sage-200 text-comfort-charcoal-600 rounded cursor-pointer"
               >
                 TypeScript
               </motion.span>
@@ -141,7 +141,7 @@ export default function HowItWorksSection() {
       description: "Specialist agents automatically coordinate. Architect designs the system, Planner breaks it down, Coder implements, Tester validates.",
       color: "from-comfort-sage-400 to-comfort-sage-500",
       visual: (
-        <div className="bg-white/80 rounded-xl p-4 border border-comfort-beige-200">
+        <div className="bg-white/80 rounded-xl p-4 border border-comfort-sage-200">
           <div className="space-y-3">
             {[
               { name: "Architect", emoji: "🏗️", status: "Designing system...", color: "bg-comfort-sage-500", gradient: "from-comfort-sage-500 to-comfort-sage-600" },
@@ -150,7 +150,7 @@ export default function HowItWorksSection() {
             ].map((agent, i) => (
               <motion.div
                 key={i}
-                className="bg-comfort-beige-50 rounded-lg p-3 overflow-hidden relative"
+                className="bg-comfort-sage-50 rounded-lg p-3 overflow-hidden relative"
                 initial={{ x: -20, opacity: 0 }}
                 animate={{ x: 0, opacity: 1 }}
                 transition={{ delay: i * 0.2 }}
@@ -180,7 +180,7 @@ export default function HowItWorksSection() {
                   </div>
                 </div>
                 {activeStep === 1 && (
-                  <div className="mt-2 h-1 bg-comfort-beige-200 rounded-full overflow-hidden">
+                  <div className="mt-2 h-1 bg-comfort-sage-200 rounded-full overflow-hidden">
                     <motion.div
                       className={`h-full bg-gradient-to-r ${agent.gradient}`}
                       initial={{ width: '0%' }}
@@ -208,10 +208,10 @@ export default function HowItWorksSection() {
       description: "Review code in real-time, adjust requirements, or chat with the agents. You're the director — the agents do the heavy lifting.",
       color: "from-comfort-sage-600 to-comfort-sage-700",
       visual: (
-        <div className="bg-white/80 rounded-xl p-4 border border-comfort-beige-200">
+        <div className="bg-white/80 rounded-xl p-4 border border-comfort-sage-200">
           <div className="space-y-3">
             <motion.div
-              className="flex items-center justify-between bg-comfort-beige-50 rounded-lg p-3"
+              className="flex items-center justify-between bg-comfort-sage-50 rounded-lg p-3"
               whileHover={{ scale: 1.02 }}
             >
               <div className="flex items-center gap-2">
@@ -237,14 +237,14 @@ export default function HowItWorksSection() {
                 <motion.button
                   whileHover={{ scale: 1.1 }}
                   whileTap={{ scale: 0.95 }}
-                  className="text-xs px-3 py-1 bg-comfort-beige-200 text-comfort-charcoal-600 rounded-full"
+                  className="text-xs px-3 py-1 bg-comfort-sage-200 text-comfort-charcoal-600 rounded-full"
                 >
                   Review
                 </motion.button>
               </div>
             </motion.div>
             <motion.div
-              className="bg-comfort-beige-50 rounded-lg p-3"
+              className="bg-comfort-sage-50 rounded-lg p-3"
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.3 }}
@@ -284,7 +284,7 @@ export default function HowItWorksSection() {
       description: "Working software lands in production. Preview your app in real-time, then deploy with one click.",
       color: "from-comfort-terracotta-400 to-comfort-terracotta-500",
       visual: (
-        <div className="bg-white/80 rounded-xl p-4 border border-comfort-beige-200 relative overflow-hidden">
+        <div className="bg-white/80 rounded-xl p-4 border border-comfort-sage-200 relative overflow-hidden">
           {showConfetti && (
             <div className="absolute inset-0 pointer-events-none">
               {[...Array(20)].map((_, i) => (
@@ -349,7 +349,7 @@ export default function HowItWorksSection() {
               ].map((stat, i) => (
                 <motion.span
                   key={i}
-                  className="flex items-center gap-1 px-2 py-1 bg-comfort-beige-50 rounded-full text-comfort-charcoal-500"
+                  className="flex items-center gap-1 px-2 py-1 bg-comfort-sage-50 rounded-full text-comfort-charcoal-500"
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: i * 0.2 }}
@@ -367,7 +367,7 @@ export default function HowItWorksSection() {
   ]
 
   return (
-    <section id="how-it-works" className="py-12 md:py-16 bg-gradient-to-b from-comfort-beige-100 to-comfort-beige-50">
+    <section id="how-it-works" className="py-12 md:py-16 bg-gradient-to-b from-comfort-sage-100 to-comfort-sage-50">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <motion.div
           initial={{ opacity: 0, y: 40 }}
@@ -399,7 +399,7 @@ export default function HowItWorksSection() {
               whileTap={{ scale: 0.95 }}
               className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${activeStep === index
                 ? `bg-gradient-to-r ${step.color} text-white shadow-lg`
-                : 'bg-comfort-beige-200 text-comfort-charcoal-600 hover:bg-comfort-beige-300'
+                : 'bg-comfort-sage-200 text-comfort-charcoal-600 hover:bg-comfort-sage-300'
                 }`}
             >
               <span className="mr-1">{step.emoji}</span>
@@ -436,7 +436,7 @@ export default function HowItWorksSection() {
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
                   onClick={() => setActiveStep(prev => (prev > 0 ? prev - 1 : steps.length - 1))}
-                  className="px-4 py-2 bg-comfort-beige-100 text-comfort-charcoal-600 rounded-lg hover:bg-comfort-beige-200 transition-colors"
+                  className="px-4 py-2 bg-comfort-sage-100 text-comfort-charcoal-600 rounded-lg hover:bg-comfort-sage-200 transition-colors"
                 >
                   ← Previous
                 </motion.button>

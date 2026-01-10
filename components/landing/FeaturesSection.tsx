@@ -65,7 +65,7 @@ export default function FeaturesSection() {
   ]
 
   return (
-    <section id="features" className="py-12 md:py-16 bg-comfort-beige-100">
+    <section id="features" className="py-12 md:py-16 bg-comfort-sage-100">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -93,11 +93,11 @@ export default function FeaturesSection() {
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
               transition={{ delay: index * 0.1 }}
-              className="bg-comfort-beige-50 rounded-2xl overflow-hidden border border-comfort-beige-300 hover:border-comfort-sage-300 transition-colors duration-300"
+              className="bg-comfort-sage-50 rounded-2xl overflow-hidden border border-comfort-sage-300 hover:border-comfort-sage-300 transition-colors duration-300"
             >
               <button
                 onClick={() => setOpenIndex(openIndex === index ? null : index)}
-                className="w-full px-6 py-5 text-left flex items-center justify-between hover:bg-comfort-beige-100 transition-colors duration-200"
+                className="w-full px-6 py-5 text-left flex items-center justify-between hover:bg-comfort-sage-100 transition-colors duration-200"
               >
                 <div className="flex items-center gap-4">
                   <div className="text-comfort-sage-600">

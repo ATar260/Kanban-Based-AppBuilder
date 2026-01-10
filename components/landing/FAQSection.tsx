@@ -42,7 +42,7 @@ export default function FAQSection() {
   ]
 
   return (
-    <section id="faq" className="py-12 md:py-16 bg-comfort-beige-50">
+    <section id="faq" className="py-12 md:py-16 bg-comfort-sage-50">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -67,11 +67,11 @@ export default function FAQSection() {
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
               transition={{ delay: index * 0.05 }}
-              className="bg-comfort-beige-100 rounded-2xl overflow-hidden border border-comfort-beige-300 hover:border-comfort-sage-300 transition-colors duration-300"
+              className="bg-comfort-sage-100 rounded-2xl overflow-hidden border border-comfort-sage-300 hover:border-comfort-sage-300 transition-colors duration-300"
             >
               <button
                 onClick={() => setOpenIndex(openIndex === index ? null : index)}
-                className="w-full px-6 py-5 text-left flex items-center justify-between hover:bg-comfort-beige-200 transition-colors duration-200"
+                className="w-full px-6 py-5 text-left flex items-center justify-between hover:bg-comfort-sage-200 transition-colors duration-200"
               >
                 <h3 className="text-lg font-semibold text-comfort-charcoal-800 pr-4">
                   {faq.question}
@@ -121,7 +121,7 @@ export default function FAQSection() {
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
             onClick={() => document.getElementById('contact')?.scrollIntoView({ behavior: 'smooth' })}
-            className="px-6 py-3 bg-comfort-beige-200 hover:bg-comfort-beige-300 text-comfort-charcoal-800 font-medium rounded-xl transition-colors duration-300"
+            className="px-6 py-3 bg-comfort-sage-200 hover:bg-comfort-sage-300 text-comfort-charcoal-800 font-medium rounded-xl transition-colors duration-300"
           >
             Contact Us
           </motion.button>

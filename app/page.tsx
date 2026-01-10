@@ -17,7 +17,7 @@ import Footer from '@/components/landing/Footer'
 export default function Home() {
   return (
     <ThemeProvider>
-      <div className="min-h-screen bg-comfort-beige-50 antialiased overflow-x-hidden overflow-y-auto">
+      <div className="min-h-screen bg-comfort-sage-50 antialiased overflow-x-hidden overflow-y-auto">
         {/* Fixed navbar at top */}
         <Navbar />
         <main>

@@ -72,7 +72,7 @@ function TaskCard({ task, isActive = false }: { task: typeof tasks[0], isActive?
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       whileHover={{ y: -2, boxShadow: '0 8px 30px rgba(0, 0, 0, 0.06)' }}
-      className="bg-white border border-comfort-beige-300 rounded-[16px] p-3 cursor-pointer transition-all duration-200"
+      className="bg-white border border-comfort-sage-300 rounded-[16px] p-3 cursor-pointer transition-all duration-200"
     >
       <div className="flex items-center justify-between mb-2">
         <span className={`text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full ${priorityColors[task.priority]}`}>
@@ -88,7 +88,7 @@ function TaskCard({ task, isActive = false }: { task: typeof tasks[0], isActive?
             <span>Progress</span>
             <span>{task.progress}%</span>
           </div>
-          <div className="h-1 bg-comfort-beige-200 rounded-full overflow-hidden">
+          <div className="h-1 bg-comfort-sage-200 rounded-full overflow-hidden">
             <motion.div
               className="h-full bg-comfort-sage-500 rounded-full"
               initial={{ width: 0 }}
@@ -99,7 +99,7 @@ function TaskCard({ task, isActive = false }: { task: typeof tasks[0], isActive?
         </div>
       )}
 
-      <div className="flex items-center justify-between pt-2 border-t border-comfort-beige-200">
+      <div className="flex items-center justify-between pt-2 border-t border-comfort-sage-200">
         <AgentBadge agentId={task.agent} showPulse={isActive} />
       </div>
     </motion.div>
@@ -115,7 +115,7 @@ function Column({ column, columnTasks }: { column: typeof columns[0], columnTask
           <h3 className="text-xs font-semibold text-comfort-charcoal-800">{column.name}</h3>
           <p className="text-[9px] text-comfort-charcoal-400">{column.description}</p>
         </div>
-        <span className="text-[10px] text-comfort-charcoal-400 bg-comfort-beige-200 px-1.5 py-0.5 rounded-full ml-auto">
+        <span className="text-[10px] text-comfort-charcoal-400 bg-comfort-sage-200 px-1.5 py-0.5 rounded-full ml-auto">
           {columnTasks.length}
         </span>
       </div>
@@ -150,7 +150,7 @@ export default function MockUI() {
   const progress = Math.round((completedTasks / totalTasks) * 100)
 
   return (
-    <section ref={sectionRef} id="demo" className="py-16 md:py-24 bg-comfort-beige-50 overflow-hidden">
+    <section ref={sectionRef} id="demo" className="py-16 md:py-24 bg-comfort-sage-50 overflow-hidden">
       <div className="max-w-7xl mx-auto px-6 sm:px-8 lg:px-12">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -183,9 +183,9 @@ export default function MockUI() {
         >
           <div className="absolute inset-0 bg-gradient-to-r from-comfort-sage-200/30 via-transparent to-comfort-sage-200/30 rounded-[24px] blur-3xl" />
 
-          <div className="relative bg-white border border-comfort-beige-300 rounded-[24px] overflow-hidden shadow-xl shadow-comfort-charcoal-800/5">
+          <div className="relative bg-white border border-comfort-sage-300 rounded-[24px] overflow-hidden shadow-xl shadow-comfort-charcoal-800/5">
             {/* Header */}
-            <div className="flex items-center justify-between px-4 py-3 border-b border-comfort-beige-200 bg-comfort-beige-50">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-comfort-sage-200 bg-comfort-sage-50">
               <div className="flex items-center gap-3">
                 <div className="flex items-center gap-2">
                   <Image
@@ -209,7 +209,7 @@ export default function MockUI() {
                   </span>
                   6 Agents Active
                 </span>
-                <span className="px-2.5 py-1.5 text-xs bg-comfort-beige-200 text-comfort-charcoal-600 rounded-full">
+                <span className="px-2.5 py-1.5 text-xs bg-comfort-sage-200 text-comfort-charcoal-600 rounded-full">
                   {totalTasks} Tasks
                 </span>
               </div>
@@ -217,7 +217,7 @@ export default function MockUI() {
 
             <div className="flex">
               {/* Sidebar */}
-              <div className="hidden lg:block w-[280px] flex-shrink-0 border-r border-comfort-beige-200 p-4 bg-comfort-beige-50">
+              <div className="hidden lg:block w-[280px] flex-shrink-0 border-r border-comfort-sage-200 p-4 bg-comfort-sage-50">
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="font-semibold text-comfort-charcoal-800">Dashboard Builder</h2>
                   <span className="flex items-center gap-1.5 text-xs px-2 py-1 bg-comfort-sage-100 text-comfort-sage-700 rounded-full">
@@ -236,12 +236,12 @@ export default function MockUI() {
                 </div>
 
                 {/* Progress */}
-                <div className="bg-white border border-comfort-beige-200 rounded-[16px] p-3 mb-3">
+                <div className="bg-white border border-comfort-sage-200 rounded-[16px] p-3 mb-3">
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="text-sm font-medium text-comfort-charcoal-800">Progress</h3>
                     <span className="text-xs text-comfort-charcoal-400">{completedTasks}/{totalTasks}</span>
                   </div>
-                  <div className="h-2 bg-comfort-beige-200 rounded-full overflow-hidden">
+                  <div className="h-2 bg-comfort-sage-200 rounded-full overflow-hidden">
                     <motion.div
                       className="h-full bg-comfort-sage-500 rounded-full"
                       initial={{ width: 0 }}
@@ -254,7 +254,7 @@ export default function MockUI() {
                 </div>
 
                 {/* Activity Feed */}
-                <div className="bg-white border border-comfort-beige-200 rounded-[16px] p-3">
+                <div className="bg-white border border-comfort-sage-200 rounded-[16px] p-3">
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="text-sm font-medium text-comfort-charcoal-800">Activity</h3>
                     <span className="flex items-center gap-1 text-[10px] text-comfort-sage-600">
@@ -274,7 +274,7 @@ export default function MockUI() {
                           initial={{ opacity: 0, x: -10 }}
                           animate={{ opacity: 1, x: 0 }}
                           transition={{ delay: i * 0.1 }}
-                          className="flex items-center gap-2 text-[10px] py-1 border-b border-comfort-beige-100 last:border-0"
+                          className="flex items-center gap-2 text-[10px] py-1 border-b border-comfort-sage-100 last:border-0"
                         >
                           <span className="text-comfort-charcoal-400 w-12 flex-shrink-0">{activity.time}</span>
                           <span style={{ color: agent?.color }}>{agent?.emoji}</span>

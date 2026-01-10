@@ -100,15 +100,15 @@ export default function DashboardPage() {
 
   if (!isLoaded || isLoading) {
     return (
-      <div className="min-h-screen bg-comfort-beige-50 flex items-center justify-center">
+      <div className="min-h-screen bg-comfort-sage-50 flex items-center justify-center">
         <div className="w-8 h-8 border-4 border-comfort-sage-200 border-t-comfort-sage-600 rounded-full animate-spin" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-comfort-beige-50">
-      <header className="bg-comfort-beige-100 border-b border-comfort-beige-300">
+    <div className="min-h-screen bg-comfort-sage-50">
+      <header className="bg-comfort-sage-100 border-b border-comfort-sage-300">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <Link href="/" className="flex items-center gap-2">
@@ -123,7 +123,7 @@ export default function DashboardPage() {
                 Paynto<span className="text-comfort-sage-600">.</span>AI
               </span>
             </Link>
-            <span className="text-comfort-beige-400">/</span>
+            <span className="text-comfort-sage-400">/</span>
             <span className="text-comfort-charcoal-500">My Projects</span>
           </div>
           <div className="flex items-center gap-4">
@@ -152,7 +152,7 @@ export default function DashboardPage() {
         </div>
 
         {projects.length === 0 ? (
-          <div className="bg-comfort-beige-100 rounded-2xl border border-comfort-beige-300 p-12 text-center shadow-sm">
+          <div className="bg-comfort-sage-100 rounded-2xl border border-comfort-sage-300 p-12 text-center shadow-sm">
             <div className="w-16 h-16 bg-comfort-sage-100 rounded-full flex items-center justify-center mx-auto mb-4">
               <svg className="w-8 h-8 text-comfort-sage-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
@@ -175,9 +175,9 @@ export default function DashboardPage() {
             {projects.map((project) => (
               <div
                 key={project.id}
-                className="bg-comfort-beige-100 rounded-2xl border border-comfort-beige-300 overflow-hidden hover:shadow-lg transition-shadow"
+                className="bg-comfort-sage-100 rounded-2xl border border-comfort-sage-300 overflow-hidden hover:shadow-lg transition-shadow"
               >
-                <div className="aspect-video bg-comfort-beige-50 relative">
+                <div className="aspect-video bg-comfort-sage-50 relative">
                   {project.sandboxUrl ? (
                     <iframe
                       src={project.sandboxUrl}
@@ -194,7 +194,7 @@ export default function DashboardPage() {
                   <div className="absolute top-2 right-2">
                     <span className={`px-2 py-1 text-xs rounded-full ${project.mode === 'clone'
                       ? 'bg-comfort-sage-100 text-comfort-sage-700'
-                      : 'bg-comfort-beige-200 text-comfort-charcoal-600'
+                      : 'bg-comfort-sage-200 text-comfort-charcoal-600'
                       }`}>
                       {project.mode === 'clone' ? 'Clone' : 'Prompt'}
                     </span>
@@ -235,8 +235,8 @@ export default function DashboardPage() {
 
       {showNewProjectModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-comfort-beige-50 border border-comfort-beige-300 rounded-2xl shadow-2xl w-full max-w-md mx-4">
-            <div className="px-6 py-4 border-b border-comfort-beige-300 flex items-center justify-between">
+          <div className="bg-comfort-sage-50 border border-comfort-sage-300 rounded-2xl shadow-2xl w-full max-w-md mx-4">
+            <div className="px-6 py-4 border-b border-comfort-sage-300 flex items-center justify-between">
               <h2 className="text-lg font-semibold text-comfort-charcoal-800">New Project</h2>
               <button
                 onClick={() => setShowNewProjectModal(false)}
@@ -255,7 +255,7 @@ export default function DashboardPage() {
                   value={newProjectName}
                   onChange={(e) => setNewProjectName(e.target.value)}
                   placeholder="My Awesome App"
-                  className="w-full px-3 py-2 border border-comfort-beige-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-comfort-sage-200 focus:border-comfort-sage-500 bg-white"
+                  className="w-full px-3 py-2 border border-comfort-sage-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-comfort-sage-200 focus:border-comfort-sage-500 bg-white"
                   autoFocus
                 />
               </div>
@@ -266,7 +266,7 @@ export default function DashboardPage() {
                   onChange={(e) => setNewProjectDescription(e.target.value)}
                   placeholder="A brief description of your project"
                   rows={3}
-                  className="w-full px-3 py-2 border border-comfort-beige-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-comfort-sage-200 focus:border-comfort-sage-500 resize-none bg-white"
+                  className="w-full px-3 py-2 border border-comfort-sage-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-comfort-sage-200 focus:border-comfort-sage-500 resize-none bg-white"
                 />
               </div>
               <button

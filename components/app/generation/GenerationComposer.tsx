@@ -268,7 +268,7 @@ export default function GenerationComposer({
             onKeyDown={handleKeyDown}
             disabled={disabled}
             placeholder={getPlaceholder(mode)}
-            className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-200 focus:border-orange-400"
+            className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-comfort-sage-200 focus:border-comfort-sage-400"
             inputMode="url"
             autoCapitalize="none"
             autoCorrect="off"
@@ -283,7 +283,7 @@ export default function GenerationComposer({
             disabled={disabled}
             placeholder={getPlaceholder(mode)}
             rows={2}
-            className="w-full resize-none rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-200 focus:border-orange-400"
+            className="w-full resize-none rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-comfort-sage-200 focus:border-comfort-sage-400"
           />
         )}
       </div>

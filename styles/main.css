@@ -26,33 +26,33 @@
 
 @layer base {
   :root {
-    /* Comfort Theme - Sage Green & Warm Beige */
-    --background: 40 33% 98%; /* comfort-beige-50 */
+    /* Clean Theme - Sage Green & White */
+    --background: 138 25% 98%; /* light sage tint */
     --foreground: 0 0% 22%; /* comfort-charcoal-800 */
 
-    --card: 40 33% 97%; /* comfort-beige-100 */
+    --card: 0 0% 100%; /* pure white */
     --card-foreground: 0 0% 22%;
 
-    --popover: 40 33% 98%;
+    --popover: 0 0% 100%;
     --popover-foreground: 0 0% 22%;
 
     --primary: 132 22% 50%; /* comfort-sage-500 */
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 40 25% 93%; /* comfort-beige-200 */
+    --secondary: 138 20% 95%; /* light sage */
     --secondary-foreground: 0 0% 22%;
 
-    --muted: 40 25% 93%;
+    --muted: 138 15% 95%;
     --muted-foreground: 0 0% 45%;
 
     --accent: 132 22% 45%; /* comfort-sage-600 */
     --accent-foreground: 0 0% 100%;
 
-    --destructive: 15 70% 55%; /* comfort-terracotta-500 */
+    --destructive: 0 70% 55%; /* red for errors */
     --destructive-foreground: 0 0% 98%;
 
-    --border: 40 20% 88%; /* comfort-beige-300 */
-    --input: 40 20% 88%;
+    --border: 138 15% 88%; /* sage-tinted gray */
+    --input: 138 15% 88%;
     --ring: 132 22% 50%; /* comfort-sage-500 */
 
     --radius: 0.5rem;

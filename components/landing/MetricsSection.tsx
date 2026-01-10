@@ -93,7 +93,7 @@ export default function MetricsSection() {
   ]
 
   return (
-    <section id="metrics" className="py-12 md:py-16 bg-comfort-beige-50">
+    <section id="metrics" className="py-12 md:py-16 bg-comfort-sage-50">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -125,7 +125,7 @@ export default function MetricsSection() {
               }}
               onHoverStart={() => setHoveredMetric(index)}
               onHoverEnd={() => setHoveredMetric(null)}
-              className="group relative bg-gradient-to-b from-comfort-beige-50 to-white border border-comfort-beige-200 rounded-2xl p-8 text-center hover:border-comfort-sage-300 transition-all duration-300 cursor-pointer overflow-hidden"
+              className="group relative bg-gradient-to-b from-comfort-sage-50 to-white border border-comfort-sage-200 rounded-2xl p-8 text-center hover:border-comfort-sage-300 transition-all duration-300 cursor-pointer overflow-hidden"
             >
               <motion.div
                 className={`absolute inset-0 bg-gradient-to-br ${metric.color} opacity-0 group-hover:opacity-10 transition-opacity duration-300`}
@@ -174,7 +174,7 @@ export default function MetricsSection() {
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
           transition={{ delay: 0.4, duration: 0.6 }}
-          className="mt-16 bg-gradient-to-r from-comfort-sage-50 to-comfort-beige-100 border border-comfort-sage-200 rounded-2xl p-8 md:p-12 overflow-hidden"
+          className="mt-16 bg-gradient-to-r from-comfort-sage-50 to-comfort-sage-100 border border-comfort-sage-200 rounded-2xl p-8 md:p-12 overflow-hidden"
         >
           <h3 className="text-2xl md:text-3xl font-bold text-comfort-charcoal-800 mb-10 text-center">
             The Complete App Building Platform
@@ -192,7 +192,7 @@ export default function MetricsSection() {
                   whileHover={{ scale: 1.05, y: -4 }}
                   className="flex flex-col items-center gap-3"
                 >
-                  <div className="w-16 h-16 md:w-20 md:h-20 rounded-xl flex items-center justify-center bg-white border border-comfort-beige-200 shadow-sm hover:shadow-md hover:border-comfort-sage-300 transition-all">
+                  <div className="w-16 h-16 md:w-20 md:h-20 rounded-xl flex items-center justify-center bg-white border border-comfort-sage-200 shadow-sm hover:shadow-md hover:border-comfort-sage-300 transition-all">
                     <span className="text-2xl md:text-3xl">{tool.emoji}</span>
                   </div>
                   <span className="text-sm font-medium text-comfort-charcoal-600">{tool.name}</span>
@@ -218,7 +218,7 @@ export default function MetricsSection() {
                 onClick={() => setFusionComplete(!fusionComplete)}
                 className={`w-28 h-28 md:w-32 md:h-32 rounded-2xl flex flex-col items-center justify-center gap-2 border-2 transition-all duration-500 ${fusionComplete
                   ? 'bg-gradient-to-br from-comfort-sage-500 to-comfort-sage-600 border-transparent shadow-lg shadow-comfort-sage-500/30'
-                  : 'bg-white border-dashed border-comfort-beige-300 hover:border-comfort-sage-400'
+                  : 'bg-white border-dashed border-comfort-sage-300 hover:border-comfort-sage-400'
                   }`}
               >
                 <motion.span
@@ -248,7 +248,7 @@ export default function MetricsSection() {
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: index * 0.1 }}
                       whileHover={{ y: -4 }}
-                      className="bg-white rounded-xl p-4 text-center border border-comfort-beige-200 hover:border-comfort-sage-300 transition-colors cursor-default"
+                      className="bg-white rounded-xl p-4 text-center border border-comfort-sage-200 hover:border-comfort-sage-300 transition-colors cursor-default"
                     >
                       <span className="text-2xl mb-2 block">{feature.icon}</span>
                       <p className="text-xs font-semibold text-comfort-charcoal-800 mb-1">{feature.name}</p>

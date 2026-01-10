@@ -126,7 +126,7 @@ export default function GenerationLeftPanel({
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               {isPlanning ? (
-                <div className="w-3 h-3 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
+                <div className="w-3 h-3 border-2 border-comfort-sage-500 border-t-transparent rounded-full animate-spin" />
               ) : isBuilding ? (
                 <div className="w-2.5 h-2.5 bg-blue-500 rounded-full animate-pulse" />
               ) : hasFailed ? (
@@ -158,7 +158,7 @@ export default function GenerationLeftPanel({
               </div>
               <div className="mt-1.5 w-full h-1.5 bg-gray-200 rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-gradient-to-r from-orange-400 to-orange-500 transition-all duration-500"
+                  className="h-full bg-gradient-to-r from-comfort-sage-400 to-comfort-sage-500 transition-all duration-500"
                   style={{ width: `${(doneCount / Math.max(1, totalCount)) * 100}%` }}
                 />
               </div>
@@ -168,7 +168,7 @@ export default function GenerationLeftPanel({
                   <button
                     type="button"
                     onClick={onStartBuild}
-                    className="px-2.5 py-1.5 text-[11px] font-medium rounded-md bg-orange-500 text-white hover:bg-orange-600 transition-colors"
+                    className="px-2.5 py-1.5 text-[11px] font-medium rounded-md bg-comfort-sage-500 text-white hover:bg-comfort-sage-600 transition-colors"
                   >
                     Start build
                   </button>
@@ -493,7 +493,7 @@ export default function GenerationLeftPanel({
                       return startIndex !== -1 ? lastContent.slice(startIndex) : lastContent;
                     })()}
                   </SyntaxHighlighter>
-                  <span className="inline-block w-3 h-4 bg-orange-400 ml-3 mb-3 animate-pulse" />
+                  <span className="inline-block w-3 h-4 bg-comfort-sage-400 ml-3 mb-3 animate-pulse" />
                 </div>
               </motion.div>
             )}

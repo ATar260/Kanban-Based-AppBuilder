@@ -16,7 +16,7 @@ export default function Hero() {
   return (
     <section
       id="hero"
-      className="relative pt-32 pb-20 md:pt-36 md:pb-28 bg-gradient-to-br from-comfort-beige-100 via-comfort-beige-50 to-comfort-sage-50/30 overflow-hidden"
+      className="relative pt-32 pb-20 md:pt-36 md:pb-28 bg-gradient-to-br from-comfort-sage-50 via-white to-comfort-sage-100/30 overflow-hidden"
     >
       {/* Spotlight effect */}
       <Spotlight
@@ -25,7 +25,7 @@ export default function Hero() {
       />
 
       {/* Aurora gradient background */}
-      <div className="absolute inset-0 bg-gradient-to-r from-comfort-sage-100/20 via-comfort-beige-50/10 to-comfort-terracotta-100/20 animate-aurora opacity-50" />
+      <div className="absolute inset-0 bg-gradient-to-r from-comfort-sage-100/20 via-white/10 to-comfort-sage-200/20 animate-aurora opacity-50" />
 
       {/* Subtle background pattern */}
       <div
@@ -96,7 +96,7 @@ export default function Hero() {
               whileHover={{ scale: 1.02, y: -2 }}
               whileTap={{ scale: 0.98 }}
               onClick={handleWatchDemo}
-              className="w-full sm:w-auto px-8 py-4 bg-white hover:bg-comfort-beige-50 text-comfort-charcoal-700 font-semibold rounded-2xl transition-all shadow-md border border-comfort-beige-200 hover:border-comfort-beige-300"
+              className="w-full sm:w-auto px-8 py-4 bg-white hover:bg-comfort-sage-50 text-comfort-charcoal-700 font-semibold rounded-2xl transition-all shadow-md border border-comfort-sage-200 hover:border-comfort-sage-300"
             >
               See How It Works
             </motion.button>
@@ -116,7 +116,7 @@ export default function Hero() {
             ].map((item, i) => (
               <div
                 key={i}
-                className="flex items-center gap-2 px-4 py-2 bg-white/60 backdrop-blur-sm rounded-xl border border-comfort-beige-200/50"
+                className="flex items-center gap-2 px-4 py-2 bg-white/60 backdrop-blur-sm rounded-xl border border-comfort-sage-200/50"
               >
                 <span className="text-lg">{item.icon}</span>
                 <span className="font-medium">{item.text}</span>
