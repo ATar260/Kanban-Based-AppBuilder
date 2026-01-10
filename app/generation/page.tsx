@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useMemo, Suspense } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { appConfig } from '@/config/app.config';
@@ -1578,6 +1578,46 @@ Requirements:
       setIsLoadingRepoIntoSandbox(false);
     }
   };
+
+  // Reset everything and start fresh with a new project
+  const handleStartNewProject = useCallback(() => {
+    // Clear kanban state
+    kanban.setPlan(null);
+    kanban.setTickets([]);
+
+    // Clear submission state
+    setHasInitialSubmission(false);
+
+    // Clear conversation context
+    setConversationContext({
+      scrapedWebsites: [],
+      generatedComponents: [],
+      appliedCode: [],
+      currentProject: '',
+      lastGeneratedCode: undefined,
+    });
+
+    // Clear chat messages
+    setChatMessages([]);
+
+    // Clear any pending prompts
+    setPendingPrompt('');
+
+    // Clear localStorage for kanban plans
+    try {
+      localStorage.removeItem('kanban_build_plans');
+    } catch (e) {
+      console.warn('Failed to clear localStorage:', e);
+    }
+
+    // Clear URL params but keep sandbox if exists
+    const params = new URLSearchParams();
+    if (sandboxData?.sandboxId) {
+      params.set('sandbox', sandboxData.sandboxId);
+    }
+    params.set('model', aiModel);
+    router.push(`/generation?${params.toString()}`);
+  }, [kanban, sandboxData, aiModel, router]);
 
   const handleStartKanbanBuild = async (opts?: { onlyTicketId?: string }) => {
     const backlogTickets = kanban.tickets.filter(t => t.status === 'backlog');
@@ -5694,7 +5734,20 @@ Focus on the key sections and content, making it clean and modern.`;
     <HeaderProvider>
       <div className="font-sans bg-background text-foreground h-screen flex flex-col">
         <div className="bg-white py-2 px-4 border-b border-border-faint flex items-center justify-between shadow-sm">
-          <HeaderBrandKit />
+          <div className="flex items-center gap-3">
+            <HeaderBrandKit />
+            <div className="h-5 w-px bg-gray-200" />
+            <button
+              onClick={handleStartNewProject}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-700 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-lg transition-colors"
+              title="Start a new project from scratch"
+            >
+              <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              New Project
+            </button>
+          </div>
           <div className="flex items-center gap-2">
             {/* Model Selector - Left side */}
             <select
