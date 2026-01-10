@@ -42,6 +42,9 @@ import { useAutoRefactor } from '@/hooks/useAutoRefactor';
 import { useGitHubImport } from '@/hooks/useGitHubImport';
 import { usePlanVersions, type PlanVersion } from '@/hooks/usePlanVersions';
 import { PlanVersionHistoryPanel } from '@/components/planning';
+import { useGenerationState } from '@/hooks/useGenerationState';
+import IdleStateHero from '@/components/app/generation/IdleStateHero';
+import AnalyzingStateView from '@/components/app/generation/AnalyzingStateView';
 
 interface SandboxData {
   sandboxId: string;
@@ -252,6 +255,15 @@ function AISandboxPage() {
 
   // Store flag to trigger generation after component mounts
   const [shouldAutoGenerate, setShouldAutoGenerate] = useState(false);
+
+  // Generation state machine - derives UI state from app state
+  const generationState = useGenerationState({
+    plan: kanban.plan,
+    tickets: kanban.tickets,
+    isPlanning,
+    hasInitialSubmission,
+    generationProgress,
+  });
 
   // Clear old conversation data on component mount and create/restore sandbox
   useEffect(() => {
@@ -5643,6 +5655,41 @@ Focus on the key sections and content, making it clean and modern.`;
     }, 500);
   };
 
+  // Handle idle state - show full-page template selector
+  if (generationState.state === 'idle') {
+    return (
+      <HeaderProvider>
+        <IdleStateHero
+          onSubmitPrompt={async (prompt) => {
+            setHasInitialSubmission(true);
+            await planBuild(prompt);
+          }}
+          onSubmitUrl={async (url) => {
+            setHasInitialSubmission(true);
+            const prompt = `Clone and recreate the website at ${url}`;
+            await planBuild(prompt);
+          }}
+          disabled={generationProgress.isGenerating || isPlanning}
+        />
+      </HeaderProvider>
+    );
+  }
+
+  // Handle analyzing state - show full-page analysis view
+  if (generationState.state === 'analyzing') {
+    return (
+      <HeaderProvider>
+        <AnalyzingStateView
+          prompt={pendingPrompt || homeContextInput}
+          tickets={kanban.tickets}
+          isPlanning={isPlanning}
+          loadingStage={loadingStage}
+        />
+      </HeaderProvider>
+    );
+  }
+
+  // Building/complete states - show the full builder interface
   return (
     <HeaderProvider>
       <div className="font-sans bg-background text-foreground h-screen flex flex-col">
@@ -5739,33 +5786,10 @@ Focus on the key sections and content, making it clean and modern.`;
         </div>
 
         <div className="flex-1 flex overflow-hidden">
-          {/* Center Panel - AI Chat (1/3 of remaining width) */}
-          <div className="w-[320px] flex-none flex flex-col border-r border-border bg-white">
-            {/* Sidebar Input Component */}
-            {!hasInitialSubmission ? (
-              <div className="p-4 border-b border-border">
-                <SidebarInput
-                  onSubmit={async (url, style, model, instructions) => {
-                    setHasInitialSubmission(true);
-                    setAiModel(model);
-                    // Create a plan from the clone URL request
-                    const prompt = `Clone and recreate the website at ${url}. ${instructions ? `Additional instructions: ${instructions}` : ''} Style preference: ${style}`;
-                    await planBuild(prompt);
-                  }}
-                  onPromptSubmit={async (prompt, model) => {
-                    setAiModel(model);
-                    // Generate 3 UI options for user to choose from
-                    await generateUIOptions(prompt);
-                  }}
-                  onImportSubmit={async (repoFullName, branch, maxFiles, model, goalPrompt) => {
-                    await handleGitHubImportAndPlan(repoFullName, branch, maxFiles, model, goalPrompt);
-                  }}
-                  disabled={generationProgress.isGenerating || isPlanning || isLoadingUIOptions || isImportingRepo}
-                />
-              </div>
-            ) : null}
-
-            {(isPlanning || kanban.tickets.length > 0) && hasInitialSubmission && (
+          {/* Center Panel - Build Plan Sidebar */}
+          <div className="w-[320px] flex-none flex flex-col border-r border-border bg-white h-full">
+            {/* Build Plan - Always visible in building state */}
+            {(isPlanning || kanban.tickets.length > 0) && (
               <div className="flex-1 overflow-y-auto border-b border-border">
                 <div className="p-3 border-b border-gray-100 bg-gray-50 sticky top-0 z-10">
                   <div className="flex items-center justify-between gap-2">
@@ -5871,90 +5895,19 @@ Focus on the key sections and content, making it clean and modern.`;
               </div>
             )}
 
-            {conversationContext.scrapedWebsites.length > 0 && !hasInitialSubmission && (
-              <div className="p-4 bg-card border-b border-gray-200">
-                <div className="flex flex-col gap-4">
-                  {conversationContext.scrapedWebsites.map((site, idx) => {
-                    // Extract favicon and site info from the scraped data
-                    const metadata = site.content?.metadata || {};
-                    const sourceURL = metadata.sourceURL || site.url;
-                    const favicon = metadata.favicon || `https://www.google.com/s2/favicons?domain=${new URL(sourceURL).hostname}&sz=128`;
-                    const siteName = metadata.ogSiteName || metadata.title || new URL(sourceURL).hostname;
-                    const screenshot = site.content?.screenshot || sessionStorage.getItem('websiteScreenshot');
-
-                    return (
-                      <div key={idx} className="flex flex-col gap-3">
-                        {/* Site info with favicon */}
-                        <div className="flex items-center gap-3 text-sm">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={favicon}
-                            alt={siteName}
-                            className="w-8 h-8 rounded"
-                            onError={(e) => {
-                              e.currentTarget.src = `https://www.google.com/s2/favicons?domain=${new URL(sourceURL).hostname}&sz=128`;
-                            }}
-                          />
-                          <a
-                            href={sourceURL}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-black hover:text-gray-700 truncate max-w-[250px] font-medium"
-                            title={sourceURL}
-                          >
-                            {siteName}
-                          </a>
-                        </div>
-
-                        {/* Pinned screenshot */}
-                        {screenshot && (
-                          <div className="w-full">
-                            <div className="flex items-center justify-between mb-2">
-                              <span className="text-xs font-medium text-gray-600">Screenshot Preview</span>
-                              <button
-                                onClick={() => setScreenshotCollapsed(!screenshotCollapsed)}
-                                className="text-gray-500 hover:text-gray-700 transition-colors p-1"
-                                aria-label={screenshotCollapsed ? 'Expand screenshot' : 'Collapse screenshot'}
-                              >
-                                <svg
-                                  width="16"
-                                  height="16"
-                                  viewBox="0 0 16 16"
-                                  fill="none"
-                                  xmlns="http://www.w3.org/2000/svg"
-                                  className={`transition-transform duration-300 ${screenshotCollapsed ? 'rotate-180' : ''}`}
-                                >
-                                  <path d="M4 6L8 10L12 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                                </svg>
-                              </button>
-                            </div>
-                            <div
-                              className="w-full rounded-lg overflow-hidden border border-gray-200 transition-all duration-300"
-                              style={{
-                                opacity: screenshotCollapsed ? 0 : 1,
-                                transform: screenshotCollapsed ? 'translateY(-20px)' : 'translateY(0)',
-                                pointerEvents: screenshotCollapsed ? 'none' : 'auto',
-                                maxHeight: screenshotCollapsed ? '0' : '200px'
-                              }}
-                            >
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img
-                                src={screenshot}
-                                alt={`${siteName} preview`}
-                                className="w-full h-auto object-cover"
-                                style={{ maxHeight: '200px' }}
-                              />
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
+            {/* Empty state when no tickets - show guidance */}
+            {!isPlanning && kanban.tickets.length === 0 && (
+              <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
+                <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mb-3">
+                  <span className="text-xl">📋</span>
                 </div>
+                <h3 className="text-sm font-medium text-gray-700 mb-1">No build plan yet</h3>
+                <p className="text-xs text-gray-500">Start by describing what you want to build</p>
               </div>
             )}
 
-            {!hasInitialSubmission && (
+            {/* Activity feed placeholder for building state - can be expanded later */}
+            {false && (
             <div
               className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 scrollbar-hide bg-gray-50"
               ref={chatMessagesRef}>
@@ -6295,7 +6248,7 @@ Focus on the key sections and content, making it clean and modern.`;
                       <div className="flex items-center gap-1 px-2 py-1 bg-[#36322F]/70 text-white rounded-[10px] text-sm animate-pulse"
                         style={{ animationDelay: `${generationProgress.files.length * 30}ms` }}>
                         <div className="w-16 h-16 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                        {generationProgress.currentFile.path.split('/').pop()}
+                        {generationProgress.currentFile?.path?.split('/').pop()}
                       </div>
                     )}
                   </div>

@@ -1,5 +1,6 @@
 'use client';
 
+import { motion } from 'framer-motion';
 import { KanbanTicket as TicketType, TicketStatus } from './types';
 import KanbanTicket from './KanbanTicket';
 
@@ -66,18 +67,73 @@ export default function KanbanColumn({
 
   const isActiveColumn = id === 'generating' || id === 'applying' || id === 'testing' || id === 'pr_review';
 
-  const emptyMessages: Record<TicketStatus, string> = {
-    planning: 'AI analyzing...',
-    backlog: 'No tasks queued',
-    awaiting_input: 'No inputs pending',
-    generating: 'Waiting...',
-    applying: 'Applying changes...',
-    testing: 'Running tests...',
-    pr_review: 'Awaiting review...',
-    done: 'No completed tasks',
-    blocked: 'No blockers',
-    failed: 'No failures',
-    skipped: 'None skipped',
+  const emptyStates: Record<TicketStatus, { icon: string; title: string; description: string; animate?: boolean }> = {
+    planning: {
+      icon: '🎯',
+      title: 'Planning',
+      description: 'AI is breaking down your request',
+      animate: true,
+    },
+    backlog: {
+      icon: '📋',
+      title: 'Ready',
+      description: 'Tasks will queue here',
+      animate: false,
+    },
+    awaiting_input: {
+      icon: '⏳',
+      title: 'Waiting',
+      description: 'No inputs needed',
+      animate: false,
+    },
+    generating: {
+      icon: '⚡',
+      title: 'Generator',
+      description: 'Ready to generate code',
+      animate: false,
+    },
+    applying: {
+      icon: '🔧',
+      title: 'Builder',
+      description: 'Will apply changes here',
+      animate: false,
+    },
+    testing: {
+      icon: '🧪',
+      title: 'Tester',
+      description: 'Tests run here',
+      animate: false,
+    },
+    pr_review: {
+      icon: '🔍',
+      title: 'Review',
+      description: 'Code review happens here',
+      animate: false,
+    },
+    done: {
+      icon: '✅',
+      title: 'Complete',
+      description: 'Finished tasks appear here',
+      animate: false,
+    },
+    blocked: {
+      icon: '🚫',
+      title: 'Blocked',
+      description: 'Dependency issues',
+      animate: false,
+    },
+    failed: {
+      icon: '❌',
+      title: 'Failed',
+      description: 'Errors to fix',
+      animate: false,
+    },
+    skipped: {
+      icon: '⏭️',
+      title: 'Skipped',
+      description: 'Tasks you skipped',
+      animate: false,
+    },
   };
 
   return (
@@ -126,8 +182,27 @@ export default function KanbanColumn({
       {/* Tickets List */}
       <div className="flex-1 space-y-2">
         {tickets.length === 0 ? (
-          <div className="text-center py-8 px-4">
-            <p className="text-sm text-zinc-500">{emptyMessages[id]}</p>
+          <div className="flex flex-col items-center justify-center py-8 px-4">
+            <motion.span
+              className="text-2xl mb-2"
+              animate={emptyStates[id].animate ? {
+                scale: [1, 1.1, 1],
+                opacity: [0.7, 1, 0.7],
+              } : {}}
+              transition={{
+                duration: 2,
+                repeat: Infinity,
+                ease: "easeInOut",
+              }}
+            >
+              {emptyStates[id].icon}
+            </motion.span>
+            <p className="text-xs font-medium text-zinc-400 mb-0.5">
+              {emptyStates[id].title}
+            </p>
+            <p className="text-[10px] text-zinc-500 text-center">
+              {emptyStates[id].description}
+            </p>
           </div>
         ) : (
           tickets.map(ticket => (
