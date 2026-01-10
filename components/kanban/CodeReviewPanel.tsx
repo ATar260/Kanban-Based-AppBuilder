@@ -121,7 +121,7 @@ export default function CodeReviewPanel({
             className={`px-3 py-1.5 text-xs font-medium text-white rounded transition-colors ${
               result.passed
                 ? 'bg-green-500 hover:bg-green-600'
-                : 'bg-amber-500 hover:bg-amber-600'
+                : 'bg-emerald-600 hover:bg-emerald-700'
             }`}
           >
             {result.passed ? 'Approve & Continue' : 'Approve anyway'}

@@ -44,16 +44,16 @@ export default function KanbanColumn({
 }: KanbanColumnProps) {
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
-    e.currentTarget.classList.add('border-amber-500/50');
+    e.currentTarget.classList.add('border-emerald-500/50');
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
-    e.currentTarget.classList.remove('border-amber-500/50');
+    e.currentTarget.classList.remove('border-emerald-500/50');
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
-    e.currentTarget.classList.remove('border-amber-500/50');
+    e.currentTarget.classList.remove('border-emerald-500/50');
     const ticketId = e.dataTransfer.getData('ticketId');
     if (ticketId && onDropTicket) {
       onDropTicket(ticketId, id);

@@ -3,54 +3,65 @@ import Link from "next/link";
 
 export default function SignUpPage() {
   return (
-    <div className="min-h-screen flex flex-col bg-[#09090b]">
+    <div className="min-h-screen flex flex-col bg-white">
+      {/* Subtle grid background */}
+      <div className="fixed inset-0 bg-[linear-gradient(to_right,#00000008_1px,transparent_1px),linear-gradient(to_bottom,#00000008_1px,transparent_1px)] bg-[size:40px_40px]" />
+
+      {/* Gradient orbs */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-emerald-200/30 rounded-full blur-3xl" />
+        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-emerald-300/20 rounded-full blur-3xl" />
+      </div>
+
       {/* Header */}
-      <header className="p-6">
+      <header className="relative z-10 p-6">
         <Link href="/" className="flex items-center gap-2">
-          <svg className="w-8 h-8 text-amber-500" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-          </svg>
-          <span className="text-xl font-semibold text-white">Paynto A.I.</span>
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-gradient-to-br from-emerald-600 to-emerald-800 shadow-lg">
+            <span className="text-xl font-bold text-white">P</span>
+          </div>
+          <span className="text-2xl font-bold text-gray-900">
+            Paynto<span className="text-emerald-700">.</span>AI
+          </span>
         </Link>
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 flex items-center justify-center px-4">
+      <main className="relative z-10 flex-1 flex items-center justify-center px-4">
         <div className="w-full max-w-md">
           <div className="text-center mb-8">
-            <h1 className="text-3xl font-bold text-white mb-2">Create your account</h1>
-            <p className="text-zinc-400">Start building apps with AI in seconds</p>
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">Create your account</h1>
+            <p className="text-gray-600">Start building apps with AI in seconds</p>
           </div>
 
           <SignUp
             appearance={{
               elements: {
                 rootBox: "w-full",
-                card: "bg-zinc-900 border border-zinc-800 shadow-2xl rounded-xl",
-                headerTitle: "text-white",
-                headerSubtitle: "text-zinc-400",
+                card: "bg-white border border-gray-200 shadow-xl rounded-xl",
+                headerTitle: "text-gray-900",
+                headerSubtitle: "text-gray-600",
                 socialButtonsBlockButton:
-                  "bg-zinc-800 border-zinc-700 text-white hover:bg-zinc-700 transition-colors",
-                socialButtonsBlockButtonText: "text-white font-medium",
-                dividerLine: "bg-zinc-700",
-                dividerText: "text-zinc-500",
-                formFieldLabel: "text-zinc-300",
+                  "bg-white border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors",
+                socialButtonsBlockButtonText: "text-gray-700 font-medium",
+                dividerLine: "bg-gray-200",
+                dividerText: "text-gray-500",
+                formFieldLabel: "text-gray-700",
                 formFieldInput:
-                  "bg-zinc-800 border-zinc-700 text-white placeholder:text-zinc-500 focus:ring-amber-500 focus:border-amber-500",
+                  "bg-white border-gray-200 text-gray-900 placeholder:text-gray-400 focus:ring-emerald-500 focus:border-emerald-500",
                 formButtonPrimary:
-                  "bg-amber-500 hover:bg-amber-600 text-black font-semibold transition-colors",
-                footerActionLink: "text-amber-500 hover:text-amber-400",
-                identityPreviewText: "text-white",
-                identityPreviewEditButton: "text-amber-500",
-                formFieldAction: "text-amber-500",
-                otpCodeFieldInput: "bg-zinc-800 border-zinc-700 text-white",
+                  "bg-emerald-700 hover:bg-emerald-800 text-white font-semibold transition-colors",
+                footerActionLink: "text-emerald-700 hover:text-emerald-800",
+                identityPreviewText: "text-gray-900",
+                identityPreviewEditButton: "text-emerald-700",
+                formFieldAction: "text-emerald-700",
+                otpCodeFieldInput: "bg-white border-gray-200 text-gray-900",
               },
             }}
           />
 
-          <p className="text-center text-zinc-500 text-sm mt-6">
+          <p className="text-center text-gray-500 text-sm mt-6">
             Already have an account?{" "}
-            <Link href="/sign-in" className="text-amber-500 hover:text-amber-400 font-medium">
+            <Link href="/sign-in" className="text-emerald-700 hover:text-emerald-800 font-medium">
               Sign in
             </Link>
           </p>
@@ -58,8 +69,8 @@ export default function SignUpPage() {
       </main>
 
       {/* Footer */}
-      <footer className="p-6 text-center text-zinc-600 text-sm">
-        © {new Date().getFullYear()} Paynto A.I. All rights reserved.
+      <footer className="relative z-10 p-6 text-center text-gray-500 text-sm">
+        &copy; {new Date().getFullYear()} Paynto A.I. All rights reserved.
       </footer>
     </div>
   );
