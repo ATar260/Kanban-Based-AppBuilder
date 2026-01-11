@@ -215,7 +215,7 @@ function StatsBar() {
 
 export default function CommandCentreDashboard() {
   return (
-    <section id="demo" className="min-h-[35vh] md:min-h-[40vh] lg:min-h-[45vh] bg-comfort-sage-50 py-6 md:py-8">
+    <section id="demo" className="min-h-[35vh] md:min-h-[40vh] lg:min-h-[45vh] bg-comfort-sage-50 py-20 md:py-28">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
