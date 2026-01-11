@@ -144,6 +144,10 @@ function AISandboxPage() {
     }
   });
 
+  // Server-side BuildRun (Phase 1): keep build execution truth on the server and stream events via SSE.
+  const [buildRunId, setBuildRunId] = useState<string | null>(null);
+  const buildRunEventSourceRef = useRef<EventSource | null>(null);
+
   // UI Options state for 3-mockup generation
   const [showUIOptions, setShowUIOptions] = useState(false);
   const [uiOptions, setUIOptions] = useState<UIOption[]>([]);
@@ -194,6 +198,17 @@ function AISandboxPage() {
       // ignore
     }
   }, [autoOpenPreviewOnApply]);
+
+  useEffect(() => {
+    return () => {
+      try {
+        buildRunEventSourceRef.current?.close();
+      } catch {
+        // ignore
+      }
+      buildRunEventSourceRef.current = null;
+    };
+  }, []);
 
   // Build Tracker Agent - monitors generation and updates Kanban tickets
   const buildTracker = useBuildTracker({
@@ -1266,7 +1281,7 @@ Apply these design specifications consistently across all components.`;
         throw new Error('Failed to create build plan');
       }
 
-      const reader = response.body.getReader();
+      const reader = response.body!.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
 
@@ -1500,7 +1515,7 @@ Requirements:
         throw new Error(data?.error || `Failed to load repo into sandbox (HTTP ${response.status})`);
       }
 
-      const reader = response.body.getReader();
+      const reader = response.body!.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
       let sawComplete = false;
@@ -1637,6 +1652,173 @@ Requirements:
     params.set('model', aiModel);
     router.push(`/generation?${params.toString()}`);
   }, [kanban, sandboxData, aiModel, router, setConversationContext, setChatMessages, setHasInitialSubmission, setPendingPrompt]);
+
+  const handleBuildRunEvent = (evt: any) => {
+    if (!evt || typeof evt !== 'object') return;
+    if (evt.type === 'ping') return;
+
+    if (evt.type === 'run_started') {
+      setKanbanBuildActive(true);
+      kanban.setIsPaused(false);
+      return;
+    }
+
+    if (evt.type === 'run_status') {
+      if (evt.status === 'paused') {
+        setKanbanBuildActive(true);
+        kanban.setIsPaused(true);
+      } else if (evt.status === 'running') {
+        setKanbanBuildActive(true);
+        kanban.setIsPaused(false);
+      } else if (evt.status === 'completed') {
+        setKanbanBuildActive(false);
+        kanban.setIsPaused(false);
+        setGenerationProgress(prev => ({ ...prev, isGenerating: false, status: 'Build complete' }));
+      } else if (evt.status === 'failed') {
+        setKanbanBuildActive(false);
+        kanban.setIsPaused(false);
+        const msg = evt.error || evt.message || 'Build failed';
+        setGenerationProgress(prev => ({ ...prev, isGenerating: false, status: `Failed: ${msg}` }));
+        addChatMessage(`Build failed: ${msg}`, 'error');
+      }
+      return;
+    }
+
+    if (evt.type === 'ticket_status') {
+      if (typeof evt.ticketId === 'string') {
+        kanban.setCurrentTicketId(evt.ticketId);
+        kanban.updateTicketStatus(evt.ticketId, evt.status as TicketStatus, evt.error);
+        if (typeof evt.progress === 'number') {
+          kanban.updateTicketProgress(evt.ticketId, evt.progress);
+        }
+      }
+      return;
+    }
+
+    if (evt.type === 'ticket_artifacts') {
+      if (typeof evt.ticketId === 'string') {
+        if (typeof evt.generatedCode === 'string' && evt.generatedCode.includes('<file path="')) {
+          kanban.updateTicketCode(evt.ticketId, evt.generatedCode);
+        }
+        if (Array.isArray(evt.appliedFiles) && evt.appliedFiles.length > 0) {
+          kanban.updateTicketFiles(evt.ticketId, evt.appliedFiles);
+        }
+        if (typeof evt.applyDurationMs === 'number') {
+          addChatMessage(`⏱️ Apply: ${(evt.applyDurationMs / 1000).toFixed(1)}s`, 'system');
+        }
+        if (typeof evt.reviewDurationMs === 'number') {
+          const issues = typeof evt.reviewIssuesCount === 'number' ? ` (${evt.reviewIssuesCount} issue(s))` : '';
+          addChatMessage(`⏱️ PR review: ${(evt.reviewDurationMs / 1000).toFixed(1)}s${issues}`, 'system');
+        }
+        if (typeof evt.validationDurationMs === 'number') {
+          addChatMessage(`⏱️ Validation: ${(evt.validationDurationMs / 1000).toFixed(1)}s`, 'system');
+        }
+      }
+      return;
+    }
+
+    if (evt.type === 'log') {
+      const level = evt.level as string | undefined;
+      const message = typeof evt.message === 'string' ? evt.message : '';
+      if (!message) return;
+      if (level === 'error') {
+        addChatMessage(message, 'error');
+      } else {
+        addChatMessage(message, 'system');
+      }
+      return;
+    }
+  };
+
+  const connectBuildRunEvents = (runId: string) => {
+    try {
+      buildRunEventSourceRef.current?.close();
+    } catch {
+      // ignore
+    }
+
+    const es = new EventSource(`/api/build-runs/${runId}/events`);
+    buildRunEventSourceRef.current = es;
+
+    es.onmessage = (event) => {
+      try {
+        const evt = JSON.parse(event.data);
+        handleBuildRunEvent(evt);
+      } catch {
+        // ignore
+      }
+    };
+
+    es.onerror = () => {
+      // The EventSource will retry by default; surface a lightweight hint.
+      addChatMessage('⚠️ Build stream disconnected. Attempting to reconnect...', 'system');
+    };
+  };
+
+  const startServerBuildRun = async (activeSandbox: any, onlyTicketId?: string) => {
+    if (!kanban.plan) {
+      addChatMessage('❌ No plan found. Please create a build plan first.', 'error');
+      return;
+    }
+
+    const sandboxId = String(activeSandbox?.sandboxId || '').trim();
+    if (!sandboxId) {
+      addChatMessage('❌ No active sandbox. Create a sandbox first.', 'error');
+      return;
+    }
+
+    setGenerationProgress(prev => ({ ...prev, isGenerating: true, status: 'Starting build…', streamedCode: '' }));
+
+    const res = await fetch('/api/build-runs/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        plan: kanban.plan,
+        tickets: kanban.tickets,
+        sandboxId,
+        model: aiModel,
+        uiStyle: (kanban.plan as any)?.uiStyle,
+        onlyTicketId,
+      }),
+    });
+
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.success || !data?.runId) {
+      const msg = data?.error || `Failed to start build run (HTTP ${res.status})`;
+      setKanbanBuildActive(false);
+      setGenerationProgress(prev => ({ ...prev, isGenerating: false, status: `Failed: ${msg}` }));
+      addChatMessage(`❌ ${msg}`, 'error');
+      return;
+    }
+
+    setBuildRunId(data.runId);
+    connectBuildRunEvents(data.runId);
+    addChatMessage(`Build started (run: ${data.runId})`, 'system');
+  };
+
+  const pauseServerBuildRun = async () => {
+    if (!buildRunId) {
+      kanban.setIsPaused(true);
+      return;
+    }
+    try {
+      await fetch(`/api/build-runs/${buildRunId}/pause`, { method: 'POST' });
+    } catch {
+      // ignore
+    }
+  };
+
+  const resumeServerBuildRun = async () => {
+    if (!buildRunId) {
+      kanban.setIsPaused(false);
+      return;
+    }
+    try {
+      await fetch(`/api/build-runs/${buildRunId}/resume`, { method: 'POST' });
+    } catch {
+      // ignore
+    }
+  };
 
   const handleStartKanbanBuild = async (opts?: { onlyTicketId?: string }) => {
     const backlogTickets = kanban.tickets.filter(t => t.status === 'backlog');
@@ -1864,6 +2046,10 @@ Requirements:
       }
     }
 
+    // Phase 1: execute the build server-side and stream ticket events back to the UI.
+    await startServerBuildRun(activeSandbox, opts?.onlyTicketId);
+    return;
+
     setGenerationProgress(prev => ({
       ...prev,
       isGenerating: true,
@@ -1899,7 +2085,7 @@ Requirements:
         throw new Error(`AI generation failed (HTTP ${response.status})`);
       }
 
-      const reader = response.body.getReader();
+      const reader = response.body!.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
       let generatedCode = '';
@@ -1936,17 +2122,22 @@ Requirements:
           break;
         }
 
-        const nextTicket = opts?.onlyTicketId
-          ? (() => {
-              const res = kanban.buildSingleTicket(opts.onlyTicketId);
-              if (!res) return null;
-              if (typeof (res as any).error === 'string') {
-                addChatMessage(`❌ Can't build that ticket yet: ${(res as any).error}`, 'error');
-                return null;
-              }
-              return res as any;
-            })()
-          : kanban.getNextBuildableTicket();
+        const onlyTicketId = opts?.onlyTicketId;
+        let nextTicket: any = null;
+        const tid = onlyTicketId || '';
+        if (tid.length > 0) {
+          const res = kanban.buildSingleTicket(tid);
+          if (!res) {
+            nextTicket = null;
+          } else if (typeof (res as any).error === 'string') {
+            addChatMessage(`❌ Can't build that ticket yet: ${(res as any).error}`, 'error');
+            nextTicket = null;
+          } else {
+            nextTicket = res as any;
+          }
+        } else {
+          nextTicket = kanban.getNextBuildableTicket();
+        }
 
         if (!nextTicket) break;
 
@@ -2042,7 +2233,7 @@ Requirements:
           throw new Error(`Generation failed for "${nextTicket.title}" (HTTP ${response.status})`);
         }
 
-        const reader = response.body.getReader();
+        const reader = response.body!.getReader();
         const decoder = new TextDecoder();
         let generatedCode = '';
 
@@ -2082,9 +2273,10 @@ Requirements:
         kanban.updateTicketProgress(nextTicket.id, 90);
         setGenerationProgress(prev => ({ ...prev, status: `Applying: ${nextTicket.title}` }));
         const applyOutcome = await applyGeneratedCode(generatedCode, true, activeSandbox, { throwOnError: true });
-        if (typeof applyOutcome.durationMs === 'number') {
-          const seconds = (applyOutcome.durationMs / 1000).toFixed(1);
-          const fileCount = Array.isArray(applyOutcome.appliedFiles) ? applyOutcome.appliedFiles.length : 0;
+        const applyDurationMs = applyOutcome.durationMs;
+        if (applyDurationMs !== undefined) {
+          const seconds = ((applyDurationMs as number) / 1000).toFixed(1);
+          const fileCount = (applyOutcome.appliedFiles || []).length;
           addChatMessage(`⏱️ Apply: ${seconds}s (${fileCount} file(s))`, 'system');
         }
 
@@ -2282,7 +2474,7 @@ Requirements:
       const message = error?.message || 'Build failed';
       const currentId = kanban.currentTicketId;
       if (currentId) {
-        kanban.updateTicketStatus(currentId, 'failed', message);
+        kanban.updateTicketStatus(currentId as string, 'failed', message);
       }
       setKanbanBuildActive(false);
       setGenerationProgress(prev => ({ ...prev, isGenerating: false, status: `Failed: ${message}` }));
@@ -3841,11 +4033,8 @@ Tip: I automatically detect and install npm packages from your code imports (lik
           isPlanning={isPlanning}
           onPlanBuild={planBuild}
           onStartBuild={handleStartKanbanBuild}
-          onPauseBuild={() => kanban.setIsPaused(true)}
-          onResumeBuild={() => {
-            kanban.setIsPaused(false);
-            handleStartKanbanBuild();
-          }}
+          onPauseBuild={pauseServerBuildRun}
+          onResumeBuild={resumeServerBuildRun}
           onEditTicket={kanban.editTicket}
           onSkipTicket={kanban.skipTicket}
           onRetryTicket={kanban.retryTicket}
@@ -3880,11 +4069,8 @@ Tip: I automatically detect and install npm packages from your code imports (lik
               isPlanning={isPlanning}
               onPlanBuild={planBuild}
               onStartBuild={handleStartKanbanBuild}
-              onPauseBuild={() => kanban.setIsPaused(true)}
-              onResumeBuild={() => {
-                kanban.setIsPaused(false);
-                handleStartKanbanBuild();
-              }}
+              onPauseBuild={pauseServerBuildRun}
+              onResumeBuild={resumeServerBuildRun}
               onEditTicket={kanban.editTicket}
               onSkipTicket={kanban.skipTicket}
               onRetryTicket={kanban.retryTicket}
@@ -4968,7 +5154,7 @@ IMPORTANT INSTRUCTIONS:
           throw new Error('Failed to generate code');
         }
 
-        const reader = aiResponse.body.getReader();
+        const reader = aiResponse.body!.getReader();
         const decoder = new TextDecoder();
         let generatedCode = '';
 
@@ -5513,7 +5699,7 @@ Focus on the key sections and content, making it clean and modern.`;
           throw new Error('Failed to generate code');
         }
 
-        const reader = aiResponse.body.getReader();
+        const reader = aiResponse.body!.getReader();
         const decoder = new TextDecoder();
         let generatedCode = '';
         let explanation = '';
