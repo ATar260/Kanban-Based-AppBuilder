@@ -500,11 +500,12 @@ export class BuildRunManager {
     this.emit(runId, { type: 'log', runId, at: now(), level: 'system', message: `Applying: ${ticket.title}`, ticketId });
 
     const applyRes = await this.applyCode(baseUrl, sandboxId, generatedCode, true);
-    const appliedFiles = applyRes.appliedFiles;
+    const appliedFilesSet = new Set(applyRes.appliedFiles);
+    let appliedFiles = Array.from(appliedFilesSet);
 
     // Read back the final applied file contents so PR review + merge use the real code state.
-    const patchFiles = await this.captureFilesFromSandbox(sandboxId, appliedFiles);
-    const patchCode = buildFileBlocks(patchFiles);
+    let patchFiles = await this.captureFilesFromSandbox(sandboxId, appliedFiles);
+    let patchCode = buildFileBlocks(patchFiles);
 
     run.tickets = updateTicket(run.tickets, ticketId, {
       generatedCode: patchCode,
@@ -528,26 +529,109 @@ export class BuildRunManager {
     this.emit(runId, { type: 'log', runId, at: now(), level: 'system', message: `PR review: ${ticket.title}`, ticketId });
 
     const reviewStart = now();
-    const filesForReview = extractFileBlocks(patchCode);
-    const reviewRes = await this.reviewCode(baseUrl, ticketId, ticket.title, filesForReview);
-    const reviewMs = now() - reviewStart;
+    let currentReview = await this.reviewCode(baseUrl, ticketId, ticket.title, extractFileBlocks(patchCode));
 
+    const maxAutoFixAttempts = 2;
+    let autoFixAttempts = 0;
+
+    while (hasBlockingIssues(currentReview) && autoFixAttempts < maxAutoFixAttempts) {
+      autoFixAttempts += 1;
+
+      const issues = Array.isArray(currentReview?.issues) ? currentReview.issues : [];
+      const blockingIssues = issues.filter((i: any) => {
+        if (i?.severity === 'error') return true;
+        if (i?.severity === 'warning' && (i?.type === 'security' || i?.type === 'bug')) return true;
+        return false;
+      });
+
+      const issuesText = blockingIssues
+        .slice(0, 10)
+        .map((i: any, idx: number) => {
+          const loc = `${i.file || 'unknown'}${i.line ? `:${i.line}` : ''}`;
+          const suggestion = i.suggestion ? `\n  Suggestion: ${i.suggestion}` : '';
+          return `- [${idx + 1}] (${i.severity}/${i.type}) ${loc}\n  ${i.message}${suggestion}`;
+        })
+        .join('\n');
+
+      const filesText = Object.entries(patchFiles)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([path, content]) => `// FILE: ${path}\n${content}`)
+        .join('\n\n---\n\n');
+
+      this.emit(runId, {
+        type: 'log',
+        runId,
+        at: now(),
+        level: 'warning',
+        message: `PR review found blocking issues. Auto-fix attempt ${autoFixAttempts}/${maxAutoFixAttempts}...`,
+        ticketId,
+      });
+
+      const fixPrompt =
+        `Fix the listed issues in the provided code.\n\n` +
+        `Blocking issues:\n${issuesText}\n\n` +
+        `Rules:\n` +
+        `- Make the smallest possible changes to fix ONLY the issues above.\n` +
+        `- Do NOT change app behavior beyond what is needed to fix the issues.\n` +
+        `- Do NOT introduce new dependencies unless absolutely necessary.\n` +
+        `- Output ONLY <file path="..."> blocks for files you change. Each block must contain the full updated file content.\n\n` +
+        `Code:\n${filesText}`;
+
+      const fixCode = await this.generateTicketCode(
+        baseUrl,
+        run.input.model,
+        fixPrompt,
+        sandboxId,
+        'auto_fix_ticket'
+      );
+
+      if (!fixCode || !fixCode.includes('<file path="')) {
+        break;
+      }
+
+      const fixApplyRes = await this.applyCode(baseUrl, sandboxId, fixCode, true);
+      for (const p of fixApplyRes.appliedFiles) {
+        appliedFilesSet.add(p);
+      }
+      appliedFiles = Array.from(appliedFilesSet);
+
+      patchFiles = await this.captureFilesFromSandbox(sandboxId, appliedFiles);
+      patchCode = buildFileBlocks(patchFiles);
+
+      run.tickets = updateTicket(run.tickets, ticketId, {
+        generatedCode: patchCode,
+        actualFiles: appliedFiles,
+        previewAvailable: isWorkerBranch ? false : true,
+      } as any);
+
+      this.emit(runId, {
+        type: 'ticket_artifacts',
+        runId,
+        at: now(),
+        ticketId,
+        generatedCode: patchCode,
+        appliedFiles,
+      });
+
+      currentReview = await this.reviewCode(baseUrl, ticketId, ticket.title, extractFileBlocks(patchCode));
+    }
+
+    const reviewMs = now() - reviewStart;
     this.emit(runId, {
       type: 'ticket_artifacts',
       runId,
       at: now(),
       ticketId,
       reviewDurationMs: reviewMs,
-      reviewIssuesCount: reviewRes?.issues?.length ?? 0,
+      reviewIssuesCount: currentReview?.issues?.length ?? 0,
     });
 
-    const blocking = hasBlockingIssues(reviewRes);
-    if (blocking) {
+    if (hasBlockingIssues(currentReview)) {
       const errorCount =
-        Array.isArray(reviewRes?.issues)
-          ? reviewRes.issues.filter((i: any) => i?.severity === 'error').length
+        Array.isArray(currentReview?.issues)
+          ? currentReview.issues.filter((i: any) => i?.severity === 'error').length
           : 0;
-      throw new Error(`PR review failed: ${errorCount} error(s)`);
+      throw new Error(`PR review failed after auto-fix: ${errorCount} error(s)`);
     }
 
     // Validation gate (lightweight in worker sandbox; integration gate runs at merge time)
@@ -604,7 +688,13 @@ export class BuildRunManager {
     });
   }
 
-  private async generateTicketCode(baseUrl: string, model: string, prompt: string, sandboxId: string): Promise<string> {
+  private async generateTicketCode(
+    baseUrl: string,
+    model: string,
+    prompt: string,
+    sandboxId: string,
+    buildProfile: string = 'implement_ticket'
+  ): Promise<string> {
     const res = await fetch(`${baseUrl}/api/generate-ai-code-stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -613,7 +703,7 @@ export class BuildRunManager {
         model,
         context: { sandboxId },
         isEdit: true,
-        buildProfile: 'implement_ticket',
+        buildProfile,
       }),
     });
 
