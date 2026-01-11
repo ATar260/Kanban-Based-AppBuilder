@@ -271,20 +271,15 @@ export class BuildRunManager {
     });
 
     try {
-      const configuredMax =
-        typeof run.input.maxConcurrency === 'number' && Number.isFinite(run.input.maxConcurrency)
-          ? run.input.maxConcurrency
-          : Number(process.env.BUILD_MAX_CONCURRENCY || process.env.SANDBOX_BUILD_MAX_CONCURRENCY);
-
-      const maxConcurrency = clampInt(configuredMax, 1, 5, 2);
-      const workerCount = run.input.onlyTicketId ? 1 : maxConcurrency;
+      // Hard-coded parallelism setting (requested): always use 4 workers for full runs.
+      const workerCount = run.input.onlyTicketId ? 1 : 4;
 
       this.emit(runId, {
         type: 'log',
         runId,
         at: now(),
         level: 'system',
-        message: `Worker pool size: ${workerCount}`,
+        message: `Worker pool size: ${workerCount} (hard-coded)`,
       });
 
       // Virtual PR mode: worker sandboxes execute tickets on a snapshot of "main",
@@ -1078,12 +1073,6 @@ export class BuildRunManager {
 type Worker =
   | { kind: 'integration'; sandboxId: string; provider: null }
   | { kind: 'worker'; sandboxId: string; provider: SandboxProvider };
-
-function clampInt(value: any, min: number, max: number, fallback: number): number {
-  const n = typeof value === 'number' ? value : Number(value);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(min, Math.min(max, Math.floor(n)));
-}
 
 function normalizeSandboxPath(p: string): string {
   if (!p) return p;

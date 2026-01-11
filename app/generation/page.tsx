@@ -143,16 +143,8 @@ function AISandboxPage() {
       return false;
     }
   });
-  const [maxConcurrency, setMaxConcurrency] = useState<number>(() => {
-    if (typeof window === 'undefined') return 1;
-    try {
-      const raw = localStorage.getItem('buildMaxConcurrency');
-      const n = raw ? Number(raw) : 2;
-      return Number.isFinite(n) && n > 0 ? Math.max(1, Math.min(Math.floor(n), 5)) : 2;
-    } catch {
-      return 2;
-    }
-  });
+  // Hard-coded parallelism setting (requested): always use 4 workers for server-side BuildRuns.
+  const maxConcurrency = 4;
 
   // Server-side BuildRun (Phase 1): keep build execution truth on the server and stream events via SSE.
   const [buildRunId, setBuildRunId] = useState<string | null>(null);
@@ -208,15 +200,6 @@ function AISandboxPage() {
       // ignore
     }
   }, [autoOpenPreviewOnApply]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      localStorage.setItem('buildMaxConcurrency', String(maxConcurrency));
-    } catch {
-      // ignore
-    }
-  }, [maxConcurrency]);
 
   useEffect(() => {
     return () => {
@@ -1821,7 +1804,7 @@ Requirements:
         model: aiModel,
         uiStyle: (kanban.plan as any)?.uiStyle,
         onlyTicketId,
-        maxConcurrency,
+        maxConcurrency: 4,
       }),
     });
 
@@ -6840,23 +6823,10 @@ Focus on the key sections and content, making it clean and modern.`;
                 {/* Parallel worker pool size */}
                 <div
                   className="hidden md:inline-flex items-center gap-2 px-2 py-1 rounded-md border border-gray-200 bg-white text-xs text-gray-600"
-                  title="Max number of tickets to execute concurrently. Higher values can be faster but use more sandbox resources."
+                  title="Hard-coded worker pool size."
                 >
                   <span className="select-none">Workers</span>
-                  <select
-                    value={maxConcurrency}
-                    onChange={(e) => {
-                      const n = Number(e.target.value);
-                      setMaxConcurrency(Number.isFinite(n) ? Math.max(1, Math.min(Math.floor(n), 5)) : 1);
-                    }}
-                    className="bg-transparent outline-none text-xs text-gray-800"
-                  >
-                    {[1, 2, 3, 4, 5].map((n) => (
-                      <option key={n} value={n}>
-                        {n}
-                      </option>
-                    ))}
-                  </select>
+                  <span className="font-mono text-gray-800">{maxConcurrency}</span>
                 </div>
 
                 {/* Live Code Generation Status */}
