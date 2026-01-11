@@ -16,7 +16,7 @@ export default function Hero() {
   return (
     <section
       id="hero"
-      className="relative pt-32 pb-20 md:pt-36 md:pb-28 bg-gradient-to-br from-comfort-sage-50 via-white to-comfort-sage-100/30 overflow-hidden"
+      className="relative pt-44 pb-20 md:pt-52 md:pb-28 bg-gradient-to-br from-comfort-sage-50 via-white to-comfort-sage-100/30 overflow-hidden"
     >
       {/* Spotlight effect */}
       <Spotlight

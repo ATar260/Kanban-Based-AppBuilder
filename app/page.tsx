@@ -3,6 +3,7 @@
 import { ThemeProvider } from '@/components/landing/ThemeContext'
 import Navbar from '@/components/landing/Navbar'
 import Hero from '@/components/landing/Hero'
+import BuiltBySection from '@/components/landing/BuiltBySection'
 import MockUI from '@/components/landing/MockUI'
 import AgentTypesSection from '@/components/landing/AgentTypesSection'
 import HowItWorksSection from '@/components/landing/HowItWorksSection'
@@ -22,6 +23,7 @@ export default function Home() {
         <Navbar />
         <main>
           <Hero />
+          <BuiltBySection />
           <MockUI />
           <AgentTypesSection />
           <HowItWorksSection />
