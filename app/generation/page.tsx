@@ -134,6 +134,15 @@ function AISandboxPage() {
   const [isPreviewRefreshing, setIsPreviewRefreshing] = useState(false);
   const [sandboxExpired, setSandboxExpired] = useState(false);
   const [isRestoringSandbox, setIsRestoringSandbox] = useState(false);
+  const [previewHasUpdate, setPreviewHasUpdate] = useState(false);
+  const [autoOpenPreviewOnApply, setAutoOpenPreviewOnApply] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      return localStorage.getItem('autoOpenPreviewOnApply') === 'true';
+    } catch {
+      return false;
+    }
+  });
 
   // UI Options state for 3-mockup generation
   const [showUIOptions, setShowUIOptions] = useState(false);
@@ -175,6 +184,16 @@ function AISandboxPage() {
     toColumn: string;
     newStatus: TicketStatus;
   } | null>(null);
+
+  // Persist user preference: whether applying code should auto-open the preview tab.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.setItem('autoOpenPreviewOnApply', String(autoOpenPreviewOnApply));
+    } catch {
+      // ignore
+    }
+  }, [autoOpenPreviewOnApply]);
 
   // Build Tracker Agent - monitors generation and updates Kanban tickets
   const buildTracker = useBuildTracker({
@@ -1705,8 +1724,16 @@ Requirements:
       if (activeSandbox?.templateTarget && activeSandbox.templateTarget !== effectiveTemplate) {
         addChatMessage('Current sandbox template does not match the plan. Creating a new sandbox...', 'system');
       }
+      const sandboxCreateStartedAt = Date.now();
       const newSandbox = await createSandbox(true, 0, effectiveTemplate);
       activeSandbox = newSandbox || activeSandbox;
+      if (newSandbox && typeof newSandbox?.sandboxId === 'string') {
+        const sandboxCreateMs = Date.now() - sandboxCreateStartedAt;
+        addChatMessage(
+          `⏱️ Sandbox ready in ${(sandboxCreateMs / 1000).toFixed(1)}s (id: ${newSandbox.sandboxId})`,
+          'system'
+        );
+      }
 
       // `createSandbox` can return null if a sandbox creation is already in progress.
       // In that case, wait briefly for the server-side active sandbox to become healthy.
@@ -2054,8 +2081,12 @@ Requirements:
         kanban.updateTicketStatus(nextTicket.id, 'applying');
         kanban.updateTicketProgress(nextTicket.id, 90);
         setGenerationProgress(prev => ({ ...prev, status: `Applying: ${nextTicket.title}` }));
-        setActiveTab('preview');
         const applyOutcome = await applyGeneratedCode(generatedCode, true, activeSandbox, { throwOnError: true });
+        if (typeof applyOutcome.durationMs === 'number') {
+          const seconds = (applyOutcome.durationMs / 1000).toFixed(1);
+          const fileCount = Array.isArray(applyOutcome.appliedFiles) ? applyOutcome.appliedFiles.length : 0;
+          addChatMessage(`⏱️ Apply: ${seconds}s (${fileCount} file(s))`, 'system');
+        }
 
         const appliedFiles = Array.from(new Set(applyOutcome.appliedFiles || []));
         const allFiles =
@@ -2079,6 +2110,7 @@ Requirements:
           fileContents.push({ path: fileMatch[1], content: fileMatch[2].trim() });
         }
 
+        const reviewStartedAt = Date.now();
         const reviewResult = await bugbot.reviewCode({
           ticketId: nextTicket.id,
           ticketTitle: nextTicket.title,
@@ -2161,6 +2193,13 @@ Requirements:
           });
         }
 
+        const reviewDurationMs = Date.now() - reviewStartedAt;
+        const issueCount = currentReview?.issues?.length ?? 0;
+        addChatMessage(
+          `⏱️ PR review: ${(reviewDurationMs / 1000).toFixed(1)}s (${issueCount} issue(s), ${autoFixAttempts} auto-fix attempt(s))`,
+          'system'
+        );
+
         // Persist the final ticket code after any auto-fixes so restore + traceability remain accurate.
         if (currentFiles.length > 0) {
           const finalGeneratedCode = currentFiles
@@ -2198,11 +2237,14 @@ Requirements:
 
         // Blueprint coverage gate (static)
         try {
+          const validateStartedAt = Date.now();
           const { validateBlueprint } = await import('@/lib/blueprint-validator');
           const bpResult = validateBlueprint(planBlueprint);
           if (!bpResult.ok) {
             throw new Error(`Blueprint validation failed: ${bpResult.errors.join('; ')}`);
           }
+          const validateMs = Date.now() - validateStartedAt;
+          addChatMessage(`⏱️ Validation: ${(validateMs / 1000).toFixed(1)}s (blueprint)`, 'system');
         } catch (e: any) {
           kanban.updateTicketStatus(nextTicket.id, 'failed', e.message || 'Blueprint validation failed');
           setKanbanBuildActive(false);
@@ -2584,6 +2626,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
     success: boolean;
     results?: any;
     appliedFiles?: string[];
+    durationMs?: number;
     error?: string;
   };
 
@@ -2594,6 +2637,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
     opts?: { throwOnError?: boolean }
   ): Promise<ApplyGeneratedCodeOutcome> => {
     const throwOnError = Boolean(opts?.throwOnError);
+    const startedAt = Date.now();
     setLoading(true);
     log('Applying AI-generated code...');
 
@@ -2973,7 +3017,13 @@ Tip: I automatically detect and install npm packages from your code imports (lik
             console.log(`[applyGeneratedCode] Packages installed: ${packagesInstalled}, refresh delay: ${refreshDelay}ms`);
 
             setIsPreviewRefreshing(true);
-            setActiveTab('preview');
+            // Never force tab switches during apply. If the user opts in, auto-open preview; otherwise show an indicator.
+            if (autoOpenPreviewOnApply) {
+              setActiveTab('preview');
+              setPreviewHasUpdate(false);
+            } else {
+              setPreviewHasUpdate(true);
+            }
             
             setTimeout(async () => {
               if (iframeRef.current && currentSandboxData?.url) {
@@ -3008,21 +3058,21 @@ Tip: I automatically detect and install npm packages from your code imports (lik
           throw new Error(finalData?.error || 'Failed to apply code');
         }
 
-        return { success: true, results: data.results, appliedFiles };
+        return { success: true, results: data.results, appliedFiles, durationMs: Date.now() - startedAt };
       } else {
         const msg = 'No completion event received from code application stream.';
         addChatMessage('Code application may have partially succeeded. Check the preview.', 'system');
         if (throwOnError) {
           throw new Error(msg);
         }
-        return { success: false, error: msg };
+        return { success: false, error: msg, durationMs: Date.now() - startedAt };
       }
     } catch (error: any) {
       log(`Failed to apply code: ${error.message}`, 'error');
       if (throwOnError) {
         throw error;
       }
-      return { success: false, error: error?.message || 'Failed to apply code' };
+      return { success: false, error: error?.message || 'Failed to apply code', durationMs: Date.now() - startedAt };
     } finally {
       setLoading(false);
       // Clear isEdit flag after applying code
@@ -4302,8 +4352,13 @@ Tip: I automatically detect and install npm packages from your code imports (lik
       }));
 
       setTimeout(() => {
-        // Switch to preview but keep files for display
-        setActiveTab('preview');
+        // Never force a tab switch on completion. If the user opted in, auto-open View; otherwise show an indicator.
+        if (autoOpenPreviewOnApply) {
+          setActiveTab('preview');
+          setPreviewHasUpdate(false);
+        } else {
+          setPreviewHasUpdate(true);
+        }
       }, 1000); // Reduced from 3000ms to 1000ms
     } catch (error: any) {
       setChatMessages(prev => prev.filter(msg => msg.content !== 'Thinking...'));
@@ -4323,7 +4378,13 @@ Tip: I automatically detect and install npm packages from your code imports (lik
         currentFile: undefined,
         lastProcessedPosition: 0
       });
-      setActiveTab('preview');
+      // Don't force View on error; surface an indicator instead.
+      if (autoOpenPreviewOnApply) {
+        setActiveTab('preview');
+        setPreviewHasUpdate(false);
+      } else {
+        setPreviewHasUpdate(true);
+      }
     }
   };
 
@@ -4739,7 +4800,12 @@ Focus on the key sections and content, making it clean and modern while preservi
         setShowLoadingBackground(false);
 
         setTimeout(() => {
-          setActiveTab('preview');
+          if (autoOpenPreviewOnApply) {
+            setActiveTab('preview');
+            setPreviewHasUpdate(false);
+          } else {
+            setPreviewHasUpdate(true);
+          }
         }, 1000);
       } else {
         throw new Error('Failed to generate recreation');
@@ -4760,7 +4826,12 @@ Focus on the key sections and content, making it clean and modern while preservi
         status: '',
         files: prev.files
       }));
-      setActiveTab('preview');
+      if (autoOpenPreviewOnApply) {
+        setActiveTab('preview');
+        setPreviewHasUpdate(false);
+      } else {
+        setPreviewHasUpdate(true);
+      }
     }
   };
 
@@ -5033,7 +5104,12 @@ IMPORTANT INSTRUCTIONS:
           status: 'Complete'
         }));
         setKanbanBuildActive(false);
-        setActiveTab('preview');
+        if (autoOpenPreviewOnApply) {
+          setActiveTab('preview');
+          setPreviewHasUpdate(false);
+        } else {
+          setPreviewHasUpdate(true);
+        }
 
       } catch (error) {
         console.error('[generation] Error in prompt generation:', error);
@@ -5669,8 +5745,13 @@ Focus on the key sections and content, making it clean and modern.`;
         setShowLoadingBackground(false); // Clear loading background
 
         setTimeout(() => {
-          // Switch back to preview tab but keep files
-          setActiveTab('preview');
+          // Never force a tab switch on completion. If the user opted in, auto-open View; otherwise show an indicator.
+          if (autoOpenPreviewOnApply) {
+            setActiveTab('preview');
+            setPreviewHasUpdate(false);
+          } else {
+            setPreviewHasUpdate(true);
+          }
         }, 1000); // Show completion briefly then switch
       } catch (error: any) {
         addChatMessage(`Failed to clone website: ${error.message}`, 'system');
@@ -6410,7 +6491,10 @@ Focus on the key sections and content, making it clean and modern.`;
                     </div>
                   </button>
                   <button
-                    onClick={() => setActiveTab('preview')}
+                    onClick={() => {
+                      setActiveTab('preview');
+                      setPreviewHasUpdate(false);
+                    }}
                     className={`px-3 py-1 rounded transition-all text-xs font-medium ${activeTab === 'preview'
                       ? 'bg-white text-gray-900 shadow-sm'
                       : 'bg-transparent text-gray-600 hover:text-gray-900'
@@ -6422,6 +6506,11 @@ Focus on the key sections and content, making it clean and modern.`;
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
                       </svg>
                       <span>View</span>
+                      {previewHasUpdate && activeTab !== 'preview' && (
+                        <span className="ml-0.5 inline-flex">
+                          <span className="w-1.5 h-1.5 rounded-full bg-orange-500" />
+                        </span>
+                      )}
                     </div>
                   </button>
                   <button
@@ -6444,7 +6533,10 @@ Focus on the key sections and content, making it clean and modern.`;
                     </div>
                   </button>
                   <button
-                    onClick={() => setActiveTab('split')}
+                    onClick={() => {
+                      setActiveTab('split');
+                      setPreviewHasUpdate(false);
+                    }}
                     className={`px-3 py-1 rounded transition-all text-xs font-medium ${activeTab === 'split'
                       ? 'bg-white text-gray-900 shadow-sm'
                       : 'bg-transparent text-gray-600 hover:text-gray-900'
@@ -6500,6 +6592,20 @@ Focus on the key sections and content, making it clean and modern.`;
                     {generationProgress.files.length} files generated
                   </div>
                 )}
+
+                {/* Preview auto-open setting */}
+                <label
+                  className="hidden md:inline-flex items-center gap-2 px-2 py-1 rounded-md border border-gray-200 bg-white text-xs text-gray-600"
+                  title="When enabled, applying code will automatically switch to the View tab. When disabled, you'll see a small dot on View instead."
+                >
+                  <input
+                    type="checkbox"
+                    checked={autoOpenPreviewOnApply}
+                    onChange={(e) => setAutoOpenPreviewOnApply(e.target.checked)}
+                    className="h-3 w-3 accent-orange-500"
+                  />
+                  <span className="select-none">Auto-open View</span>
+                </label>
 
                 {/* Live Code Generation Status */}
                 {activeTab === 'generation' && generationProgress.isGenerating && (
