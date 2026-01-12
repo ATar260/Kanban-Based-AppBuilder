@@ -1,28 +1,45 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import { sandboxManager } from '@/lib/sandbox/sandbox-manager';
 
 declare global {
   var activeSandbox: any;
   var activeSandboxProvider: any;
   var lastViteRestartTime: number;
   var viteRestartInProgress: boolean;
+  var lastViteRestartTimeBySandbox: Record<string, number> | undefined;
+  var viteRestartInProgressBySandbox: Record<string, boolean> | undefined;
 }
 
 const RESTART_COOLDOWN_MS = 5000; // 5 second cooldown between restarts
 
-export async function POST() {
+export async function POST(request: NextRequest) {
+  let sandboxKeyForError = 'active';
   try {
-    // Check both v1 and v2 global references
-    const provider = global.activeSandbox || global.activeSandboxProvider;
+    const body = await request.json().catch(() => null);
+    const requestedSandboxId = typeof body?.sandboxId === 'string' ? body.sandboxId.trim() : '';
+
+    const activeProvider =
+      sandboxManager.getActiveProvider() || global.activeSandbox || global.activeSandboxProvider;
+
+    const provider = requestedSandboxId
+      ? sandboxManager.getProvider(requestedSandboxId) ||
+        (activeProvider?.getSandboxInfo?.()?.sandboxId === requestedSandboxId ? activeProvider : null)
+      : activeProvider;
 
     if (!provider) {
       return NextResponse.json({
         success: false,
-        error: 'No active sandbox'
-      }, { status: 400 });
+        error: requestedSandboxId ? `No sandbox provider for sandboxId: ${requestedSandboxId}` : 'No active sandbox'
+      }, { status: requestedSandboxId ? 404 : 400 });
     }
 
+    const sandboxKey = requestedSandboxId || provider.getSandboxInfo?.()?.sandboxId || 'active';
+    sandboxKeyForError = sandboxKey;
+    if (!global.lastViteRestartTimeBySandbox) global.lastViteRestartTimeBySandbox = {};
+    if (!global.viteRestartInProgressBySandbox) global.viteRestartInProgressBySandbox = {};
+
     // Check if restart is already in progress
-    if (global.viteRestartInProgress) {
+    if (global.viteRestartInProgressBySandbox[sandboxKey]) {
       console.log('[restart-vite] Vite restart already in progress, skipping...');
       return NextResponse.json({
         success: true,
@@ -32,8 +49,9 @@ export async function POST() {
 
     // Check cooldown
     const now = Date.now();
-    if (global.lastViteRestartTime && (now - global.lastViteRestartTime) < RESTART_COOLDOWN_MS) {
-      const remainingTime = Math.ceil((RESTART_COOLDOWN_MS - (now - global.lastViteRestartTime)) / 1000);
+    const lastRestartAt = global.lastViteRestartTimeBySandbox[sandboxKey] || 0;
+    if (lastRestartAt && (now - lastRestartAt) < RESTART_COOLDOWN_MS) {
+      const remainingTime = Math.ceil((RESTART_COOLDOWN_MS - (now - lastRestartAt)) / 1000);
       console.log(`[restart-vite] Cooldown active, ${remainingTime}s remaining`);
       return NextResponse.json({
         success: true,
@@ -42,7 +60,7 @@ export async function POST() {
     }
 
     // Set the restart flag
-    global.viteRestartInProgress = true;
+    global.viteRestartInProgressBySandbox[sandboxKey] = true;
 
     console.log('[restart-vite] Using provider method to restart Vite...');
 
@@ -81,8 +99,8 @@ export async function POST() {
     }
 
     // Update global state
-    global.lastViteRestartTime = Date.now();
-    global.viteRestartInProgress = false;
+    global.lastViteRestartTimeBySandbox[sandboxKey] = Date.now();
+    global.viteRestartInProgressBySandbox[sandboxKey] = false;
 
     return NextResponse.json({
       success: true,
@@ -93,7 +111,8 @@ export async function POST() {
     console.error('[restart-vite] Error:', error);
 
     // Clear the restart flag on error
-    global.viteRestartInProgress = false;
+    if (!global.viteRestartInProgressBySandbox) global.viteRestartInProgressBySandbox = {};
+    global.viteRestartInProgressBySandbox[sandboxKeyForError] = false;
 
     return NextResponse.json({
       success: false,

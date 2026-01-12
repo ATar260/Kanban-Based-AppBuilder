@@ -7,15 +7,18 @@ declare global {
 
 export async function POST(request: NextRequest) {
   try {
-    const { testType = 'all' } = await request.json();
+    const { testType = 'all', sandboxId } = await request.json();
     
-    const provider = sandboxManager.getActiveProvider() || global.activeSandboxProvider;
+    const requestedSandboxId = typeof sandboxId === 'string' ? sandboxId.trim() : '';
+    const provider = requestedSandboxId
+      ? sandboxManager.getProvider(requestedSandboxId)
+      : sandboxManager.getActiveProvider() || global.activeSandboxProvider;
     
     if (!provider) {
       return NextResponse.json({ 
         success: false, 
-        error: 'No active sandbox' 
-      }, { status: 400 });
+        error: requestedSandboxId ? `No sandbox provider for sandboxId: ${requestedSandboxId}` : 'No active sandbox' 
+      }, { status: requestedSandboxId ? 404 : 400 });
     }
 
     const results: any = {

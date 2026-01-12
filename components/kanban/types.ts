@@ -154,6 +154,10 @@ export const COLUMN_CONFIG: { id: TicketStatus; title: string; color: string }[]
   { id: 'merging', title: 'Merging', color: '#7C3AED' },
   { id: 'testing', title: 'Testing', color: '#8B5CF6' },
   { id: 'done', title: 'Done', color: '#22C55E' },
+  // Always render these so tickets don't "disappear" when they fail/block/skip.
+  { id: 'blocked', title: 'Blocked', color: '#EF4444' },
+  { id: 'failed', title: 'Failed', color: '#DC2626' },
+  { id: 'skipped', title: 'Skipped', color: '#A3A3A3' },
 ];
 
 export const TYPE_COLORS: Record<TicketType, string> = {

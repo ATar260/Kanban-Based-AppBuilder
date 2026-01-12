@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { sandboxManager } from '@/lib/sandbox/sandbox-manager';
 import { parseJavaScriptFile, buildComponentTree } from '@/lib/file-parser';
 import { FileManifest, FileInfo, RouteInfo } from '@/types/file-manifest';
@@ -10,17 +10,25 @@ declare global {
   var sandboxState: SandboxState;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const provider =
-      sandboxManager.getActiveProvider() ||
-      global.activeSandboxProvider ||
-      global.sandboxState?.sandbox;
+    const requestedSandboxId = (() => {
+      try {
+        const url = new URL(request.url);
+        return String(url.searchParams.get('sandboxId') || '').trim();
+      } catch {
+        return '';
+      }
+    })();
+
+    const provider = requestedSandboxId
+      ? sandboxManager.getProvider(requestedSandboxId)
+      : sandboxManager.getActiveProvider() || global.activeSandboxProvider || global.sandboxState?.sandbox;
 
     if (!provider) {
       return NextResponse.json({
         success: false,
-        error: 'No active sandbox'
+        error: requestedSandboxId ? `No sandbox provider for sandboxId: ${requestedSandboxId}` : 'No active sandbox',
       }, { status: 404 });
     }
 
@@ -158,7 +166,8 @@ export async function GET() {
     fileManifest.routes = extractRoutes(fileManifest.files);
     
     // Update global file cache with manifest
-    if (global.sandboxState?.fileCache) {
+    // Avoid cross-sandbox cache contamination: only write to the global cache when no explicit sandboxId was requested.
+    if (!requestedSandboxId && global.sandboxState?.fileCache) {
       global.sandboxState.fileCache.manifest = fileManifest;
     }
 

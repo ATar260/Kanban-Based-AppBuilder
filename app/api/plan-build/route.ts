@@ -543,9 +543,10 @@ function ensureMockFirstDataTickets(tickets: PlanTicket[], blueprint: BuildBluep
 }
 
 function ensureUiFoundationTickets(tickets: PlanTicket[], opts: { uiStyle?: UIStyle } = {}): PlanTicket[] {
-  const base: PlanTicket[] = [...tickets];
+  let base: PlanTicket[] = [...tickets];
 
-  const hasFoundation = base.some(t => /\b(design system|ui kit|app shell|visual foundation)\b/i.test(t.title || ''));
+  const existingFoundation = base.find(t => /\b(design system|ui kit|app shell|visual foundation)\b/i.test(t.title || ''));
+  const hasFoundation = Boolean(existingFoundation);
   if (!hasFoundation) {
     base.unshift({
       title: 'Design system + app shell',
@@ -562,7 +563,8 @@ function ensureUiFoundationTickets(tickets: PlanTicket[], opts: { uiStyle?: UISt
     });
   }
 
-  const hasPolish = base.some(t => /\b(ui polish|polish pass|final polish|responsive pass)\b/i.test(t.title || ''));
+  const existingPolish = base.find(t => /\b(ui polish|polish pass|final polish|responsive pass)\b/i.test(t.title || ''));
+  const hasPolish = Boolean(existingPolish);
   if (!hasPolish) {
     base.push({
       title: 'UI polish pass',
@@ -577,6 +579,41 @@ function ensureUiFoundationTickets(tickets: PlanTicket[], opts: { uiStyle?: UISt
       inputRequests: [],
     });
   }
+
+  // Dependency guidance for parallel builds:
+  // - Ensure most UI-facing tickets wait for the UI foundation ticket so naming/styling stays consistent.
+  // - Ensure the polish pass runs at the end (avoid racing with structural/component work).
+  const foundationTitle = (existingFoundation?.title || 'Design system + app shell').trim();
+  const polishTitle = (existingPolish?.title || 'UI polish pass').trim();
+
+  const shouldDependOnFoundation = (t: PlanTicket) => {
+    const type = (t.type || '').toString();
+    return type === 'layout' || type === 'component' || type === 'styling' || type === 'feature';
+  };
+
+  const allNonInputTitles = base
+    .filter(t => t.title && t.title !== polishTitle)
+    .filter(t => !t.requiresInput)
+    .filter(t => !(t.title || '').toLowerCase().includes('supabase'))
+    .map(t => String(t.title));
+
+  base = base.map(t => {
+    const title = String(t.title || '').trim();
+    const deps = Array.isArray(t.dependencies) ? [...t.dependencies] : [];
+
+    // Make UI-facing tickets follow the foundation ticket.
+    if (foundationTitle && title && title !== foundationTitle && shouldDependOnFoundation(t) && !deps.includes(foundationTitle)) {
+      deps.unshift(foundationTitle);
+    }
+
+    // Ensure the polish pass runs last among non-input tickets.
+    if (polishTitle && title === polishTitle) {
+      const finalDeps = Array.from(new Set([foundationTitle, ...allNonInputTitles].filter(Boolean)));
+      return { ...t, dependencies: finalDeps };
+    }
+
+    return { ...t, dependencies: deps };
+  });
 
   return base;
 }

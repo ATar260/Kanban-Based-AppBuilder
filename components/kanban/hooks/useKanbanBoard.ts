@@ -158,6 +158,9 @@ export function useKanbanBoard(initialPlan?: BuildPlan) {
       } else if (status === 'failed') {
         updates.error = error;
         updates.retryCount = (t.retryCount || 0) + 1;
+      } else if (status === 'blocked') {
+        // Preserve the reason (dependency failure / merge conflict / etc) so users can act on it.
+        updates.error = error;
       } else if (status === 'skipped') {
         updates.progress = 0;
       }

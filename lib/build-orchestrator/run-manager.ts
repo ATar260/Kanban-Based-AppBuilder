@@ -949,7 +949,28 @@ export class BuildRunManager {
         ticketId: next.ticketId,
       });
 
-      let applyRes: { appliedFiles: string[]; durationMs?: number };
+      // Defensive: ensure integration sandbox is exactly on the current "mainSnapshot" before each merge.
+      // This prevents a failed merge from leaving the integration sandbox in a partial/broken state.
+      try {
+        await this.resetSandboxToSnapshot(state.mainSandboxId, mainSnapshot);
+      } catch (e: any) {
+        const msg = e?.message || 'Failed to reset integration sandbox before merge';
+        this.updateTicketStatus(runId, next.ticketId, 'failed', undefined, msg);
+        this.emit(runId, {
+          type: 'log',
+          runId,
+          at: now(),
+          level: 'error',
+          message: msg,
+          ticketId: next.ticketId,
+        });
+        // If we cannot reset integration to a known-good snapshot, further merges are unsafe.
+        // Stop the merge loop, but allow the overall run to finalize cleanly.
+        break;
+      }
+
+      // Apply patch (merge)
+      let applyRes: { appliedFiles: string[]; durationMs?: number } | null = null;
       try {
         applyRes = await this.applyCode(baseUrl, state.mainSandboxId, next.patchCode, true);
       } catch (e: any) {
@@ -963,9 +984,46 @@ export class BuildRunManager {
           message: msg,
           ticketId: next.ticketId,
         });
-        throw e;
+        // Revert integration sandbox to known-good state and continue with other merges.
+        try {
+          await this.resetSandboxToSnapshot(state.mainSandboxId, mainSnapshot);
+        } catch {
+          // ignore
+        }
+        continue;
       }
+
       const mergedFiles = applyRes.appliedFiles;
+
+      // Integration gate before accepting this merge
+      this.updateTicketStatus(runId, next.ticketId, 'testing', 99);
+      try {
+        await this.runIntegrationGate(baseUrl, state.mainSandboxId);
+      } catch (e: any) {
+        const msg = e?.message || 'Integration gate failed';
+        this.updateTicketStatus(runId, next.ticketId, 'failed', undefined, msg);
+        this.emit(runId, {
+          type: 'log',
+          runId,
+          at: now(),
+          level: 'error',
+          message: msg,
+          ticketId: next.ticketId,
+        });
+        // Reject the merge: revert integration to previous snapshot and continue.
+        try {
+          await this.resetSandboxToSnapshot(state.mainSandboxId, mainSnapshot);
+        } catch {
+          // ignore
+        }
+        continue;
+      }
+
+      // Accept merge: advance main snapshot version only after gate passes.
+      const newVersion = state.snapshotVersion + 1;
+      const updatedSnapshot: Record<string, string> = { ...mainSnapshot, ...next.patchFiles };
+      state.snapshotVersion = newVersion;
+      state.snapshotsByVersion.set(newVersion, updatedSnapshot);
 
       // Update ticket artifacts to reflect the integration sandbox reality.
       const latest = this.runs.get(runId);
@@ -984,30 +1042,6 @@ export class BuildRunManager {
         appliedFiles: mergedFiles,
       });
 
-      // Advance main snapshot version
-      const newVersion = state.snapshotVersion + 1;
-      const updatedSnapshot: Record<string, string> = { ...mainSnapshot, ...next.patchFiles };
-      state.snapshotVersion = newVersion;
-      state.snapshotsByVersion.set(newVersion, updatedSnapshot);
-
-      // Integration gate before Done
-      this.updateTicketStatus(runId, next.ticketId, 'testing', 99);
-      try {
-        await this.runIntegrationGate(baseUrl);
-      } catch (e: any) {
-        const msg = e?.message || 'Integration gate failed';
-        this.updateTicketStatus(runId, next.ticketId, 'failed', undefined, msg);
-        this.emit(runId, {
-          type: 'log',
-          runId,
-          at: now(),
-          level: 'error',
-          message: msg,
-          ticketId: next.ticketId,
-        });
-        throw e;
-      }
-
       // Done
       this.updateTicketStatus(runId, next.ticketId, 'done', 100);
       this.emit(runId, {
@@ -1021,12 +1055,12 @@ export class BuildRunManager {
     }
   }
 
-  private async runIntegrationGate(baseUrl: string): Promise<void> {
+  private async runIntegrationGate(baseUrl: string, sandboxId: string): Promise<void> {
     // Keep this lightweight by default (console log check). Expand in Phase 4.
     const res = await fetch(`${baseUrl}/api/run-tests`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ testType: 'console' }),
+      body: JSON.stringify({ testType: 'console', sandboxId }),
     });
 
     if (!res.ok) {

@@ -15,7 +15,20 @@ export async function GET(request: NextRequest) {
     // Best-effort usage tracking identity (user or IP)
     const actor = await getUsageActor(request);
 
-    const provider = sandboxManager.getActiveProvider() || global.activeSandboxProvider;
+    const requestedSandboxId = (() => {
+      try {
+        const url = new URL(request.url);
+        return String(url.searchParams.get('sandboxId') || '').trim();
+      } catch {
+        return '';
+      }
+    })();
+
+    const activeProvider = sandboxManager.getActiveProvider() || global.activeSandboxProvider;
+    const provider = requestedSandboxId
+      ? sandboxManager.getProvider(requestedSandboxId) ||
+        (activeProvider?.getSandboxInfo?.()?.sandboxId === requestedSandboxId ? activeProvider : null)
+      : activeProvider;
     const sandboxExists = !!provider;
 
     // Opportunistic lifecycle cleanup (idle sandboxes + stale prewarmed pool entries).
@@ -87,10 +100,16 @@ export async function GET(request: NextRequest) {
           healthError = 'No sandbox URL available';
         }
 
-        if (sandboxStopped) {
+        const activeSandboxId = activeProvider?.getSandboxInfo?.()?.sandboxId || null;
+        const isActiveSandbox = !requestedSandboxId || (activeSandboxId && requestedSandboxId === activeSandboxId);
+
+        if (sandboxStopped && isActiveSandbox) {
           global.activeSandboxProvider = null;
           global.sandboxData = null;
           sandboxManager.clearActiveProvider();
+          sandboxInfo = null;
+        } else if (sandboxStopped) {
+          // Don't clear the globally active sandbox if the caller is checking a specific sandboxId.
           sandboxInfo = null;
         } else {
           sandboxInfo = {
@@ -115,9 +134,13 @@ export async function GET(request: NextRequest) {
         console.error('[sandbox-status] Health check failed:', error);
         if (error?.message?.includes('SANDBOX_STOPPED') || error?.message?.includes('410')) {
           sandboxStopped = true;
-          global.activeSandboxProvider = null;
-          global.sandboxData = null;
-          sandboxManager.clearActiveProvider();
+          const activeSandboxId = activeProvider?.getSandboxInfo?.()?.sandboxId || null;
+          const isActiveSandbox = !requestedSandboxId || (activeSandboxId && requestedSandboxId === activeSandboxId);
+          if (isActiveSandbox) {
+            global.activeSandboxProvider = null;
+            global.sandboxData = null;
+            sandboxManager.clearActiveProvider();
+          }
         }
         sandboxHealthy = false;
       }

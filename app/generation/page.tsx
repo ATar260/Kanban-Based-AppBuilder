@@ -149,6 +149,10 @@ function AISandboxPage() {
   // Server-side BuildRun (Phase 1): keep build execution truth on the server and stream events via SSE.
   const [buildRunId, setBuildRunId] = useState<string | null>(null);
   const buildRunEventSourceRef = useRef<EventSource | null>(null);
+  const sandboxUnhealthyStreakRef = useRef<number>(0);
+  const sandboxViteRestartAttemptsRef = useRef<number>(0);
+  const sandboxLastViteRestartAtRef = useRef<number>(0);
+  const sandboxHealthCheckInFlightRef = useRef<boolean>(false);
 
   // UI Options state for 3-mockup generation
   const [showUIOptions, setShowUIOptions] = useState(false);
@@ -694,16 +698,98 @@ Visual Features: ${uiOption.features.join(', ')}`;
     if (!sandboxData?.sandboxId) return;
 
     const keepAlive = async () => {
+      if (sandboxHealthCheckInFlightRef.current) return;
+      sandboxHealthCheckInFlightRef.current = true;
       try {
-        const response = await fetch('/api/sandbox-status');
-        const data = await response.json();
-        
-        if (data.sandboxStopped) {
+        const sid = String(sandboxData?.sandboxId || '').trim();
+        const statusUrl = sid ? `/api/sandbox-status?sandboxId=${encodeURIComponent(sid)}` : '/api/sandbox-status';
+        const response = await fetch(statusUrl);
+        const data = await response.json().catch(() => null);
+
+        if (data?.sandboxData?.sandboxId) {
+          setSandboxData(prev => ({ ...(prev || {}), ...(data.sandboxData || {}) }));
+        }
+
+        const healthStatusCode = data?.sandboxData?.healthStatusCode;
+        const stopped = Boolean(data?.sandboxStopped || healthStatusCode === 410);
+        if (stopped) {
           console.log('[keep-alive] Sandbox expired during build');
+          sandboxUnhealthyStreakRef.current = 0;
+          sandboxViteRestartAttemptsRef.current = 0;
           setSandboxExpired(true);
+          return;
+        }
+
+        const isViteLikelyDown =
+          typeof healthStatusCode === 'number' && (healthStatusCode === 404 || healthStatusCode >= 500);
+
+        if (sid && data?.active && !data?.healthy && isViteLikelyDown) {
+          sandboxUnhealthyStreakRef.current += 1;
+
+          const now = Date.now();
+          const canAttemptRestart =
+            sandboxUnhealthyStreakRef.current >= 2 &&
+            now - sandboxLastViteRestartAtRef.current > 12_000 &&
+            sandboxViteRestartAttemptsRef.current < 2;
+
+          if (canAttemptRestart) {
+            sandboxLastViteRestartAtRef.current = now;
+            sandboxViteRestartAttemptsRef.current += 1;
+
+            setIsPreviewRefreshing(true);
+            try {
+              await fetch('/api/restart-vite', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sandboxId: sid }),
+              });
+            } catch (e) {
+              console.warn('[keep-alive] Vite restart request failed:', e);
+            }
+
+            await new Promise(resolve => setTimeout(resolve, 3000));
+
+            try {
+              const retryRes = await fetch(statusUrl);
+              const retryData = await retryRes.json().catch(() => null);
+
+              if (retryData?.sandboxData?.sandboxId) {
+                setSandboxData(prev => ({ ...(prev || {}), ...(retryData.sandboxData || {}) }));
+              }
+
+              const retryCode = retryData?.sandboxData?.healthStatusCode;
+              const retryStopped = Boolean(retryData?.sandboxStopped || retryCode === 410);
+              if (retryStopped) {
+                sandboxUnhealthyStreakRef.current = 0;
+                sandboxViteRestartAttemptsRef.current = 0;
+                setSandboxExpired(true);
+                return;
+              }
+
+              if (retryData?.active && retryData?.healthy) {
+                sandboxUnhealthyStreakRef.current = 0;
+                sandboxViteRestartAttemptsRef.current = 0;
+                if (iframeRef.current && retryData?.sandboxData?.url) {
+                  iframeRef.current.src = `${retryData.sandboxData.url}?t=${Date.now()}&recovered=true`;
+                }
+              } else if (sandboxViteRestartAttemptsRef.current >= 2) {
+                console.log('[keep-alive] Sandbox still unhealthy after restarts, recreating...');
+                setSandboxExpired(true);
+                return;
+              }
+            } finally {
+              setIsPreviewRefreshing(false);
+            }
+          }
+        } else {
+          // Reset streak once we get a healthy (or differently unhealthy) signal.
+          sandboxUnhealthyStreakRef.current = 0;
+          sandboxViteRestartAttemptsRef.current = 0;
         }
       } catch (e) {
         console.error('[keep-alive] Health check failed:', e);
+      } finally {
+        sandboxHealthCheckInFlightRef.current = false;
       }
     };
 
@@ -867,8 +953,18 @@ Visual Features: ${uiOption.features.join(', ')}`;
 
   const checkSandboxStatus = async (desiredTemplate: 'vite' | 'next' = 'vite') => {
     try {
-      const response = await fetch('/api/sandbox-status');
+      const hintedSandboxId = String(searchParams.get('sandbox') || sandboxData?.sandboxId || '').trim();
+      const statusUrl = hintedSandboxId
+        ? `/api/sandbox-status?sandboxId=${encodeURIComponent(hintedSandboxId)}`
+        : '/api/sandbox-status';
+
+      const response = await fetch(statusUrl);
       const data = await response.json();
+
+      if (data?.sandboxData?.sandboxId) {
+        // Keep local sandbox state in sync even when unhealthy so the UI can surface status codes/errors.
+        setSandboxData(prev => ({ ...(prev || {}), ...(data.sandboxData || {}) }));
+      }
 
       const hasSandboxHint = Boolean(searchParams.get('sandbox')) || Boolean(sandboxData?.sandboxId);
       const shouldRecreate =
@@ -909,6 +1005,63 @@ Visual Features: ${uiOption.features.join(', ')}`;
       } else if (data.active && !data.healthy) {
         const healthStatusCode = data?.sandboxData?.healthStatusCode;
         const healthError = data?.sandboxData?.healthError;
+
+        // If the sandbox URL is responding with 404/5xx, Vite likely isn't serving. Try a restart before recreating.
+        const isViteLikelyDown =
+          typeof healthStatusCode === 'number' && (healthStatusCode === 404 || healthStatusCode >= 500);
+        if (isViteLikelyDown && hintedSandboxId) {
+          updateStatus(`Sandbox unhealthy (HTTP ${healthStatusCode}) - restarting Vite…`, false);
+          try {
+            await fetch('/api/restart-vite', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sandboxId: hintedSandboxId }),
+            });
+          } catch (e) {
+            console.warn('[checkSandboxStatus] Vite restart request failed:', e);
+          }
+
+          // Give Vite a moment to come back, then re-check.
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          try {
+            const retryRes = await fetch(statusUrl);
+            const retryData = await retryRes.json().catch(() => null);
+            if (retryData?.sandboxData?.sandboxId) {
+              setSandboxData(prev => ({ ...(prev || {}), ...(retryData.sandboxData || {}) }));
+            }
+            if (retryData?.active && retryData?.healthy && retryData?.sandboxData) {
+              updateStatus('Sandbox active', true);
+              return;
+            }
+          } catch (e) {
+            console.warn('[checkSandboxStatus] Status re-check after restart failed:', e);
+          }
+
+          // Still unhealthy: recreate if we had a sandbox reference.
+          if (hasSandboxHint) {
+            console.log('[checkSandboxStatus] Sandbox still unhealthy after restart, recreating...');
+            setSandboxData(null);
+            updateStatus('Sandbox unhealthy - creating new one...', false);
+
+            const newParams = new URLSearchParams(searchParams.toString());
+            newParams.delete('sandbox');
+            router.replace(`/generation?${newParams.toString()}`, { scroll: false });
+
+            const created = await createSandbox(true, 0, desiredTemplate);
+            if (created) {
+              const hasRestorableTickets = (kanban.tickets || []).some(t =>
+                Boolean(t.generatedCode) &&
+                ['done', 'testing', 'merging', 'merge_queued', 'pr_review', 'applying', 'generating'].includes(t.status)
+              );
+              if (kanban.plan?.blueprint && hasRestorableTickets) {
+                await restoreKanbanPlanToSandbox(created, 'recreate');
+              } else {
+                addChatMessage('Sandbox was recreated after recovery. Please retry your last action.', 'system');
+              }
+            }
+            return;
+          }
+        }
 
         updateStatus(healthStatusCode === 410 ? 'Sandbox stopped' : 'Sandbox not responding', false);
         if (healthError) {
@@ -3992,10 +4145,13 @@ Tip: I automatically detect and install npm packages from your code imports (lik
 
                   // If the sandbox expired while idle, recreate it instead of just reloading the iframe.
                   try {
-                    const res = await fetch('/api/sandbox-status');
+                    const statusUrl = `/api/sandbox-status?sandboxId=${encodeURIComponent(sandboxData.sandboxId)}`;
+                    const res = await fetch(statusUrl);
                     const data = await res.json().catch(() => null);
-                    if (data?.sandboxStopped || !data?.active || data?.sandboxData?.healthStatusCode === 410) {
-                      console.log('[Manual Refresh] Sandbox stopped - recreating...');
+                    const code = data?.sandboxData?.healthStatusCode;
+                    const isViteLikelyDown = typeof code === 'number' && (code === 404 || code >= 500);
+                    if (data?.sandboxStopped || !data?.active || code === 410 || isViteLikelyDown) {
+                      console.log('[Manual Refresh] Sandbox unhealthy - recovering...');
                       await checkSandboxStatus((sandboxData as any)?.templateTarget || 'vite');
                       return;
                     }
@@ -6838,12 +6994,23 @@ Focus on the key sections and content, making it clean and modern.`;
                 )}
 
                 {/* Sandbox Status Indicator */}
-                {sandboxData && (
-                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-gray-100 border border-gray-200 rounded-md text-xs font-medium text-gray-700">
-                    <div className="w-1.5 h-1.5 bg-green-500 rounded-full" />
-                    Sandbox active
-                  </div>
-                )}
+                {sandboxData && (() => {
+                  const code = (sandboxData as any)?.healthStatusCode as number | null | undefined;
+                  const err = (sandboxData as any)?.healthError as string | undefined;
+                  const isOk = typeof code === 'number' ? code >= 200 && code < 300 : true;
+                  const label = typeof code === 'number' ? (isOk ? 'Sandbox healthy' : `Sandbox HTTP ${code}`) : 'Sandbox active';
+                  const dot = isOk ? 'bg-green-500' : 'bg-red-500';
+                  const title = err ? `${label}\n${err}` : label;
+                  return (
+                    <div
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-gray-100 border border-gray-200 rounded-md text-xs font-medium text-gray-700"
+                      title={title}
+                    >
+                      <div className={`w-1.5 h-1.5 ${dot} rounded-full`} />
+                      {label}
+                    </div>
+                  );
+                })()}
 
                 {/* Copy URL button */}
                 {sandboxData && (
