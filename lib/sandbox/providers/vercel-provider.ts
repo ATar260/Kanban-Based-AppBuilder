@@ -64,6 +64,49 @@ export class VercelProvider extends SandboxProvider {
     }
   }
 
+  /**
+   * Reconnect to an existing Vercel Sandbox by sandboxId.
+   * This is critical because Next.js route handlers may run in different isolates/processes,
+   * so we cannot rely on an in-memory Sandbox instance being available across requests.
+   */
+  async reconnect(sandboxId: string): Promise<boolean> {
+    const id = String(sandboxId || '').trim();
+    if (!id) return false;
+
+    try {
+      const token = process.env.VERCEL_TOKEN;
+      const teamId = process.env.VERCEL_TEAM_ID;
+      const projectId = process.env.VERCEL_PROJECT_ID;
+
+      const params: any = { sandboxId: id };
+      // Prefer explicit token/team/project if present; otherwise Sandbox.get can use VERCEL_OIDC_TOKEN.
+      if (token && teamId && projectId) {
+        params.token = token;
+        params.teamId = teamId;
+        params.projectId = projectId;
+      }
+
+      const sandbox = await Sandbox.get(params);
+      this.sandbox = sandbox;
+
+      const url = sandbox.domain(5173);
+      this.sandboxInfo = {
+        sandboxId: sandbox.sandboxId,
+        url,
+        provider: 'vercel',
+        createdAt: new Date(),
+      };
+
+      return true;
+    } catch (error) {
+      console.error('[VercelProvider] Failed to reconnect to sandbox:', {
+        sandboxId: id,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  }
+
   async runCommand(command: string): Promise<CommandResult> {
     if (!this.sandbox) {
       throw new Error('No active sandbox');
