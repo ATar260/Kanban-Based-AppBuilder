@@ -66,8 +66,8 @@ export class ModalProvider extends SandboxProvider {
     }
 
     try {
-      const parts = command.split(' ');
-      const process = await this.modalSandbox.exec(parts);
+      // Execute via shell so pipes/redirects/&&/quotes work correctly.
+      const process = await this.modalSandbox.exec(['sh', '-c', command]);
 
       const stdout = await process.stdout.readText();
       const stderr = await process.stderr.readText();
@@ -205,7 +205,13 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 5173,
     strictPort: true,
-    allowedHosts: true,
+    // Allow Modal tunnel domains (and other sandbox domains) to load the preview without host blocking.
+    allowedHosts: [
+      '.modal.host',
+      '.vercel.run',
+      '.e2b.dev',
+      'localhost',
+    ],
     hmr: {
       clientPort: 443,
       protocol: 'wss'

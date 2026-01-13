@@ -187,6 +187,17 @@ export default function KanbanTicketModal({
                       <p className="text-sm text-red-600">{ticket.error}</p>
                     </div>
                   )}
+
+                  {Array.isArray(ticket.warnings) && ticket.warnings.length > 0 && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-md p-3">
+                      <h4 className="text-sm font-medium text-amber-800 mb-1">Warnings</h4>
+                      <ul className="text-sm text-amber-800 list-disc pl-5 space-y-1">
+                        {ticket.warnings.slice(0, 8).map((w, idx) => (
+                          <li key={idx}>{w}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </>
               )}
             </div>

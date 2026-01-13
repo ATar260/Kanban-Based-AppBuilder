@@ -29,6 +29,16 @@ export interface BuildRunInput {
    * Optional: maximum number of tickets to execute concurrently (bounded worker pool).
    */
   maxConcurrency?: number;
+  /**
+   * Optional: skip PR review/auto-fix stage for demo speed.
+   * If true, generated patches go straight to the merge queue.
+   */
+  skipPrReview?: boolean;
+  /**
+   * Optional: skip integration gate ("testing") + healing for demo speed.
+   * If true, merges are accepted immediately after apply.
+   */
+  skipIntegrationGate?: boolean;
 }
 
 export type BuildEvent =
@@ -65,6 +75,14 @@ export type BuildEvent =
       status: TicketStatus;
       progress?: number;
       error?: string;
+      retryCount?: number;
+    }
+  | {
+      type: 'ticket_warnings';
+      runId: string;
+      at: number;
+      ticketId: string;
+      warnings: string[];
     }
   | {
       type: 'ticket_artifacts';

@@ -8,6 +8,18 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
+    const parseBool = (v: any): boolean | undefined => {
+      if (v === undefined || v === null) return undefined;
+      if (typeof v === 'boolean') return v;
+      if (typeof v === 'number') return v !== 0;
+      if (typeof v === 'string') {
+        const s = v.trim().toLowerCase();
+        if (['1', 'true', 'yes', 'y', 'on'].includes(s)) return true;
+        if (['0', 'false', 'no', 'n', 'off'].includes(s)) return false;
+      }
+      return undefined;
+    };
+
     const sandboxId = String(body?.sandboxId || '').trim();
     const model = String(body?.model || '').trim();
     const plan = body?.plan;
@@ -17,8 +29,10 @@ export async function POST(request: NextRequest) {
     const maxConcurrencyRaw = body?.maxConcurrency;
     const maxConcurrency =
       typeof maxConcurrencyRaw === 'number' && Number.isFinite(maxConcurrencyRaw) && maxConcurrencyRaw > 0
-        ? Math.floor(maxConcurrencyRaw)
+        ? Math.max(1, Math.min(Math.floor(maxConcurrencyRaw), 10))
         : undefined;
+    const skipPrReview = parseBool(body?.skipPrReview);
+    const skipIntegrationGate = parseBool(body?.skipIntegrationGate);
 
     if (!sandboxId) {
       return NextResponse.json({ success: false, error: 'sandboxId is required' }, { status: 400 });
@@ -41,6 +55,8 @@ export async function POST(request: NextRequest) {
       uiStyle,
       onlyTicketId,
       maxConcurrency,
+      skipPrReview,
+      skipIntegrationGate,
     };
 
     const baseUrl = new URL(request.url).origin;

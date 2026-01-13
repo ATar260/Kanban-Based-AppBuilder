@@ -22,7 +22,8 @@ export class VercelProvider extends SandboxProvider {
       this.existingFiles.clear();
 
       // Create Vercel sandbox
-      const defaultTimeoutMs = 30 * 60 * 1000; // 30 minutes
+      // For demo/build runs, sandboxes need to survive long idle periods. Pro/Enterprise max is 5 hours.
+      const defaultTimeoutMs = 4 * 60 * 60 * 1000; // 4 hours
       const envTimeoutMs = Number(process.env.VERCEL_SANDBOX_TIMEOUT_MS);
       const timeoutMs = Number.isFinite(envTimeoutMs) && envTimeoutMs > 0 ? envTimeoutMs : defaultTimeoutMs;
 
@@ -112,17 +113,11 @@ export class VercelProvider extends SandboxProvider {
       throw new Error('No active sandbox');
     }
 
-
     try {
-      // Parse command into cmd and args (matching PR syntax)
-      const parts = command.split(' ');
-      const cmd = parts[0];
-      const args = parts.slice(1);
-
-      // Vercel uses runCommand with cmd and args object (based on PR)
+      // Execute via shell so pipes/redirects/&&/quotes work correctly.
       const result = await this.sandbox.runCommand({
-        cmd: cmd,
-        args: args,
+        cmd: 'sh',
+        args: ['-c', command],
         cwd: '/vercel/sandbox',
         env: {}
       });
@@ -420,6 +415,7 @@ export default defineConfig({
     allowedHosts: [
       '.vercel.run',  // Allow all Vercel sandbox domains
       '.e2b.dev',     // Allow all E2B sandbox domains
+      '.modal.host',  // Allow Modal tunnel domains (when embedding previews)
       'localhost'
     ],
     hmr: {

@@ -43,6 +43,7 @@ export default function TicketEditor({
       progress: 0,
       previewAvailable: false,
       retryCount: 0,
+      warnings: [],
       userModified: true,
     });
   };

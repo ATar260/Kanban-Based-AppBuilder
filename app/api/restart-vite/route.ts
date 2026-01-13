@@ -23,10 +23,11 @@ export async function POST(request: NextRequest) {
 
     const provider = requestedSandboxId
       ? sandboxManager.getProvider(requestedSandboxId) ||
-        (activeProvider?.getSandboxInfo?.()?.sandboxId === requestedSandboxId ? activeProvider : null)
+        (activeProvider?.getSandboxInfo?.()?.sandboxId === requestedSandboxId ? activeProvider : null) ||
+        (await sandboxManager.getOrCreateProvider(requestedSandboxId))
       : activeProvider;
 
-    if (!provider) {
+    if (!provider || !provider.getSandboxInfo?.()) {
       return NextResponse.json({
         success: false,
         error: requestedSandboxId ? `No sandbox provider for sandboxId: ${requestedSandboxId}` : 'No active sandbox'

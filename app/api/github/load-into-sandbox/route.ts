@@ -18,9 +18,15 @@ function isValidBranch(value: string): boolean {
 
 function patchViteConfigAllowAllHosts(contents: string): { patched: string; changed: boolean } {
   if (!contents) return { patched: contents, changed: false };
-  // If allowedHosts already exists, normalize it to `true` (allow all) for sandbox previews.
+  // Prefer an explicit allowlist that covers sandbox preview domains.
+  const allowedHostsValue = `allowedHosts: ['.modal.host', '.vercel.run', '.e2b.dev', 'localhost']`;
+
+  // If allowedHosts already exists, normalize it for sandbox previews.
   if (/\ballowedHosts\b/.test(contents)) {
-    const replaced = contents.replace(/allowedHosts\s*:\s*(['"]?all['"]?|['"][^'"]+['"]|[^\s,}]+)/m, 'allowedHosts: true');
+    const replaced = contents.replace(
+      /allowedHosts\s*:\s*([\s\S]*?)(?=,\s*\w+\s*:|,\s*\}|}\s*\)|\n\s*\})/m,
+      allowedHostsValue
+    );
     return { patched: replaced, changed: replaced !== contents };
   }
 
@@ -28,7 +34,7 @@ function patchViteConfigAllowAllHosts(contents: string): { patched: string; chan
   const serverBlock = /(server\s*:\s*\{\s*)/m;
   if (serverBlock.test(contents)) {
     return {
-      patched: contents.replace(serverBlock, `$1allowedHosts: true, `),
+      patched: contents.replace(serverBlock, `$1${allowedHostsValue}, `),
       changed: true,
     };
   }
@@ -39,7 +45,7 @@ function patchViteConfigAllowAllHosts(contents: string): { patched: string; chan
     return {
       patched: contents.replace(
         defineConfigBlock,
-        `$1\n  server: { allowedHosts: true },\n  `
+        `$1\n  server: { ${allowedHostsValue} },\n  `
       ),
       changed: true,
     };
@@ -49,7 +55,7 @@ function patchViteConfigAllowAllHosts(contents: string): { patched: string; chan
   const exportDefaultObject = /(export\s+default\s+\{\s*)/m;
   if (exportDefaultObject.test(contents)) {
     return {
-      patched: contents.replace(exportDefaultObject, `$1\n  server: { allowedHosts: true },\n  `),
+      patched: contents.replace(exportDefaultObject, `$1\n  server: { ${allowedHostsValue} },\n  `),
       changed: true,
     };
   }

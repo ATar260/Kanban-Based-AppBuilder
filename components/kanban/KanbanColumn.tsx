@@ -70,6 +70,7 @@ export default function KanbanColumn({
     id === 'applying' ||
     id === 'pr_review' ||
     id === 'merge_queued' ||
+    id === 'rebasing' ||
     id === 'merging' ||
     id === 'testing';
 
@@ -121,6 +122,12 @@ export default function KanbanColumn({
       title: 'Queued',
       description: 'Waiting to merge into main',
       animate: false,
+    },
+    rebasing: {
+      icon: '🔁',
+      title: 'Rebasing',
+      description: 'Retrying on latest changes',
+      animate: true,
     },
     merging: {
       icon: '🔀',
@@ -178,6 +185,7 @@ export default function KanbanColumn({
                   {id === 'applying' && 'Builder'}
                   {id === 'testing' && 'Validator'}
                   {id === 'pr_review' && 'Reviewer'}
+                  {id === 'rebasing' && 'Retrying'}
                   {id === 'done' && 'Complete'}
                   {id === 'awaiting_input' && 'User'}
                   {id === 'planning' && 'Planner'}

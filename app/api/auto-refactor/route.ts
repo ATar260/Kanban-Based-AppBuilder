@@ -109,7 +109,7 @@ export async function POST(request: NextRequest) {
       .join('\n\n---\n\n');
 
     const { text } = await generateText({
-      model: openai('gpt-4o-mini'),
+      model: openai('gpt-5-mini'),
       messages: [
         { role: 'system', content: AUTO_REFACTOR_PROMPT },
         {

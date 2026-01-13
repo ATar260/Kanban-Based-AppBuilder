@@ -761,6 +761,8 @@ ${isPlannedBuildStep ? `PLANNED BUILD STEP MODE:
 - You are implementing a planned ticket/feature in an existing application.
 - You may modify or create multiple files needed to fully implement the requested ticket.
 - Do NOT regenerate the entire app. Preserve existing routing, navigation, and data adapters.
+- Follow the existing project structure and file extensions. Do NOT introduce alternate directory trees (e.g. creating a new src/ folder if the app uses app/ and components/).
+- Avoid duplicate primitives/components under different paths or extensions (e.g. do not create Button.jsx if a button.tsx already exists).
 - You MAY introduce dependencies (and routing) when required by the blueprint/ticket.
 - Output ONLY the changed/created files as <file path="..."> blocks with complete contents.` : ''}
 
@@ -1546,11 +1548,17 @@ It's better to have 3 complete files than 10 incomplete files.`
           streamOptions.temperature = 0.7;
         }
         
-        // Add reasoning effort for GPT-5 models
-        if (isOpenAI) {
+        // Add reasoning effort for GPT-5* models (lets you trade quality vs latency/cost).
+        // Default to "medium" for a better demo-time balance.
+        if (isOpenAI && actualModel.startsWith('gpt-5')) {
+          const effortRaw = String(process.env.OPENAI_REASONING_EFFORT || '').trim().toLowerCase();
+          const reasoningEffort = (['low', 'medium', 'high'] as const).includes(effortRaw as any)
+            ? (effortRaw as 'low' | 'medium' | 'high')
+            : 'medium';
+
           streamOptions.experimental_providerMetadata = {
             openai: {
-              reasoningEffort: 'high'
+              reasoningEffort
             }
           };
         }
@@ -1587,15 +1595,15 @@ It's better to have 3 complete files than 10 incomplete files.`
               
               // If Groq fails, try switching to a fallback model
               if (isGroqServiceError && retryCount === maxRetries) {
-                console.log('[generate-ai-code-stream] Groq service unavailable, falling back to GPT-4');
-                streamOptions.model = openai('gpt-4-turbo');
-                actualModel = 'gpt-4-turbo';
+                console.log('[generate-ai-code-stream] Groq service unavailable, falling back to GPT-5 mini');
+                streamOptions.model = openai('gpt-5-mini');
+                actualModel = 'gpt-5-mini';
               }
             } else {
               // Final error, send to user
               await sendProgress({ 
                 type: 'error', 
-                message: `Failed to initialize ${isGoogle ? 'Gemini' : isAnthropic ? 'Claude' : isOpenAI ? 'GPT-5' : isKimiGroq ? 'Kimi (Groq)' : 'Groq'} streaming: ${streamError.message}` 
+                message: `Failed to initialize ${isGoogle ? 'Gemini' : isAnthropic ? 'Claude' : isOpenAI ? 'OpenAI' : isKimiGroq ? 'Kimi (Groq)' : 'Groq'} streaming: ${streamError.message}` 
               });
               
               // If this is a Google model error, provide helpful info

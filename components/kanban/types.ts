@@ -9,6 +9,7 @@ export type TicketStatus =
   | 'applying'
   | 'pr_review'
   | 'merge_queued'
+  | 'rebasing'
   | 'merging'
   | 'testing'
   | 'done'
@@ -77,6 +78,7 @@ export interface KanbanTicket {
   generatedCode?: string;
   previewAvailable: boolean;
   error?: string;
+  warnings?: string[];
   retryCount: number;
   userModified: boolean;
   userNotes?: string;
@@ -151,6 +153,7 @@ export const COLUMN_CONFIG: { id: TicketStatus; title: string; color: string }[]
   { id: 'applying', title: 'Applying', color: '#F59E0B' },
   { id: 'pr_review', title: 'PR Review', color: '#6366F1' },
   { id: 'merge_queued', title: 'Merge Queued', color: '#A855F7' },
+  { id: 'rebasing', title: 'Rebasing', color: '#9333EA' },
   { id: 'merging', title: 'Merging', color: '#7C3AED' },
   { id: 'testing', title: 'Testing', color: '#8B5CF6' },
   { id: 'done', title: 'Done', color: '#22C55E' },
@@ -193,6 +196,7 @@ export const TICKET_ACTIONS: Record<TicketStatus, string[]> = {
   applying: ['view-code'],
   pr_review: ['view-code'],
   merge_queued: ['view-code'],
+  rebasing: ['view-code'],
   merging: ['view-code'],
   testing: ['view-code'],
   done: ['view-code', 'regenerate'],

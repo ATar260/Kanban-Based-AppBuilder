@@ -39,7 +39,9 @@ export async function POST(request: NextRequest) {
     if (rl instanceof NextResponse) return rl;
 
     const usage = await getUsageSnapshotForActor(actor);
-    if (usage.exceeded.sandboxMinutes) {
+    const disableSandboxUsageLimit =
+      process.env.USAGE_DISABLE_SANDBOX_LIMIT === 'true' || process.env.USAGE_DISABLE_LIMITS === 'true';
+    if (!disableSandboxUsageLimit && usage.exceeded.sandboxMinutes) {
       return NextResponse.json(
         {
           success: false,
@@ -161,7 +163,7 @@ export async function POST(request: NextRequest) {
       message: 'Sandbox created and Vite React app initialized'
     });
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('[create-ai-sandbox-v2] Error:', error);
     
     // Clean up on error (best-effort)
@@ -181,10 +183,48 @@ export async function POST(request: NextRequest) {
       global.sandboxData = null;
     }
     
+    // Surface upstream provider status codes (e.g., Vercel 402/429) instead of always returning 500.
+    const upstreamStatus = Number(error?.response?.status);
+    if (Number.isFinite(upstreamStatus) && upstreamStatus >= 400 && upstreamStatus < 600) {
+      let retryAfter: number | undefined;
+      try {
+        const ra = Number(error?.response?.headers?.get?.('Retry-After'));
+        if (Number.isFinite(ra) && ra > 0) retryAfter = Math.floor(ra);
+      } catch {
+        // ignore
+      }
+
+      const code =
+        upstreamStatus === 402
+          ? 'PAYMENT_REQUIRED'
+          : upstreamStatus === 429
+            ? 'UPSTREAM_RATE_LIMITED'
+            : 'SANDBOX_PROVIDER_ERROR';
+
+      const message =
+        upstreamStatus === 402
+          ? 'Sandbox provider returned Payment Required (402). Check Vercel billing/spend limits and sandbox entitlement.'
+          : upstreamStatus === 429
+            ? 'Sandbox provider rate-limited the request. Please retry shortly.'
+            : (error?.message || 'Failed to create sandbox');
+
+      return NextResponse.json(
+        {
+          success: false,
+          error: message,
+          code,
+          retryAfter,
+        },
+        { status: upstreamStatus }
+      );
+    }
+
     return NextResponse.json(
-      { 
+      {
+        success: false,
         error: error instanceof Error ? error.message : 'Failed to create sandbox',
-        details: error instanceof Error ? error.stack : undefined
+        code: 'SANDBOX_CREATE_FAILED',
+        details: error instanceof Error ? error.stack : undefined,
       },
       { status: 500 }
     );

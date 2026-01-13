@@ -25,10 +25,25 @@ export async function GET(request: NextRequest) {
     })();
 
     const activeProvider = sandboxManager.getActiveProvider() || global.activeSandboxProvider;
-    const provider = requestedSandboxId
-      ? sandboxManager.getProvider(requestedSandboxId) ||
-        (activeProvider?.getSandboxInfo?.()?.sandboxId === requestedSandboxId ? activeProvider : null)
-      : activeProvider;
+
+    let provider =
+      requestedSandboxId
+        ? sandboxManager.getProvider(requestedSandboxId) ||
+          (activeProvider?.getSandboxInfo?.()?.sandboxId === requestedSandboxId ? activeProvider : null)
+        : activeProvider;
+
+    // If the provider isn't registered in this process, attempt a best-effort reconnect by sandboxId.
+    if (!provider && requestedSandboxId) {
+      try {
+        provider = await sandboxManager.getOrCreateProvider(requestedSandboxId);
+        if (!provider?.getSandboxInfo?.() || provider.getSandboxInfo()?.sandboxId !== requestedSandboxId) {
+          provider = null;
+        }
+      } catch {
+        provider = null;
+      }
+    }
+
     const sandboxExists = !!provider;
 
     // Opportunistic lifecycle cleanup (idle sandboxes + stale prewarmed pool entries).

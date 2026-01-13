@@ -23,8 +23,13 @@ class SandboxManager {
   // OPTIMIZATION: Sandbox pool for reuse
   private sandboxPool: PooledSandbox[] = [];
   private readonly MAX_POOL_SIZE: number;
-  private isPrewarming = false;
+  private prewarmInFlight = 0;
+  private ensureWarmPoolPromise: Promise<void> | null = null;
   private lastCleanupAt: number = 0;
+  private lastPoolActivityAt: number = Date.now();
+  private desiredPoolSize: number;
+  private readonly POOL_BASELINE_SIZE: number;
+  private readonly POOL_BURST_SIZE: number;
   
   // Resource limiting / lifecycle controls
   private readonly POOL_ENABLED = process.env.SANDBOX_POOL_ENABLED === 'true';
@@ -32,12 +37,75 @@ class SandboxManager {
     process.env.SANDBOX_PREWARM_ENABLED === 'true' || process.env.SANDBOX_PREWARM === 'true';
   private readonly DEFAULT_POOL_TTL_MS = 10 * 60 * 1000; // 10 minutes
   private readonly CLEANUP_DEBOUNCE_MS = 30 * 1000; // avoid thrashing when many requests hit
+  private readonly DEFAULT_POOL_SCALE_DOWN_IDLE_MS = 10 * 60 * 1000; // 10 minutes
+  private readonly PREWARM_CONCURRENCY: number;
 
   constructor() {
-    const envSize = Number(process.env.SANDBOX_POOL_SIZE || process.env.SANDBOX_MAX_POOL_SIZE);
-    const size = Number.isFinite(envSize) && envSize > 0 ? Math.floor(envSize) : 2;
+    const clampInt = (n: unknown, min: number, max: number): number | null => {
+      const v = typeof n === 'number' && Number.isFinite(n) ? Math.floor(n) : NaN;
+      if (!Number.isFinite(v)) return null;
+      return Math.max(min, Math.min(v, max));
+    };
+
+    const envMax = clampInt(Number(process.env.SANDBOX_MAX_POOL_SIZE || process.env.SANDBOX_POOL_SIZE), 0, 10);
     // Keep it bounded to avoid runaway costs by misconfig.
-    this.MAX_POOL_SIZE = Math.max(0, Math.min(size, 10));
+    this.MAX_POOL_SIZE = envMax ?? 10;
+
+    const baseline = clampInt(Number(process.env.SANDBOX_POOL_BASELINE), 0, this.MAX_POOL_SIZE) ?? 2;
+    const burst = clampInt(Number(process.env.SANDBOX_POOL_BURST), 0, this.MAX_POOL_SIZE) ?? this.MAX_POOL_SIZE;
+
+    this.POOL_BASELINE_SIZE = Math.max(0, Math.min(baseline, this.MAX_POOL_SIZE));
+    this.POOL_BURST_SIZE = Math.max(this.POOL_BASELINE_SIZE, Math.min(burst, this.MAX_POOL_SIZE));
+    this.desiredPoolSize = this.POOL_BASELINE_SIZE;
+
+    const envConc = clampInt(Number(process.env.SANDBOX_PREWARM_CONCURRENCY), 1, 5);
+    this.PREWARM_CONCURRENCY = envConc ?? 2;
+  }
+
+  private getAllKnownSandboxIds(): Set<string> {
+    const ids = new Set<string>();
+    for (const id of this.sandboxes.keys()) ids.add(id);
+    for (const p of this.sandboxPool) {
+      if (p?.sandboxId) ids.add(p.sandboxId);
+    }
+    return ids;
+  }
+
+  async adoptKnownSandboxes(sandboxIds: string[]): Promise<{ adopted: number; attempted: number }> {
+    if (!this.POOL_ENABLED) return { adopted: 0, attempted: 0 };
+
+    const unique = Array.from(new Set((sandboxIds || []).map(s => String(s || '').trim()).filter(Boolean)));
+    const attempted = unique.length;
+    if (attempted === 0) return { adopted: 0, attempted: 0 };
+
+    const known = this.getAllKnownSandboxIds();
+    let adopted = 0;
+
+    for (const id of unique) {
+      if (this.sandboxPool.length >= this.MAX_POOL_SIZE) break;
+      if (known.has(id)) continue;
+
+      try {
+        const provider = SandboxFactory.create();
+        const ok = await provider.reconnect(id);
+        const info = provider.getSandboxInfo?.();
+        if (!ok || !info?.sandboxId) continue;
+        if (info.sandboxId !== id) continue;
+
+        this.sandboxPool.push({
+          provider,
+          sandboxId: id,
+          createdAt: new Date(),
+          isWarmed: true,
+        });
+        known.add(id);
+        adopted += 1;
+      } catch {
+        // ignore failed adoption attempts
+      }
+    }
+
+    return { adopted, attempted };
   }
 
   /**
@@ -87,18 +155,19 @@ class SandboxManager {
   /**
    * Register a new sandbox
    */
-  registerSandbox(sandboxId: string, provider: SandboxProvider, opts?: { setActive?: boolean }): void {
+  registerSandbox(sandboxId: string, provider: SandboxProvider, opts?: { setActive?: boolean; inUse?: boolean }): void {
     this.sandboxes.set(sandboxId, {
       sandboxId,
       provider,
       createdAt: new Date(),
       lastAccessed: new Date(),
-      inUse: true
+      inUse: opts?.inUse === true
     });
     const setActive = opts?.setActive !== false;
     if (setActive) {
       this.activeSandboxId = sandboxId;
     }
+    this.lastPoolActivityAt = Date.now();
     
     // Start pre-warming another sandbox in background (optional; can be expensive)
     if (this.POOL_ENABLED && this.PREWARM_ENABLED) {
@@ -143,6 +212,13 @@ class SandboxManager {
       return sandbox.provider;
     }
     return null;
+  }
+
+  markInUse(sandboxId: string, inUse: boolean): void {
+    const info = this.sandboxes.get(sandboxId);
+    if (!info) return;
+    info.inUse = Boolean(inUse);
+    info.lastAccessed = new Date();
   }
 
   /**
@@ -212,6 +288,7 @@ class SandboxManager {
     const toDelete: string[] = [];
     
     for (const [id, info] of this.sandboxes.entries()) {
+      if (info.inUse) continue;
       const age = now.getTime() - info.lastAccessed.getTime();
       if (age > maxAge) {
         toDelete.push(id);
@@ -247,6 +324,16 @@ class SandboxManager {
         ))
       );
     }
+
+    // If we've previously burst the pool, opportunistically scale back down to baseline when idle.
+    const envIdle = Number(process.env.SANDBOX_POOL_SCALE_DOWN_IDLE_MS);
+    const scaleDownIdleMs =
+      Number.isFinite(envIdle) && envIdle > 0 ? envIdle : this.DEFAULT_POOL_SCALE_DOWN_IDLE_MS;
+
+    if (this.sandboxPool.length > this.POOL_BASELINE_SIZE && nowMs - this.lastPoolActivityAt > scaleDownIdleMs) {
+      await this.shrinkPool(this.POOL_BASELINE_SIZE);
+      this.desiredPoolSize = this.POOL_BASELINE_SIZE;
+    }
   }
 
   // OPTIMIZATION: Get a sandbox from pool or create new
@@ -257,9 +344,13 @@ class SandboxManager {
     const pooled = this.sandboxPool.shift();
     if (pooled) {
       console.log(`[SandboxManager] OPTIMIZATION: Reusing pooled sandbox ${pooled.sandboxId}`);
+      this.lastPoolActivityAt = Date.now();
       
       // Start pre-warming another sandbox in background
-      if (this.PREWARM_ENABLED) {
+      const target = this.desiredPoolSize;
+      if (target > 0 && this.PREWARM_ENABLED) {
+        void this.ensureWarmPool(target);
+      } else if (this.PREWARM_ENABLED) {
         this.prewarmSandbox();
       }
       
@@ -273,11 +364,11 @@ class SandboxManager {
   async prewarmSandbox(): Promise<void> {
     if (!this.POOL_ENABLED) return;
 
-    if (this.isPrewarming || this.sandboxPool.length >= this.MAX_POOL_SIZE) {
+    if (this.prewarmInFlight >= this.PREWARM_CONCURRENCY || this.sandboxPool.length + this.prewarmInFlight >= this.MAX_POOL_SIZE) {
       return;
     }
     
-    this.isPrewarming = true;
+    this.prewarmInFlight += 1;
     console.log('[SandboxManager] OPTIMIZATION: Pre-warming sandbox in background...');
     
     try {
@@ -296,8 +387,76 @@ class SandboxManager {
     } catch (error) {
       console.error('[SandboxManager] Failed to pre-warm sandbox:', error);
     } finally {
-      this.isPrewarming = false;
+      this.prewarmInFlight = Math.max(0, this.prewarmInFlight - 1);
     }
+  }
+
+  /**
+   * Ensure the warm pool reaches a desired size (bounded and concurrency-limited).
+   * This is used for “burst to N” demo readiness, and can be triggered on-demand.
+   */
+  async ensureWarmPool(targetSize: number): Promise<void> {
+    if (!this.POOL_ENABLED) return;
+
+    const target = Math.max(0, Math.min(Math.floor(targetSize || 0), this.MAX_POOL_SIZE));
+    this.desiredPoolSize = target;
+    this.lastPoolActivityAt = Date.now();
+
+    if (target <= this.sandboxPool.length) return;
+
+    if (this.ensureWarmPoolPromise) {
+      await this.ensureWarmPoolPromise;
+      return;
+    }
+
+    const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+    const promise = (async () => {
+      while (this.sandboxPool.length < target) {
+        const remaining = target - this.sandboxPool.length;
+        const availableSlots = Math.max(0, this.PREWARM_CONCURRENCY - this.prewarmInFlight);
+        const toStart = Math.min(remaining, availableSlots);
+
+        if (toStart <= 0) {
+          await sleep(250);
+          continue;
+        }
+
+        await Promise.allSettled(Array.from({ length: toStart }).map(() => this.prewarmSandbox()));
+      }
+    })();
+
+    this.ensureWarmPoolPromise = promise.finally(() => {
+      this.ensureWarmPoolPromise = null;
+    });
+
+    await this.ensureWarmPoolPromise;
+  }
+
+  async shrinkPool(targetSize: number): Promise<void> {
+    if (!this.POOL_ENABLED) return;
+    const target = Math.max(0, Math.min(Math.floor(targetSize || 0), this.MAX_POOL_SIZE));
+    if (this.sandboxPool.length <= target) return;
+
+    // Kill oldest pooled sandboxes first.
+    const sorted = [...this.sandboxPool].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    const keep = sorted.slice(sorted.length - target);
+    const kill = sorted.slice(0, Math.max(0, sorted.length - target));
+    this.sandboxPool = keep;
+
+    await Promise.allSettled(
+      kill.map(p => p.provider.terminate().catch(err =>
+        console.error(`[SandboxManager] Error terminating pooled sandbox ${p.sandboxId}:`, err)
+      ))
+    );
+  }
+
+  getPoolTargets(): { baseline: number; burst: number; desired: number } {
+    return {
+      baseline: this.POOL_BASELINE_SIZE,
+      burst: this.POOL_BURST_SIZE,
+      desired: this.desiredPoolSize,
+    };
   }
 
   // OPTIMIZATION: Return sandbox to pool for reuse
@@ -316,11 +475,12 @@ class SandboxManager {
       this.sandboxPool.push({
         provider: sandbox.provider,
         sandboxId,
-        createdAt: sandbox.createdAt,
+        createdAt: new Date(),
         isWarmed: true
       });
       
       this.sandboxes.delete(sandboxId);
+      this.lastPoolActivityAt = Date.now();
       console.log(`[SandboxManager] OPTIMIZATION: Returned sandbox ${sandboxId} to pool`);
       return true;
     } catch (error) {
@@ -330,11 +490,25 @@ class SandboxManager {
   }
 
   // Get pool status for monitoring
-  getPoolStatus(): { poolSize: number; maxSize: number; isPrewarming: boolean } {
+  getPoolStatus(): {
+    sandboxIds: string[];
+    poolSize: number;
+    maxSize: number;
+    inFlight: number;
+    isPrewarming: boolean;
+    baselineSize: number;
+    burstSize: number;
+    desiredSize: number;
+  } {
     return {
+      sandboxIds: this.sandboxPool.map(p => p.sandboxId).filter(Boolean),
       poolSize: this.sandboxPool.length,
       maxSize: this.MAX_POOL_SIZE,
-      isPrewarming: this.isPrewarming
+      inFlight: this.prewarmInFlight,
+      isPrewarming: this.prewarmInFlight > 0,
+      baselineSize: this.POOL_BASELINE_SIZE,
+      burstSize: this.POOL_BURST_SIZE,
+      desiredSize: this.desiredPoolSize,
     };
   }
 }

@@ -17,6 +17,9 @@ const COLUMN_EMOJIS: Record<string, string> = {
   applying: '🔧',
   testing: '🧪',
   pr_review: '🔎',
+  merge_queued: '📬',
+  rebasing: '🔁',
+  merging: '🔀',
   done: '✅',
   blocked: '🚫',
   failed: '❌',
@@ -110,7 +113,7 @@ export default function KanbanBoard({
   }, {} as Record<TicketType, number>);
 
   const displayColumns = COLUMN_CONFIG.filter(col =>
-    !['blocked', 'failed', 'skipped'].includes(col.id) || ticketsByColumn[col.id].length > 0
+    !['blocked', 'failed', 'skipped', 'rebasing'].includes(col.id) || ticketsByColumn[col.id].length > 0
   );
 
   const totalProgress = analytics.totalTickets > 0

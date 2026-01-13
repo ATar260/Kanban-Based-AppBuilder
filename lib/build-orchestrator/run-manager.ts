@@ -15,12 +15,32 @@ interface VirtualBranch {
   appliedFiles: string[];
 }
 
+interface GeneratedPatch {
+  ticketId: string;
+  baseVersion: number;
+  patchFiles: Record<string, string>;
+  patchCode: string;
+  appliedFiles: string[];
+  genMs: number;
+}
+
 interface RunInternalState {
   mainSandboxId: string;
   snapshotVersion: number;
   snapshotsByVersion: Map<number, Record<string, string>>;
   mergeQueue: VirtualBranch[];
+  healHistoryByTicketId: Map<string, HealRecord[]>;
 }
+
+type HealStage = 'pr_review' | 'merge_apply' | 'integration_gate' | 'build';
+
+type HealRecord = {
+  at: number;
+  stage: HealStage;
+  attempt: number;
+  fingerprint: string;
+  message: string;
+};
 
 function now() {
   return Date.now();
@@ -28,6 +48,61 @@ function now() {
 
 function sleep(ms: number) {
   return new Promise<void>(resolve => setTimeout(resolve, ms));
+}
+
+function fingerprintFailure(text: string): string {
+  const t = String(text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/[0-9a-f]{7,40}/gi, '<hash>')
+    .replace(/\b\d+\b/g, '<n>')
+    .trim();
+  // Keep just the first few lines to avoid huge keys.
+  return t.split('\n').slice(0, 5).join('\n').slice(0, 500);
+}
+
+function formatHealHistory(records: HealRecord[]): string {
+  if (!records || records.length === 0) return '(none)';
+  return records
+    .slice(-8)
+    .map(r => `- [${new Date(r.at).toISOString()}] (${r.stage} attempt ${r.attempt}) ${r.fingerprint}\n  ${r.message}`)
+    .join('\n');
+}
+
+function extractLikelyFilePathsFromText(text: string): string[] {
+  const t = String(text || '');
+  const out: string[] = [];
+  const seen = new Set<string>();
+
+  // Matches common build error formats:
+  // - src/foo/bar.jsx:12:34
+  // - ./src/foo/bar.tsx(12,34)
+  // - /vercel/sandbox/src/foo/bar.css:12:34
+  const re = /(?:^|[\s(])([A-Za-z0-9_./-]+?\.(?:tsx|ts|jsx|js|css|json))(?:[:)\s]|$)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(t)) !== null) {
+    let p = (m[1] || '').trim();
+    if (!p) continue;
+
+    // Normalize sandbox absolute prefixes and relative noise.
+    p = p
+      .replace(/^\/vercel\/sandbox\//, '')
+      .replace(/^\/home\/user\/app\//, '')
+      .replace(/^\.\//, '')
+      .replace(/\\/g, '/');
+
+    if (!p) continue;
+    if (p.includes('node_modules/')) continue;
+    if (!p.startsWith('src/') && !p.startsWith('app/') && !p.startsWith('components/') && !p.startsWith('pages/')) {
+      // Keep only likely project-relative files.
+      continue;
+    }
+
+    if (!seen.has(p)) {
+      seen.add(p);
+      out.push(p);
+    }
+  }
+  return out.slice(0, 5);
 }
 
 function generateRunId() {
@@ -44,7 +119,7 @@ function nextBuildableTicket(
   if (onlyTicketId) {
     const t = currentTickets.find(x => x.id === onlyTicketId) || null;
     if (!t) return null;
-    if (t.status !== 'backlog') return null;
+    if (t.status !== 'backlog' && t.status !== 'rebasing') return null;
     if (excludeTicketIds.has(t.id)) return null;
     const hasUnmetDeps = t.dependencies?.some(depId => {
       const dep = currentTickets.find(x => x.id === depId);
@@ -54,7 +129,7 @@ function nextBuildableTicket(
   }
 
   const backlog = currentTickets
-    .filter(t => t.status === 'backlog')
+    .filter(t => t.status === 'backlog' || t.status === 'rebasing')
     .sort((a, b) => a.order - b.order);
 
   for (const ticket of backlog) {
@@ -119,6 +194,65 @@ export class BuildRunManager {
   private mergePromises = new Map<string, Promise<void>>();
   private resumeResolvers = new Map<string, Array<() => void>>();
   private internalState = new Map<string, RunInternalState>();
+  private contentionLocks = new Map<string, Map<string, string>>();
+  private ticketWarningsByRunId = new Map<string, Map<string, string[]>>();
+
+  private pushHealRecord(runId: string, ticketId: string, stage: HealStage, message: string) {
+    const state = this.internalState.get(runId);
+    if (!state) return;
+    const arr = state.healHistoryByTicketId.get(ticketId) || [];
+    const attempt = arr.filter(r => r.stage === stage).length + 1;
+    const fingerprint = fingerprintFailure(message);
+    const rec: HealRecord = { at: now(), stage, attempt, fingerprint, message: String(message || '').slice(0, 4000) };
+    arr.push(rec);
+    // Rolling window to avoid runaway memory.
+    const keep = arr.slice(-30);
+    state.healHistoryByTicketId.set(ticketId, keep);
+  }
+
+  private getHealHistory(runId: string, ticketId: string): HealRecord[] {
+    const state = this.internalState.get(runId);
+    if (!state) return [];
+    return state.healHistoryByTicketId.get(ticketId) || [];
+  }
+
+  private getContentionGroup(ticket: KanbanTicket): string | null {
+    if (!ticket) return null;
+
+    // Styling tends to touch global primitives/theme and is the highest-conflict category.
+    if (ticket.type === 'styling') return 'globalStyling';
+
+    // If the planner provided route IDs, keep work for a route serialized to reduce collisions on the same page/layout files.
+    const routeIds = ticket.blueprintRefs?.routeIds;
+    if (Array.isArray(routeIds) && routeIds.length > 0) {
+      const first = typeof routeIds[0] === 'string' ? routeIds[0].trim() : '';
+      if (first) return `layout_${first}`;
+    }
+
+    // No contention group: allow full parallelism for everything else.
+    return null;
+  }
+
+  private isGroupLockedByOtherTicket(runId: string, group: string, ticketId: string): boolean {
+    const locks = this.contentionLocks.get(runId);
+    if (!locks) return false;
+    const holder = locks.get(group);
+    return Boolean(holder && holder !== ticketId);
+  }
+
+  private acquireGroupLock(runId: string, group: string, ticketId: string) {
+    const locks = this.contentionLocks.get(runId) || new Map<string, string>();
+    locks.set(group, ticketId);
+    this.contentionLocks.set(runId, locks);
+  }
+
+  private releaseLocksForTicket(runId: string, ticketId: string) {
+    const locks = this.contentionLocks.get(runId);
+    if (!locks) return;
+    for (const [group, holder] of Array.from(locks.entries())) {
+      if (holder === ticketId) locks.delete(group);
+    }
+  }
 
   createRun(input: BuildRunInput, baseUrl?: string): BuildRunRecord {
     const runId = generateRunId();
@@ -173,6 +307,21 @@ export class BuildRunManager {
         }
       }
     }
+  }
+
+  private updateTicketWarnings(runId: string, ticketId: string, warnings: string[] | null) {
+    const run = this.runs.get(runId);
+    if (!run) return;
+
+    const arr = Array.isArray(warnings) ? warnings.filter(Boolean) : [];
+    run.tickets = updateTicket(run.tickets, ticketId, { warnings: arr.length > 0 ? arr : undefined } as any);
+
+    const byTicket = this.ticketWarningsByRunId.get(runId) || new Map<string, string[]>();
+    if (arr.length > 0) byTicket.set(ticketId, arr);
+    else byTicket.delete(ticketId);
+    this.ticketWarningsByRunId.set(runId, byTicket);
+
+    this.emit(runId, { type: 'ticket_warnings', runId, at: now(), ticketId, warnings: arr });
   }
 
   private setStatus(runId: string, status: BuildRunStatus, message?: string, error?: string) {
@@ -238,17 +387,59 @@ export class BuildRunManager {
     });
   }
 
-  private updateTicketStatus(runId: string, ticketId: string, status: TicketStatus, progress?: number, error?: string) {
+  private updateTicketStatus(
+    runId: string,
+    ticketId: string,
+    status: TicketStatus,
+    progress?: number,
+    error?: string | null
+  ) {
     const run = this.runs.get(runId);
     if (!run) return;
+
+    const currentTicket = run.tickets.find(t => t.id === ticketId) || null;
+    const shouldBumpRetryCount = status === 'failed' && currentTicket && currentTicket.status !== 'failed';
+    const bumpedRetryCount = shouldBumpRetryCount
+      ? (typeof currentTicket.retryCount === 'number' ? currentTicket.retryCount : 0) + 1
+      : undefined;
+
+    const normalizedError: string | null | undefined =
+      error === undefined && (status === 'generating' || status === 'done')
+        ? null
+        : error;
+
     run.tickets = updateTicket(run.tickets, ticketId, {
       status,
       ...(typeof progress === 'number' ? { progress } : {}),
-      ...(error ? { error } : {}),
+      ...(normalizedError === null ? { error: undefined } : {}),
+      ...(typeof normalizedError === 'string' && normalizedError ? { error: normalizedError } : {}),
+      ...(typeof bumpedRetryCount === 'number' ? { retryCount: bumpedRetryCount } : {}),
       ...(status === 'generating' ? { startedAt: new Date() } : {}),
       ...(status === 'done' ? { completedAt: new Date(), progress: 100 } : {}),
     } as any);
-    this.emit(runId, { type: 'ticket_status', runId, at: now(), ticketId, status, progress, error });
+
+    // Clear warnings on a fresh (re)run.
+    if (status === 'backlog' || status === 'generating') {
+      this.updateTicketWarnings(runId, ticketId, null);
+    }
+
+    const updated = run.tickets.find(t => t.id === ticketId);
+    const retryCount = typeof updated?.retryCount === 'number' ? updated.retryCount : undefined;
+
+    this.emit(runId, {
+      type: 'ticket_status',
+      runId,
+      at: now(),
+      ticketId,
+      status,
+      progress,
+      error: typeof normalizedError === 'string' ? normalizedError : undefined,
+      retryCount,
+    });
+
+    if (status === 'done' || status === 'failed' || status === 'blocked' || status === 'skipped' || status === 'awaiting_input') {
+      this.releaseLocksForTicket(runId, ticketId);
+    }
   }
 
   /**
@@ -271,44 +462,95 @@ export class BuildRunManager {
     });
 
     try {
-      // Hard-coded parallelism setting (requested): always use 4 workers for full runs.
-      const workerCount = run.input.onlyTicketId ? 1 : 4;
+      const clampInt = (n: unknown, min: number, max: number): number | undefined => {
+        const v = typeof n === 'number' && Number.isFinite(n) ? Math.floor(n) : undefined;
+        if (typeof v !== 'number') return undefined;
+        return Math.max(min, Math.min(v, max));
+      };
+
+      // Option A (default): parallel AI generation + serial apply to integration.
+      // We keep a single integration sandbox (run.input.sandboxId) and reuse the existing merge loop + deterministic gate.
+      const maxParallel = 10;
+      const requested = clampInt(run.input.maxConcurrency, 1, maxParallel);
+      const env =
+        clampInt(Number(process.env.BUILD_WORKERS), 1, maxParallel) ??
+        clampInt(Number(process.env.MAX_BUILD_WORKERS), 1, maxParallel);
+      const defaultParallel = 10;
+      const desired = run.input.onlyTicketId ? 1 : (requested ?? env ?? defaultParallel);
+
+      const genConcurrencyCap = 6;
+      const genConcurrency = Math.max(1, Math.min(desired, genConcurrencyCap));
 
       this.emit(runId, {
         type: 'log',
         runId,
         at: now(),
         level: 'system',
-        message: `Worker pool size: ${workerCount} (hard-coded)`,
+        message: `Generation pool size: ${genConcurrency}${requested ? ' (request override)' : env ? ' (env override)' : ' (default)'} (cap ${genConcurrencyCap})`,
       });
 
-      // Virtual PR mode: worker sandboxes execute tickets on a snapshot of "main",
-      // then a merge queue applies changes into the integration sandbox.
-      let internal: RunInternalState | null = null;
-      if (workerCount > 1) {
-        const initialSnapshot = await this.captureSandboxSnapshot(run.input.sandboxId);
-        internal = {
-          mainSandboxId: run.input.sandboxId,
-          snapshotVersion: 0,
-          snapshotsByVersion: new Map([[0, initialSnapshot]]),
-          mergeQueue: [],
-        };
-        this.internalState.set(runId, internal);
+      // Initialize merge state + snapshot v0 (integration as source of truth).
+      const initialSnapshot = await this.captureSandboxSnapshot(run.input.sandboxId);
+      const internal: RunInternalState = {
+        mainSandboxId: run.input.sandboxId,
+        snapshotVersion: 0,
+        snapshotsByVersion: new Map([[0, initialSnapshot]]),
+        mergeQueue: [],
+        healHistoryByTicketId: new Map(),
+      };
+      this.internalState.set(runId, internal);
+
+      // Mark integration sandbox as in-use so background cleanup won't terminate it mid-run.
+      try {
+        sandboxManager.markInUse(run.input.sandboxId, true);
+      } catch {
+        // ignore
       }
 
-      const workers: Worker[] =
-        workerCount > 1
-          ? await this.createWorkerPool(runId, workerCount)
-          : [{ sandboxId: run.input.sandboxId, provider: null, kind: 'integration' }];
-
-      const freeWorkers: Worker[] = [...workers];
-      const inFlight = new Map<string, Promise<void>>();
+      const genInFlight = new Map<string, Promise<void>>();
+      const reviewInFlight = new Map<string, Promise<void>>();
+      const reviewQueue: GeneratedPatch[] = [];
       const hasFailures = { value: false };
 
       const hasMergePending = () => {
         const s = this.internalState.get(runId);
         return Boolean(s && (s.mergeQueue.length > 0 || this.mergePromises.has(runId)));
       };
+
+      const skipPrReviewEnv = ['1', 'true', 'yes'].includes(
+        String(process.env.BUILD_SKIP_PR_REVIEW || '').toLowerCase()
+      );
+      const skipPrReview = typeof run.input.skipPrReview === 'boolean' ? run.input.skipPrReview : skipPrReviewEnv;
+
+      const skipIntegrationGateEnv = ['1', 'true', 'yes'].includes(
+        String(process.env.BUILD_SKIP_INTEGRATION_GATE || '').toLowerCase()
+      );
+      const skipIntegrationGate =
+        typeof run.input.skipIntegrationGate === 'boolean' ? run.input.skipIntegrationGate : skipIntegrationGateEnv;
+
+      if (skipPrReview) {
+        this.emit(runId, {
+          type: 'log',
+          runId,
+          at: now(),
+          level: 'system',
+          message: `PR review: skipped (demo mode). Patches will go straight to merge.`,
+        });
+      }
+      if (skipIntegrationGate) {
+        this.emit(runId, {
+          type: 'log',
+          runId,
+          at: now(),
+          level: 'system',
+          message: `Integration gate: skipped (demo mode). Merges will be accepted immediately after apply.`,
+        });
+      }
+
+      const reviewConcurrency = Math.max(1, Math.min(genConcurrency, 2));
+      const maxBufferedEnv = clampInt(Number(process.env.BUILD_MAX_BUFFERED_PATCHES), 1, 200);
+      const maxBufferedPatches =
+        maxBufferedEnv ?? (skipPrReview || skipIntegrationGate ? Math.max(50, genConcurrency * 10) : Math.max(24, genConcurrency * 6));
 
       while (true) {
         await this.waitIfPaused(runId);
@@ -319,68 +561,123 @@ export class BuildRunManager {
         // If any tickets are now impossible due to failed deps, mark them as blocked so the run can finish cleanly.
         this.propagateBlockedTickets(runId);
 
-        // Dispatch as many ready tickets as possible up to the worker count.
-        while (freeWorkers.length > 0) {
-          const next = nextBuildableTicket(fresh.tickets, fresh.input.onlyTicketId, new Set(inFlight.keys()));
+        // Stage 2: PR review/refinement (bounded) while generation continues.
+        if (!skipPrReview) {
+          while (reviewInFlight.size < reviewConcurrency && reviewQueue.length > 0) {
+            const patch = reviewQueue.shift()!;
+            const ticketId = patch.ticketId;
+            const p = (async () => {
+              const refined = await this.refinePatchWithPrReview(runId, patch);
+              this.enqueueGeneratedPatchForMerge(runId, refined);
+            })()
+              .catch((e: any) => {
+                hasFailures.value = true;
+                const msg = e?.message || 'Ticket failed';
+                this.updateTicketStatus(runId, ticketId, 'failed', undefined, msg);
+                this.emit(runId, {
+                  type: 'log',
+                  runId,
+                  at: now(),
+                  level: 'error',
+                  message: `Ticket failed: ${msg}`,
+                  ticketId,
+                });
+              })
+              .finally(() => {
+                reviewInFlight.delete(ticketId);
+              });
+            reviewInFlight.set(ticketId, p);
+          }
+        } else if (reviewQueue.length > 0) {
+          // Safety: if anything ended up in the review queue, bypass and enqueue for merge.
+          while (reviewQueue.length > 0) {
+            const patch = reviewQueue.shift()!;
+            this.enqueueGeneratedPatchForMerge(runId, patch);
+          }
+        }
+
+        // Stage 1: Dispatch as many ready tickets as possible up to the generation concurrency.
+        while (genInFlight.size < genConcurrency) {
+          // Avoid unbounded pipelining: keep generation roughly ahead of PR review, but do NOT let merge backlog stall generation.
+          // (For demos we prefer keeping the generation pool busy; stale patches are handled via rebasing/regeneration when needed.)
+          const buffered = reviewQueue.length + reviewInFlight.size;
+          if (buffered >= maxBufferedPatches) break;
+
+          const exclude = new Set(genInFlight.keys());
+          let next: KanbanTicket | null = null;
+          let contentionGroup: string | null = null;
+
+          while (true) {
+            next = nextBuildableTicket(fresh.tickets, fresh.input.onlyTicketId, exclude);
+            if (!next) break;
+
+            contentionGroup = this.getContentionGroup(next);
+            if (contentionGroup && this.isGroupLockedByOtherTicket(runId, contentionGroup, next.id)) {
+              exclude.add(next.id);
+              next = null;
+              continue;
+            }
+
+            break;
+          }
+
           if (!next) break;
 
-          const worker = freeWorkers.pop()!;
-          const baseVersion = internal ? internal.snapshotVersion : undefined;
-          const baseSnapshot =
-            internal && typeof baseVersion === 'number'
-              ? internal.snapshotsByVersion.get(baseVersion) || null
-              : null;
+          // Acquire group lock while generating this patch (released as soon as generation completes).
+          if (contentionGroup) {
+            this.acquireGroupLock(runId, contentionGroup, next.id);
+          }
 
-          this.updateTicketStatus(runId, next.id, 'generating', 5);
+          const baseVersion = internal.snapshotVersion;
+
+          this.updateTicketStatus(runId, next.id, 'generating', 5, null);
           this.emit(runId, {
             type: 'log',
             runId,
             at: now(),
             level: 'system',
-            message: `Dispatching "${next.title}" to ${worker.kind === 'integration' ? 'integration sandbox' : `worker ${worker.sandboxId}`}`,
+            message: `Generating patch for "${next.title}" (base v${baseVersion})`,
             ticketId: next.id,
           });
 
+          const ticketId = next.id;
           const p = (async () => {
-            // Ensure the worker sandbox starts from the same base state as the integration sandbox.
-            if (worker.kind === 'worker' && baseSnapshot) {
-              await this.resetSandboxToSnapshot(worker.sandboxId, baseSnapshot);
+            const patch = await this.generateTicketPatch(runId, ticketId, baseVersion, skipPrReview);
+            if (skipPrReview) {
+              this.enqueueGeneratedPatchForMerge(runId, patch);
+            } else {
+              reviewQueue.push(patch);
             }
-
-            await this.executeSingleTicket(runId, next.id, worker.sandboxId, baseVersion);
           })()
             .catch((e: any) => {
               hasFailures.value = true;
               const msg = e?.message || 'Ticket failed';
-              this.updateTicketStatus(runId, next.id, 'failed', undefined, msg);
+              this.updateTicketStatus(runId, ticketId, 'failed', undefined, msg);
               this.emit(runId, {
                 type: 'log',
                 runId,
                 at: now(),
                 level: 'error',
                 message: `Ticket failed: ${msg}`,
-                ticketId: next.id,
+                ticketId,
               });
             })
             .finally(() => {
-              inFlight.delete(next.id);
-              freeWorkers.push(worker);
+              genInFlight.delete(ticketId);
+              // Release contention locks after generation so other tickets can start while this one is in PR review/merge queue.
+              this.releaseLocksForTicket(runId, ticketId);
             });
 
-          inFlight.set(next.id, p);
+          genInFlight.set(ticketId, p);
         }
 
-        // Single-ticket mode: stop once the ticket is no longer backlog/in-flight.
-        if (fresh.input.onlyTicketId) {
-          const only = fresh.tickets.find(t => t.id === fresh.input.onlyTicketId);
-          if (only && only.status !== 'backlog' && !inFlight.has(only.id)) break;
-        }
-
-        const nextSchedulable = nextBuildableTicket(fresh.tickets, fresh.input.onlyTicketId, new Set(inFlight.keys()));
+        const nextSchedulable = nextBuildableTicket(fresh.tickets, fresh.input.onlyTicketId, new Set(genInFlight.keys()));
         const mergePending = hasMergePending();
 
-        // If nothing is schedulable and nothing is in-flight, we may still be waiting for merges to complete.
-        if (!nextSchedulable && inFlight.size === 0) {
+        const anyInFlight = genInFlight.size > 0 || reviewInFlight.size > 0;
+
+        // If nothing is schedulable, nothing is in-flight, and nothing is queued for review, we may still be waiting for merges to complete.
+        if (!nextSchedulable && !anyInFlight && reviewQueue.length === 0) {
           if (mergePending) {
             const mp = this.mergePromises.get(runId);
             if (mp) {
@@ -393,17 +690,17 @@ export class BuildRunManager {
           break;
         }
 
-        // Wait for one ticket to finish before attempting to schedule more (bounded pool).
-        if (inFlight.size > 0) {
-          await Promise.race(inFlight.values());
+        // Wait for one unit of work to finish before attempting to schedule more (bounded pool).
+        if (genInFlight.size > 0 || reviewInFlight.size > 0) {
+          await Promise.race([...Array.from(genInFlight.values()), ...Array.from(reviewInFlight.values())]);
         } else {
           await sleep(200);
         }
       }
 
       // Drain any remaining work (should be none, but be safe)
-      if (inFlight.size > 0) {
-        await Promise.allSettled(Array.from(inFlight.values()));
+      if (genInFlight.size > 0 || reviewInFlight.size > 0) {
+        await Promise.allSettled([...Array.from(genInFlight.values()), ...Array.from(reviewInFlight.values())]);
       }
 
       // Drain merges (virtual PRs) before finalizing run status.
@@ -419,16 +716,26 @@ export class BuildRunManager {
       const anyTicketFailures =
         finalRun?.tickets?.some(t => t.status === 'failed' || t.status === 'blocked') ?? false;
 
-      if (hasFailures.value || anyTicketFailures) {
-        this.setStatus(runId, 'failed', 'Build finished with failures', 'One or more tickets failed/blocked');
+      const anyAwaitingInput =
+        finalRun?.tickets?.some(t => t.status === 'awaiting_input') ?? false;
+      const anyUnfinished =
+        finalRun?.tickets?.some(t => t.status === 'backlog' || t.status === 'rebasing') ?? false;
+
+      const reason = anyTicketFailures
+        ? 'One or more tickets failed/blocked'
+        : anyAwaitingInput
+          ? 'One or more tickets are awaiting user input'
+          : anyUnfinished
+            ? 'One or more tickets were not completed'
+            : undefined;
+
+      if (hasFailures.value || anyTicketFailures || anyAwaitingInput || anyUnfinished) {
+        this.setStatus(runId, 'failed', 'Build finished with failures', reason || 'Build finished incomplete');
         this.emit(runId, { type: 'run_completed', runId, status: 'failed', at: now() });
       } else {
         this.setStatus(runId, 'completed', 'Build complete');
         this.emit(runId, { type: 'run_completed', runId, status: 'completed', at: now() });
       }
-
-      // Cleanup internal run state
-      this.internalState.delete(runId);
     } catch (e: any) {
       const message = e?.message || 'Build failed';
       const current = this.runs.get(runId);
@@ -436,7 +743,355 @@ export class BuildRunManager {
         this.updateTicketStatus(runId, current.currentTicketId, 'failed', undefined, message);
       }
       this.setStatus(runId, 'failed', message, message);
+    } finally {
+      try {
+        sandboxManager.markInUse(run?.input?.sandboxId || '', false);
+      } catch {
+        // ignore
+      }
+
+      this.internalState.delete(runId);
+      this.contentionLocks.delete(runId);
     }
+  }
+
+  private async generateAndQueueTicket(runId: string, ticketId: string, baseVersion: number) {
+    const run = this.runs.get(runId);
+    const skipPrReviewEnv = ['1', 'true', 'yes'].includes(
+      String(process.env.BUILD_SKIP_PR_REVIEW || '').toLowerCase()
+    );
+    const skipPrReview = typeof run?.input?.skipPrReview === 'boolean' ? run!.input.skipPrReview : skipPrReviewEnv;
+
+    const patch = await this.generateTicketPatch(runId, ticketId, baseVersion, skipPrReview);
+    if (skipPrReview) {
+      this.enqueueGeneratedPatchForMerge(runId, patch);
+      return;
+    }
+
+    const refined = await this.refinePatchWithPrReview(runId, patch);
+    this.enqueueGeneratedPatchForMerge(runId, refined);
+  }
+
+  private async generateTicketPatch(
+    runId: string,
+    ticketId: string,
+    baseVersion: number,
+    skipPrReview = false
+  ): Promise<GeneratedPatch> {
+    const run = this.runs.get(runId);
+    const state = this.internalState.get(runId);
+    if (!run || !state) throw new Error(`Run not found: ${runId}`);
+
+    const ticket = run.tickets.find(t => t.id === ticketId);
+    if (!ticket) throw new Error(`Ticket not found: ${ticketId}`);
+
+    const baseUrl = run.baseUrl;
+    if (!baseUrl) {
+      throw new Error('Missing baseUrl for BuildRun (cannot call internal APIs)');
+    }
+
+    const planBlueprint: any = (run.input.plan as any)?.blueprint || null;
+    const desiredTemplate: 'vite' | 'next' =
+      (run.input.plan as any)?.templateTarget || planBlueprint?.templateTarget || 'vite';
+
+    const uiStyleBlock = run.input.uiStyle
+      ? `\n\nUI STYLE (apply consistently across all tickets):\n${JSON.stringify(run.input.uiStyle, null, 2)}\n`
+      : '';
+
+    const conventionsSnapshot = state.snapshotsByVersion.get(baseVersion) || null;
+    const conventionsBlock = conventionsSnapshot ? buildSnapshotConventions(conventionsSnapshot) : '';
+
+    const ticketPrompt =
+      `Implement the following ticket in the existing application.\n\n` +
+      `Template: ${desiredTemplate}\n` +
+      uiStyleBlock +
+      `Blueprint (high-level contract):\n${planBlueprint ? JSON.stringify(planBlueprint, null, 2) : '(none)'}\n\n` +
+      (conventionsBlock ? `Project conventions & existing surface (follow strictly):\n${conventionsBlock}\n\n` : '') +
+      `Ticket:\n- Title: ${ticket.title}\n- Description: ${ticket.description}\n\n` +
+      `Rules:\n- Implement the ticket completely.\n- Preserve existing routes/navigation and the mock-first data layer.\n- Create new files if required by this ticket.\n- Follow the existing project structure and file extensions (do not introduce alternate trees like src/ if the repo uses app/ and components/).\n- If a UI primitive/component already exists, prefer editing it in-place instead of creating a new copy with a different name or extension (avoid Button.jsx vs button.tsx drift).\n- Output ONLY <file path=\"...\"> blocks for files you changed/created.`;
+
+    // Generate patch (LLM) against the integration sandbox context.
+    const genStart = now();
+    const rawGenerated = await this.generateTicketCode(
+      baseUrl,
+      run.input.model,
+      ticketPrompt,
+      run.input.sandboxId,
+      'implement_ticket'
+    );
+    const genMs = now() - genStart;
+
+    // Parse + canonicalize patch to avoid stray text breaking downstream apply.
+    const patchFiles: Record<string, string> = {};
+    for (const block of extractFileBlocks(rawGenerated || '')) {
+      const p = normalizeSandboxPath(block.path || '');
+      if (!p) continue;
+      patchFiles[p] = (block.content || '').trim();
+    }
+
+    if (Object.keys(patchFiles).length === 0) {
+      throw new Error('AI generation returned no <file> blocks');
+    }
+
+    const appliedFiles = Object.keys(patchFiles).sort();
+    const patchCode = buildFileBlocks(patchFiles);
+
+    run.tickets = updateTicket(run.tickets, ticketId, {
+      generatedCode: patchCode,
+      actualFiles: appliedFiles,
+      previewAvailable: false,
+    } as any);
+
+    this.emit(runId, {
+      type: 'ticket_artifacts',
+      runId,
+      at: now(),
+      ticketId,
+      generatedCode: patchCode,
+      appliedFiles,
+    });
+
+    if (!skipPrReview) {
+      // Mark for PR review/refinement (runs in parallel with more generation).
+      this.updateTicketStatus(runId, ticketId, 'pr_review', 95);
+      this.emit(runId, {
+        type: 'log',
+        runId,
+        at: now(),
+        level: 'system',
+        message: `Patch generated (gen ${(genMs / 1000).toFixed(1)}s). Queued for PR review.`,
+        ticketId,
+      });
+    } else {
+      this.emit(runId, {
+        type: 'log',
+        runId,
+        at: now(),
+        level: 'system',
+        message: `Patch generated (gen ${(genMs / 1000).toFixed(1)}s). PR review skipped (demo mode).`,
+        ticketId,
+      });
+    }
+
+    return { ticketId, baseVersion, patchFiles, patchCode, appliedFiles, genMs };
+  }
+
+  private async refinePatchWithPrReview(runId: string, patch: GeneratedPatch): Promise<GeneratedPatch> {
+    const run = this.runs.get(runId);
+    const state = this.internalState.get(runId);
+    if (!run || !state) throw new Error(`Run not found: ${runId}`);
+
+    const ticket = run.tickets.find(t => t.id === patch.ticketId);
+    if (!ticket) throw new Error(`Ticket not found: ${patch.ticketId}`);
+
+    const baseUrl = run.baseUrl;
+    if (!baseUrl) {
+      throw new Error('Missing baseUrl for BuildRun (cannot call internal APIs)');
+    }
+
+    let patchFiles = { ...patch.patchFiles };
+    let patchCode = patch.patchCode;
+    let appliedFiles = patch.appliedFiles.slice();
+
+    // PR review (soft gate) + in-memory refinement (no sandbox apply here).
+    this.emit(runId, {
+      type: 'log',
+      runId,
+      at: now(),
+      level: 'system',
+      message: `PR review: ${ticket.title}`,
+      ticketId: patch.ticketId,
+    });
+
+    const reviewStart = now();
+    let currentReview = await this.reviewCode(baseUrl, patch.ticketId, ticket.title, extractFileBlocks(patchCode));
+
+    const maxAutoFixAttempts = 2;
+    let autoFixAttempts = 0;
+
+    while (hasBlockingIssues(currentReview) && autoFixAttempts < maxAutoFixAttempts) {
+      autoFixAttempts += 1;
+
+      const issues = Array.isArray(currentReview?.issues) ? currentReview.issues : [];
+      const blockingIssues = issues.filter((i: any) => {
+        if (i?.severity === 'error') return true;
+        if (i?.severity === 'warning' && (i?.type === 'security' || i?.type === 'bug')) return true;
+        return false;
+      });
+
+      const issuesText = blockingIssues
+        .slice(0, 10)
+        .map((i: any, idx: number) => {
+          const loc = `${i.file || 'unknown'}${i.line ? `:${i.line}` : ''}`;
+          const suggestion = i.suggestion ? `\n  Suggestion: ${i.suggestion}` : '';
+          return `- [${idx + 1}] (${i.severity}/${i.type}) ${loc}\n  ${i.message}${suggestion}`;
+        })
+        .join('\n');
+
+      const filesText = Object.entries(patchFiles)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([path, content]) => `// FILE: ${path}\n${content}`)
+        .join('\n\n---\n\n');
+
+      this.emit(runId, {
+        type: 'log',
+        runId,
+        at: now(),
+        level: 'warning',
+        message: `PR review found blocking issues. Auto-fix attempt ${autoFixAttempts}/${maxAutoFixAttempts}...`,
+        ticketId: patch.ticketId,
+      });
+
+      const fixPrompt =
+        `Fix the listed issues in the provided code.\n\n` +
+        `Blocking issues:\n${issuesText}\n\n` +
+        `Rules:\n` +
+        `- Make the smallest possible changes to fix ONLY the issues above.\n` +
+        `- Do NOT change app behavior beyond what is needed to fix the issues.\n` +
+        `- Do NOT introduce new dependencies unless absolutely necessary.\n` +
+        `- NEVER include markdown fences like \`\`\` or language tags inside files.\n` +
+        `- Output ONLY <file path="..."> blocks for files you change. Each block must contain the full updated file content.\n\n` +
+        `Code:\n${filesText}`;
+
+      const fixCode = await this.generateTicketCode(
+        baseUrl,
+        run.input.model,
+        fixPrompt,
+        run.input.sandboxId,
+        'fix_validation'
+      );
+
+      const fixBlocks = extractFileBlocks(fixCode || '');
+      if (fixBlocks.length === 0) break;
+
+      for (const b of fixBlocks) {
+        const p = normalizeSandboxPath(b.path || '');
+        if (!p) continue;
+        patchFiles[p] = (b.content || '').trim();
+      }
+
+      appliedFiles = Object.keys(patchFiles).sort();
+      patchCode = buildFileBlocks(patchFiles);
+
+      run.tickets = updateTicket(run.tickets, patch.ticketId, {
+        generatedCode: patchCode,
+        actualFiles: appliedFiles,
+        previewAvailable: false,
+      } as any);
+
+      this.emit(runId, {
+        type: 'ticket_artifacts',
+        runId,
+        at: now(),
+        ticketId: patch.ticketId,
+        generatedCode: patchCode,
+        appliedFiles,
+      });
+
+      currentReview = await this.reviewCode(baseUrl, patch.ticketId, ticket.title, extractFileBlocks(patchCode));
+    }
+
+    const reviewMs = now() - reviewStart;
+    this.emit(runId, {
+      type: 'ticket_artifacts',
+      runId,
+      at: now(),
+      ticketId: patch.ticketId,
+      reviewDurationMs: reviewMs,
+      reviewIssuesCount: currentReview?.issues?.length ?? 0,
+    });
+
+    if (hasBlockingIssues(currentReview)) {
+      const issues = Array.isArray(currentReview?.issues) ? currentReview.issues : [];
+      const top = issues
+        .filter((i: any) => i && (i.severity === 'error' || i.severity === 'warning'))
+        .slice(0, 10)
+        .map((i: any) => {
+          const loc = `${i.file || 'unknown'}${i.line ? `:${i.line}` : ''}`;
+          return `${i.severity}/${i.type}: ${loc} — ${i.message}`;
+        });
+
+      const warnings = [
+        `Bugbot review did not fully pass. Proceeding with merge (soft-gated).`,
+        ...(top.length > 0 ? top : [`Issues count: ${issues.length}`]),
+      ];
+
+      this.updateTicketWarnings(runId, patch.ticketId, warnings);
+      this.emit(runId, {
+        type: 'log',
+        runId,
+        at: now(),
+        level: 'warning',
+        message: `PR review has remaining issues; proceeding anyway (soft-gate).`,
+        ticketId: patch.ticketId,
+      });
+    }
+
+    return { ...patch, patchFiles, patchCode, appliedFiles };
+  }
+
+  private enqueueGeneratedPatchForMerge(runId: string, patch: GeneratedPatch) {
+    const run = this.runs.get(runId);
+    if (!run) return;
+
+    const ticket = run.tickets.find(t => t.id === patch.ticketId);
+    const title = ticket?.title || patch.ticketId;
+
+    // Enqueue for merge; only mark Done once integration merge + gate succeed.
+    this.updateTicketStatus(runId, patch.ticketId, 'merge_queued', 97);
+    this.enqueueMerge(runId, {
+      ticketId: patch.ticketId,
+      workerSandboxId: run.input.sandboxId,
+      baseVersion: patch.baseVersion,
+      patchFiles: patch.patchFiles,
+      patchCode: patch.patchCode,
+      appliedFiles: patch.appliedFiles,
+    });
+
+    this.emit(runId, {
+      type: 'log',
+      runId,
+      at: now(),
+      level: 'system',
+      message: `Ready to merge: ${title} (gen ${(patch.genMs / 1000).toFixed(1)}s)`,
+      ticketId: patch.ticketId,
+    });
+  }
+
+  private async releaseWorkerSandboxes(runId: string, workers: Worker[]): Promise<void> {
+    const workerSandboxes = (workers || []).filter(w => w.kind === 'worker');
+    if (workerSandboxes.length === 0) return;
+
+    this.emit(runId, {
+      type: 'log',
+      runId,
+      at: now(),
+      level: 'system',
+      message: `Releasing ${workerSandboxes.length} worker sandbox(es)`,
+    });
+
+    await Promise.allSettled(
+      workerSandboxes.map(async w => {
+        try {
+          sandboxManager.markInUse(w.sandboxId, false);
+        } catch {
+          // ignore
+        }
+
+        try {
+          const returned = await sandboxManager.returnToPool(w.sandboxId);
+          if (returned) return;
+        } catch {
+          // ignore and fall through to terminate
+        }
+
+        try {
+          await sandboxManager.terminateSandbox(w.sandboxId);
+        } catch {
+          // ignore
+        }
+      })
+    );
   }
 
   private async executeSingleTicket(runId: string, ticketId: string, sandboxId: string, baseVersion?: number) {
@@ -466,13 +1121,25 @@ export class BuildRunManager {
       ? `\n\nUI STYLE (apply consistently across all tickets):\n${JSON.stringify(run.input.uiStyle, null, 2)}\n`
       : '';
 
+    const conventionsSnapshot = (() => {
+      const state = this.internalState.get(runId);
+      if (!state) return null;
+      if (typeof baseVersion === 'number' && baseVersion >= 0) {
+        return state.snapshotsByVersion.get(baseVersion) || null;
+      }
+      return state.snapshotsByVersion.get(state.snapshotVersion) || null;
+    })();
+
+    const conventionsBlock = conventionsSnapshot ? buildSnapshotConventions(conventionsSnapshot) : '';
+
     const ticketPrompt =
       `Implement the following ticket in the existing application.\n\n` +
       `Template: ${desiredTemplate}\n` +
       uiStyleBlock +
       `Blueprint (high-level contract):\n${planBlueprint ? JSON.stringify(planBlueprint, null, 2) : '(none)'}\n\n` +
+      (conventionsBlock ? `Project conventions & existing surface (follow strictly):\n${conventionsBlock}\n\n` : '') +
       `Ticket:\n- Title: ${ticket.title}\n- Description: ${ticket.description}\n\n` +
-      `Rules:\n- Implement the ticket completely.\n- Preserve existing routes/navigation and the mock-first data layer.\n- Create new files if required by this ticket.\n- Output ONLY <file path=\"...\"> blocks for files you changed/created.`;
+      `Rules:\n- Implement the ticket completely.\n- Preserve existing routes/navigation and the mock-first data layer.\n- Create new files if required by this ticket.\n- Follow the existing project structure and file extensions (do not introduce alternate trees like src/ if the repo uses app/ and components/).\n- If a UI primitive/component already exists, prefer editing it in-place instead of creating a new copy with a different name or extension (avoid Button.jsx vs button.tsx drift).\n- Output ONLY <file path=\"...\"> blocks for files you changed/created.`;
 
     // Generate code
     this.emit(runId, { type: 'log', runId, at: now(), level: 'system', message: `Generating: ${ticket.title}`, ticketId });
@@ -622,11 +1289,29 @@ export class BuildRunManager {
     });
 
     if (hasBlockingIssues(currentReview)) {
-      const errorCount =
-        Array.isArray(currentReview?.issues)
-          ? currentReview.issues.filter((i: any) => i?.severity === 'error').length
-          : 0;
-      throw new Error(`PR review failed after auto-fix: ${errorCount} error(s)`);
+      const issues = Array.isArray(currentReview?.issues) ? currentReview.issues : [];
+      const top = issues
+        .filter((i: any) => i && (i.severity === 'error' || i.severity === 'warning'))
+        .slice(0, 10)
+        .map((i: any) => {
+          const loc = `${i.file || 'unknown'}${i.line ? `:${i.line}` : ''}`;
+          return `${i.severity}/${i.type}: ${loc} — ${i.message}`;
+        });
+
+      const warnings = [
+        `Bugbot review did not fully pass. Proceeding with merge (soft-gated).`,
+        ...(top.length > 0 ? top : [`Issues count: ${issues.length}`]),
+      ];
+
+      this.updateTicketWarnings(runId, ticketId, warnings);
+      this.emit(runId, {
+        type: 'log',
+        runId,
+        at: now(),
+        level: 'warning',
+        message: `PR review has remaining issues; proceeding anyway (soft-gate).`,
+        ticketId,
+      });
     }
 
     // Validation gate (lightweight in worker sandbox; integration gate runs at merge time)
@@ -671,7 +1356,15 @@ export class BuildRunManager {
     }
 
     // Non-virtual-PR mode: finish directly in the integration sandbox.
-    this.updateTicketStatus(runId, ticketId, 'testing', 98);
+    const skipIntegrationGateEnv = ['1', 'true', 'yes'].includes(
+      String(process.env.BUILD_SKIP_INTEGRATION_GATE || '').toLowerCase()
+    );
+    const skipIntegrationGate =
+      typeof run.input.skipIntegrationGate === 'boolean' ? run.input.skipIntegrationGate : skipIntegrationGateEnv;
+
+    if (!skipIntegrationGate) {
+      this.updateTicketStatus(runId, ticketId, 'testing', 98);
+    }
     this.updateTicketStatus(runId, ticketId, 'done', 100);
     this.emit(runId, {
       type: 'log',
@@ -803,8 +1496,11 @@ export class BuildRunManager {
   }
 
   private async resetSandboxToSnapshot(sandboxId: string, snapshot: Record<string, string>): Promise<void> {
-    const provider = sandboxManager.getProvider(sandboxId);
-    if (!provider) {
+    const provider =
+      sandboxManager.getProvider(sandboxId) ||
+      (await sandboxManager.getOrCreateProvider(sandboxId));
+
+    if (!provider || !provider.getSandboxInfo?.()) {
       throw new Error(`No sandbox provider available to reset: ${sandboxId}`);
     }
 
@@ -824,36 +1520,43 @@ export class BuildRunManager {
     const workers: Worker[] = [];
 
     for (let i = 0; i < count; i++) {
-      // Prefer pooled sandbox if enabled (may return null)
-      let provider = await sandboxManager.getPooledSandbox();
-      let info = provider?.getSandboxInfo?.() || null;
-
-      if (!provider || !info?.sandboxId) {
-        provider = SandboxFactory.create();
-        info = await provider.createSandbox();
-        await provider.setupViteApp();
-      }
-
-      // Register but do not take over the UI's active sandbox.
-      sandboxManager.registerSandbox(info.sandboxId, provider, { setActive: false });
-
-      this.emit(runId, {
-        type: 'log',
-        runId,
-        at: now(),
-        level: 'system',
-        message: `Worker sandbox ready: ${info.sandboxId}`,
-      });
-
-      workers.push({ kind: 'worker', sandboxId: info.sandboxId, provider });
+      workers.push(await this.createSingleWorker(runId));
     }
 
     return workers;
   }
 
+  private async createSingleWorker(runId: string): Promise<Worker> {
+    // Prefer pooled sandbox if enabled (may return null)
+    let provider = await sandboxManager.getPooledSandbox();
+    let info = provider?.getSandboxInfo?.() || null;
+
+    if (!provider || !info?.sandboxId) {
+      provider = SandboxFactory.create();
+      info = await provider.createSandbox();
+      await provider.setupViteApp();
+    }
+
+    // Register but do not take over the UI's active sandbox.
+    sandboxManager.registerSandbox(info.sandboxId, provider, { setActive: false, inUse: true });
+
+    this.emit(runId, {
+      type: 'log',
+      runId,
+      at: now(),
+      level: 'system',
+      message: `Worker sandbox ready: ${info.sandboxId}`,
+    });
+
+    return { kind: 'worker', sandboxId: info.sandboxId, provider };
+  }
+
   private async captureFilesFromSandbox(sandboxId: string, filePaths: string[]): Promise<Record<string, string>> {
-    const provider = sandboxManager.getProvider(sandboxId);
-    if (!provider) {
+    const provider =
+      sandboxManager.getProvider(sandboxId) ||
+      (await sandboxManager.getOrCreateProvider(sandboxId));
+
+    if (!provider || !provider.getSandboxInfo?.()) {
       throw new Error(`No sandbox provider available to read files: ${sandboxId}`);
     }
 
@@ -910,6 +1613,12 @@ export class BuildRunManager {
       throw new Error('Missing baseUrl for BuildRun (cannot call internal APIs)');
     }
 
+    const skipIntegrationGateEnv = ['1', 'true', 'yes'].includes(
+      String(process.env.BUILD_SKIP_INTEGRATION_GATE || '').toLowerCase()
+    );
+    const skipIntegrationGate =
+      typeof run.input.skipIntegrationGate === 'boolean' ? run.input.skipIntegrationGate : skipIntegrationGateEnv;
+
     while (true) {
       await this.waitIfPaused(runId);
 
@@ -926,13 +1635,38 @@ export class BuildRunManager {
             ? `Merge conflict: ${conflicts[0]}`
             : `Merge conflict: ${conflicts.slice(0, 3).join(', ')}${conflicts.length > 3 ? '…' : ''}`;
 
-        this.updateTicketStatus(runId, next.ticketId, 'blocked', undefined, msg);
+        const maxRebaseAttempts = 3;
+        const t = run.tickets.find(x => x.id === next.ticketId) || null;
+        const currentRetries = typeof t?.retryCount === 'number' ? t!.retryCount : 0;
+
+        if (currentRetries < maxRebaseAttempts) {
+          const attempt = currentRetries + 1;
+          run.tickets = updateTicket(run.tickets, next.ticketId, { retryCount: attempt } as any);
+          this.updateTicketStatus(runId, next.ticketId, 'rebasing', 0, msg);
+          this.emit(runId, {
+            type: 'log',
+            runId,
+            at: now(),
+            level: 'warning',
+            message: `${msg}. Auto-rebasing and re-running (attempt ${attempt}/${maxRebaseAttempts})...`,
+            ticketId: next.ticketId,
+          });
+          continue;
+        }
+
+        this.updateTicketStatus(
+          runId,
+          next.ticketId,
+          'failed',
+          undefined,
+          `${msg}. Auto-rebase exhausted (${currentRetries}/${maxRebaseAttempts}).`
+        );
         this.emit(runId, {
           type: 'log',
           runId,
           at: now(),
           level: 'error',
-          message: msg,
+          message: `${msg}. Auto-rebase exhausted (${currentRetries}/${maxRebaseAttempts}).`,
           ticketId: next.ticketId,
         });
         continue;
@@ -965,7 +1699,19 @@ export class BuildRunManager {
           ticketId: next.ticketId,
         });
         // If we cannot reset integration to a known-good snapshot, further merges are unsafe.
-        // Stop the merge loop, but allow the overall run to finalize cleanly.
+        // Fail any remaining queued merges so the overall run can converge and finalize cleanly.
+        const remaining = state.mergeQueue.splice(0, state.mergeQueue.length);
+        for (const b of remaining) {
+          this.updateTicketStatus(runId, b.ticketId, 'failed', undefined, `Merge aborted: ${msg}`);
+          this.emit(runId, {
+            type: 'log',
+            runId,
+            at: now(),
+            level: 'error',
+            message: `Merge aborted for ${b.ticketId}: ${msg}`,
+            ticketId: b.ticketId,
+          });
+        }
         break;
       }
 
@@ -975,13 +1721,49 @@ export class BuildRunManager {
         applyRes = await this.applyCode(baseUrl, state.mainSandboxId, next.patchCode, true);
       } catch (e: any) {
         const msg = e?.message || 'Merge apply failed';
-        this.updateTicketStatus(runId, next.ticketId, 'failed', undefined, msg);
+        this.pushHealRecord(runId, next.ticketId, 'merge_apply', msg);
+
+        // Treat merge-apply failures as recoverable: rebase/regenerate on the latest snapshot.
+        const maxApplyRebaseAttempts = 3;
+        const t = run.tickets.find(x => x.id === next.ticketId) || null;
+        const currentRetries = typeof t?.retryCount === 'number' ? t!.retryCount : 0;
+
+        if (currentRetries < maxApplyRebaseAttempts) {
+          const attempt = currentRetries + 1;
+          run.tickets = updateTicket(run.tickets, next.ticketId, { retryCount: attempt } as any);
+          this.updateTicketStatus(runId, next.ticketId, 'rebasing', 0, msg);
+          this.emit(runId, {
+            type: 'log',
+            runId,
+            at: now(),
+            level: 'warning',
+            message: `Merge apply failed. Auto-rebasing and re-running (attempt ${attempt}/${maxApplyRebaseAttempts})...`,
+            ticketId: next.ticketId,
+          });
+          // Revert integration sandbox to known-good state before continuing.
+          try {
+            await this.resetSandboxToSnapshot(state.mainSandboxId, mainSnapshot);
+          } catch {
+            // ignore
+          }
+          // Small backoff to avoid tight loops if apply keeps failing deterministically.
+          await sleep(500 * attempt);
+          continue;
+        }
+
+        this.updateTicketStatus(
+          runId,
+          next.ticketId,
+          'failed',
+          undefined,
+          `${msg}. Auto-rebase exhausted (${currentRetries}/${maxApplyRebaseAttempts}).`
+        );
         this.emit(runId, {
           type: 'log',
           runId,
           at: now(),
           level: 'error',
-          message: msg,
+          message: `${msg}. Auto-rebase exhausted (${currentRetries}/${maxApplyRebaseAttempts}).`,
           ticketId: next.ticketId,
         });
         // Revert integration sandbox to known-good state and continue with other merges.
@@ -995,42 +1777,130 @@ export class BuildRunManager {
 
       const mergedFiles = applyRes.appliedFiles;
 
-      // Integration gate before accepting this merge
-      this.updateTicketStatus(runId, next.ticketId, 'testing', 99);
-      try {
-        await this.runIntegrationGate(baseUrl, state.mainSandboxId);
-      } catch (e: any) {
-        const msg = e?.message || 'Integration gate failed';
-        this.updateTicketStatus(runId, next.ticketId, 'failed', undefined, msg);
+      if (!skipIntegrationGate) {
+        // Integration gate before accepting this merge (infinite healing loop).
+        this.updateTicketStatus(runId, next.ticketId, 'testing', 99);
+        let gateAttempt = 0;
+
+        while (true) {
+          gateAttempt += 1;
+          try {
+            await this.runIntegrationGate(baseUrl, state.mainSandboxId);
+            break;
+          } catch (e: any) {
+            const msg = e?.message || 'Integration gate failed';
+            this.pushHealRecord(runId, next.ticketId, 'integration_gate', msg);
+
+            this.emit(runId, {
+              type: 'log',
+              runId,
+              at: now(),
+              level: 'warning',
+              message: `Integration gate failed (attempt ${gateAttempt}). Auto-healing and retrying...`,
+              ticketId: next.ticketId,
+            });
+
+            // Attempt to auto-fix in the integration sandbox using error history.
+            const history = this.getHealHistory(runId, next.ticketId);
+            const historyText = formatHealHistory(history);
+
+            const candidatePaths = (() => {
+              const extracted = extractLikelyFilePathsFromText(msg);
+              if (extracted.length > 0) return extracted;
+              // Fallback: prefer the files that were merged for this ticket.
+              return (mergedFiles || []).slice(0, 5);
+            })();
+
+            let problemFiles: Record<string, string> = {};
+            try {
+              if (candidatePaths.length > 0) {
+                problemFiles = await this.captureFilesFromSandbox(state.mainSandboxId, candidatePaths);
+              }
+            } catch {
+              problemFiles = {};
+            }
+
+            const problemFilesText = Object.keys(problemFiles).length > 0 ? buildFileBlocks(problemFiles) : '';
+
+            const fixPrompt =
+              `Fix the build/runtime issues preventing the application from passing the integration gate.\n\n` +
+              `Integration gate failure:\n${msg}\n\n` +
+              `Previous attempts history (do NOT repeat failed approaches; adapt):\n${historyText}\n\n` +
+              `Rules:\n` +
+              `- Your goal is to make the app pass \`npm run build\` and eliminate obvious runtime errors.\n` +
+              `- Make the smallest possible changes.\n` +
+              `- Do NOT add features.\n` +
+              `- Prefer fixing the files implicated by the error output.\n` +
+              `- NEVER include markdown fences like \`\`\` or language tags inside files.\n` +
+              `- If a file contains accidental markdown markers (e.g. \`\`\`css), remove them.\n` +
+              `- Output ONLY <file path=\"...\"> blocks for files you change. Each block must contain the full updated file content.\n\n` +
+              (candidatePaths.length > 0 ? `You MUST output ONLY these file(s): ${candidatePaths.join(', ')}\n\n` : '') +
+              (problemFilesText ? `Current file contents (authoritative):\n${problemFilesText}\n\n` : '');
+
+            const fixCode = await this.generateTicketCode(
+              baseUrl,
+              run.input.model,
+              fixPrompt,
+              state.mainSandboxId,
+              'fix_validation'
+            );
+
+            if (!fixCode || !fixCode.includes('<file path="')) {
+              // Backoff and keep trying (no hard cap), but avoid a tight loop.
+              await sleep(2000);
+              continue;
+            }
+
+            try {
+              const fixApplyRes = await this.applyCode(baseUrl, state.mainSandboxId, fixCode, true);
+              // Expand the patch file set with any new files touched by the fix.
+              for (const p of fixApplyRes.appliedFiles) {
+                if (p && !mergedFiles.includes(p)) mergedFiles.push(p);
+              }
+            } catch (applyErr: any) {
+              const applyMsg = applyErr?.message || 'Auto-fix apply failed';
+              this.pushHealRecord(runId, next.ticketId, 'merge_apply', applyMsg);
+            }
+
+            // Small backoff to avoid thrash.
+            await sleep(1500);
+            continue;
+          }
+        }
+      } else {
         this.emit(runId, {
           type: 'log',
           runId,
           at: now(),
-          level: 'error',
-          message: msg,
+          level: 'warning',
+          message: `Integration gate skipped (demo mode).`,
           ticketId: next.ticketId,
         });
-        // Reject the merge: revert integration to previous snapshot and continue.
-        try {
-          await this.resetSandboxToSnapshot(state.mainSandboxId, mainSnapshot);
-        } catch {
-          // ignore
-        }
-        continue;
       }
 
       // Accept merge: advance main snapshot version only after gate passes.
       const newVersion = state.snapshotVersion + 1;
-      const updatedSnapshot: Record<string, string> = { ...mainSnapshot, ...next.patchFiles };
+      // Capture a fresh snapshot from the integration sandbox so the accepted state includes any healing fixes.
+      const updatedSnapshot: Record<string, string> = await this.captureSandboxSnapshot(state.mainSandboxId);
       state.snapshotVersion = newVersion;
       state.snapshotsByVersion.set(newVersion, updatedSnapshot);
 
       // Update ticket artifacts to reflect the integration sandbox reality.
       const latest = this.runs.get(runId);
       if (latest) {
+        // Capture the final file contents for this ticket (post-heal) so restore reproduces the real app.
+        let finalPatchFiles: Record<string, string> = {};
+        try {
+          finalPatchFiles = await this.captureFilesFromSandbox(state.mainSandboxId, mergedFiles);
+        } catch {
+          finalPatchFiles = {};
+        }
+        const finalPatchCode = Object.keys(finalPatchFiles).length > 0 ? buildFileBlocks(finalPatchFiles) : undefined;
+
         latest.tickets = updateTicket(latest.tickets, next.ticketId, {
           actualFiles: mergedFiles,
           previewAvailable: true,
+          ...(finalPatchCode ? { generatedCode: finalPatchCode } : {}),
         } as any);
       }
 
@@ -1039,6 +1909,9 @@ export class BuildRunManager {
         runId,
         at: now(),
         ticketId: next.ticketId,
+        ...(typeof latest?.tickets?.find(t => t.id === next.ticketId)?.generatedCode === 'string'
+          ? { generatedCode: latest.tickets.find(t => t.id === next.ticketId)!.generatedCode }
+          : {}),
         appliedFiles: mergedFiles,
       });
 
@@ -1056,28 +1929,41 @@ export class BuildRunManager {
   }
 
   private async runIntegrationGate(baseUrl: string, sandboxId: string): Promise<void> {
-    // Keep this lightweight by default (console log check). Expand in Phase 4.
-    const res = await fetch(`${baseUrl}/api/run-tests`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ testType: 'console', sandboxId }),
-    });
+    // Deterministic integration gate (hard signal):
+    // 1) Build must succeed (`npm run build`), then
+    // 2) Console log check must pass (best-effort).
 
-    if (!res.ok) {
-      // Non-fatal: some environments may not support tests.
-      return;
+    const provider =
+      sandboxManager.getProvider(sandboxId) ||
+      (await sandboxManager.getOrCreateProvider(sandboxId));
+
+    if (!provider) {
+      throw new Error(`No sandbox provider available for integration gate: ${sandboxId}`);
     }
 
-    let json: any = null;
+    const buildRes = await provider.runCommand('npm run build');
+    if (!buildRes.success) {
+      const out = `${buildRes.stdout || ''}\n${buildRes.stderr || ''}`.trim();
+      throw new Error(`Build failed: ${out.slice(0, 4000)}`);
+    }
+
+    // Console check (non-fatal if the API route isn't available in this environment).
     try {
-      json = await res.json();
-    } catch {
-      return;
-    }
+      const res = await fetch(`${baseUrl}/api/run-tests`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ testType: 'console', sandboxId }),
+      });
 
-    const consoleResult = json?.tests?.console;
-    if (consoleResult && consoleResult.success === false) {
-      throw new Error(`Console check failed (${consoleResult.errorCount || 0} issue(s))`);
+      if (!res.ok) return;
+
+      const json = await res.json().catch(() => null);
+      const consoleResult = json?.tests?.console;
+      if (consoleResult && consoleResult.success === false) {
+        throw new Error(`Console check failed (${consoleResult.errorCount || 0} issue(s))`);
+      }
+    } catch {
+      // ignore
     }
   }
 
@@ -1088,13 +1974,13 @@ export class BuildRunManager {
     const byId = new Map(run.tickets.map(t => [t.id, t] as const));
 
     for (const t of run.tickets) {
-      if (t.status !== 'backlog') continue;
+      if (t.status !== 'backlog' && t.status !== 'rebasing') continue;
       const deps = Array.isArray(t.dependencies) ? t.dependencies : [];
       if (deps.length === 0) continue;
 
       const blocker = deps
         .map(id => byId.get(id))
-        .find(dep => dep && (dep.status === 'failed' || dep.status === 'blocked' || dep.status === 'skipped'));
+        .find(dep => dep && (dep.status === 'failed' || dep.status === 'blocked' || dep.status === 'skipped' || dep.status === 'awaiting_input'));
 
       if (!blocker) continue;
 
@@ -1107,6 +1993,37 @@ export class BuildRunManager {
 type Worker =
   | { kind: 'integration'; sandboxId: string; provider: null }
   | { kind: 'worker'; sandboxId: string; provider: SandboxProvider };
+
+function isInfraRecoverableError(e: any): boolean {
+  const msg = (e?.message || String(e || '')).toLowerCase();
+  return (
+    msg.includes('no sandbox provider') ||
+    msg.includes('sandbox_stopped') ||
+    msg.includes('status code 410') ||
+    msg.includes('410') ||
+    msg.includes('no active sandbox')
+  );
+}
+
+async function safeReleaseWorker(runId: string, worker: Worker): Promise<void> {
+  if (worker.kind !== 'worker') return;
+  try {
+    sandboxManager.markInUse(worker.sandboxId, false);
+  } catch {
+    // ignore
+  }
+  try {
+    const returned = await sandboxManager.returnToPool(worker.sandboxId);
+    if (returned) return;
+  } catch {
+    // ignore
+  }
+  try {
+    await sandboxManager.terminateSandbox(worker.sandboxId);
+  } catch {
+    // ignore
+  }
+}
 
 function normalizeSandboxPath(p: string): string {
   if (!p) return p;
@@ -1150,6 +2067,70 @@ function detectFileConflicts(
   }
 
   return conflicts;
+}
+
+function buildSnapshotConventions(snapshot: Record<string, string>): string {
+  const paths = Object.keys(snapshot || {}).filter(Boolean);
+  if (paths.length === 0) return '';
+
+  const rootCounts = new Map<string, number>();
+  const extCounts = new Map<string, number>();
+  const uiPrimitives: string[] = [];
+  const entrypoints: string[] = [];
+
+  const entryCandidates = [
+    'src/main.jsx',
+    'src/main.tsx',
+    'src/App.jsx',
+    'src/App.tsx',
+    'app/layout.tsx',
+    'app/page.tsx',
+    'index.html',
+  ];
+
+  const isComponentLike = (p: string) => /\.(tsx|jsx)$/.test(p);
+  const uiPrimitiveRe = /(^|\/)(components\/ui\/|ui\/)[^/]+\.(tsx|jsx|ts|js)$/i;
+
+  for (const p of paths) {
+    const root = p.split('/')[0] || '';
+    if (root) rootCounts.set(root, (rootCounts.get(root) || 0) + 1);
+
+    const ext = p.includes('.') ? p.slice(p.lastIndexOf('.')) : '';
+    if (ext) extCounts.set(ext, (extCounts.get(ext) || 0) + 1);
+
+    if (uiPrimitiveRe.test(p)) uiPrimitives.push(p);
+  }
+
+  for (const ep of entryCandidates) {
+    if (Object.prototype.hasOwnProperty.call(snapshot, ep)) entrypoints.push(ep);
+  }
+
+  const topRoots = Array.from(rootCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([k]) => k);
+
+  const componentExt = (() => {
+    const candidates = ['.tsx', '.jsx'] as const;
+    const ranked = candidates
+      .map(ext => [ext, extCounts.get(ext) || 0] as const)
+      .sort((a, b) => b[1] - a[1]);
+    const [best, count] = ranked[0] || ['.tsx', 0];
+    return count > 0 ? best : '';
+  })();
+
+  const uiList = uiPrimitives.sort().slice(0, 20);
+
+  const lines: string[] = [];
+  if (topRoots.length > 0) lines.push(`- Root dirs: ${topRoots.join(', ')}`);
+  if (entrypoints.length > 0) lines.push(`- Entrypoints: ${entrypoints.join(', ')}`);
+  if (componentExt) lines.push(`- Preferred component extension: ${componentExt}`);
+  if (uiList.length > 0) {
+    lines.push(`- Existing UI primitives (edit these; do not duplicate under new paths/extensions):`);
+    for (const p of uiList) lines.push(`  - ${p}`);
+  }
+
+  return lines.join('\n');
 }
 
 function hasBlockingIssues(review: any): boolean {

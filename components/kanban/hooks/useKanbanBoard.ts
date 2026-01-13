@@ -146,16 +146,29 @@ export function useKanbanBoard(initialPlan?: BuildPlan) {
 
       const updates: Partial<KanbanTicket> = { status };
 
+      if (status === 'backlog') {
+        updates.error = undefined;
+        updates.warnings = undefined;
+        updates.progress = 0;
+      }
+
       if (status === 'generating') {
         updates.startedAt = new Date();
         updates.progress = 0;
+        updates.error = undefined;
+        updates.warnings = undefined;
       } else if (status === 'done') {
         updates.completedAt = new Date();
         updates.progress = 100;
+        updates.error = undefined;
         if (t.startedAt) {
           updates.duration = Date.now() - new Date(t.startedAt).getTime();
         }
       } else if (status === 'failed') {
+        updates.error = error;
+        updates.retryCount = (t.retryCount || 0) + 1;
+      } else if (status === 'rebasing') {
+        // Merge conflict or rebase retry. Keep the reason visible and count it as a retry.
         updates.error = error;
         updates.retryCount = (t.retryCount || 0) + 1;
       } else if (status === 'blocked') {
@@ -349,7 +362,7 @@ export function useKanbanBoard(initialPlan?: BuildPlan) {
       completed: completed.length,
       failed: currentTickets.filter(t => t.status === 'failed').length,
       skipped: currentTickets.filter(t => t.status === 'skipped').length,
-      inProgress: currentTickets.filter(t => ['generating', 'applying', 'pr_review', 'merge_queued', 'merging', 'testing'].includes(t.status)).length,
+      inProgress: currentTickets.filter(t => ['generating', 'applying', 'pr_review', 'merge_queued', 'rebasing', 'merging', 'testing'].includes(t.status)).length,
       blocked: currentTickets.filter(t => t.status === 'blocked').length,
       totalDuration,
       averageTicketTime: completed.length > 0 ? totalDuration / completed.length : 0,
@@ -366,6 +379,7 @@ export function useKanbanBoard(initialPlan?: BuildPlan) {
       applying: [],
       pr_review: [],
       merge_queued: [],
+      rebasing: [],
       merging: [],
       testing: [],
       done: [],

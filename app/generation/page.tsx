@@ -135,6 +135,7 @@ function AISandboxPage() {
   const [sandboxExpired, setSandboxExpired] = useState(false);
   const [isRestoringSandbox, setIsRestoringSandbox] = useState(false);
   const [previewHasUpdate, setPreviewHasUpdate] = useState(false);
+  const [previewDiagnostics, setPreviewDiagnostics] = useState<{ message: string; logs?: string[] } | null>(null);
   const [autoOpenPreviewOnApply, setAutoOpenPreviewOnApply] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     try {
@@ -143,8 +144,8 @@ function AISandboxPage() {
       return false;
     }
   });
-  // Hard-coded parallelism setting (requested): always use 4 workers for server-side BuildRuns.
-  const maxConcurrency = 4;
+  // Hard-coded parallelism setting (demo-first): default to 10 workers for server-side BuildRuns.
+  const maxConcurrency = 10;
 
   // Server-side BuildRun (Phase 1): keep build execution truth on the server and stream events via SSE.
   const [buildRunId, setBuildRunId] = useState<string | null>(null);
@@ -204,6 +205,49 @@ function AISandboxPage() {
       // ignore
     }
   }, [autoOpenPreviewOnApply]);
+
+  // On-demand warm sandbox pool:
+  // - Burst to the configured maximum while this page is open (fast demos)
+  // - Scale back to baseline when leaving
+  useEffect(() => {
+    const setPoolTarget = async (target: 'burst' | 'baseline') => {
+      try {
+        const knownSandboxIds = (() => {
+          if (typeof window === 'undefined') return [];
+          try {
+            const raw = localStorage.getItem('warmSandboxIds');
+            const parsed = raw ? JSON.parse(raw) : [];
+            return Array.isArray(parsed) ? parsed.filter((x: any) => typeof x === 'string') : [];
+          } catch {
+            return [];
+          }
+        })();
+
+        const res = await fetch('/api/sandbox-pool', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target, knownSandboxIds }),
+        });
+
+        const json = await res.json().catch(() => null);
+        const ids = json?.pool?.sandboxIds;
+        if (Array.isArray(ids)) {
+          try {
+            localStorage.setItem('warmSandboxIds', JSON.stringify(ids.slice(0, 25)));
+          } catch {
+            // ignore
+          }
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    void setPoolTarget('burst');
+    return () => {
+      void setPoolTarget('baseline');
+    };
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -462,18 +506,54 @@ Visual Features: ${uiOption.features.join(', ')}`;
 
       setLoading(true);
       try {
-        // Always create a fresh sandbox - old sandbox IDs in URL are likely expired
+        // Reuse sandbox from URL when possible to avoid unnecessary sandbox creation (rate limits + usage caps).
+        // If the sandbox is stopped/unhealthy, fall back to creating a fresh sandbox.
+        let reused = false;
         if (sandboxIdParam) {
-          console.log('[home] Found sandbox ID in URL, but creating fresh sandbox (old ones expire)');
-          // Clear the old sandbox ID from URL
-          const newParams = new URLSearchParams(searchParams.toString());
-          newParams.delete('sandbox');
-          window.history.replaceState({}, '', `/generation?${newParams.toString()}`);
+          try {
+            console.log('[home] Found sandbox ID in URL, checking status...');
+            const statusRes = await fetch(`/api/sandbox-status?sandboxId=${encodeURIComponent(sandboxIdParam)}`, {
+              cache: 'no-store',
+            });
+            const statusJson: any = await statusRes.json().catch(() => null);
+            const s = statusJson?.sandboxData;
+            if (
+              statusRes.ok &&
+              statusJson?.success &&
+              statusJson?.active &&
+              s?.sandboxId &&
+              s?.url &&
+              statusJson?.sandboxStopped !== true
+            ) {
+              console.log('[home] Reusing sandbox from URL:', s.sandboxId);
+              sandboxCreated = true;
+              reused = true;
+              setSandboxData({
+                sandboxId: s.sandboxId,
+                url: s.url,
+                templateTarget: 'vite',
+                devPort: 5173,
+              } as any);
+              updateStatus('Sandbox active', true);
+              setTimeout(fetchSandboxFiles, 500);
+              setTimeout(() => {
+                if (iframeRef.current) {
+                  iframeRef.current.src = `${s.url}?t=${Date.now()}&restored=true`;
+                }
+              }, 100);
+            } else {
+              console.warn('[home] Sandbox from URL not reusable; will create fresh sandbox:', statusJson?.message);
+            }
+          } catch (e) {
+            console.warn('[home] Sandbox status check failed; will create fresh sandbox:', e);
+          }
         }
-        
-        console.log('[home] Creating new sandbox...');
-        sandboxCreated = true;
-        await createSandbox(true);
+
+        if (!reused) {
+          console.log('[home] Creating new sandbox...');
+          sandboxCreated = true;
+          await createSandbox(true);
+        }
 
         // If we have a URL from the home page, mark for automatic start
         if (storedUrl && isMounted) {
@@ -1088,6 +1168,26 @@ Visual Features: ${uiOption.features.join(', ')}`;
     }
   };
 
+  const runPreviewDiagnostics = async () => {
+    const sid = String(sandboxData?.sandboxId || '').trim();
+    if (!sid) return;
+    try {
+      const res = await fetch(`/api/sandbox-logs?sandboxId=${encodeURIComponent(sid)}`);
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) {
+        setPreviewDiagnostics({ message: data?.error || `Failed to fetch sandbox logs (HTTP ${res.status})` });
+        return;
+      }
+      const logs = Array.isArray(data.logs) ? data.logs : [];
+      setPreviewDiagnostics({
+        message: data.status === 'running' ? 'Vite appears to be running. If the iframe is blank, it may be a runtime crash or render error.' : 'Vite may not be running.',
+        logs,
+      });
+    } catch (e: any) {
+      setPreviewDiagnostics({ message: e?.message || 'Failed to fetch sandbox logs' });
+    }
+  };
+
   const restoreKanbanPlanToSandbox = async (
     overrideSandbox?: SandboxData,
     reason: 'manual' | 'recreate' = 'manual'
@@ -1205,6 +1305,18 @@ Visual Features: ${uiOption.features.join(', ')}`;
             'system'
           );
         }
+      }
+
+      // Best-effort: restart Vite after a full restore so the preview isn't stuck on a blank/old bundle.
+      try {
+        await fetch('/api/restart-vite', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sandboxId: activeSandbox.sandboxId }),
+        });
+        await new Promise(r => setTimeout(r, 1500));
+      } catch {
+        // ignore
       }
 
       addChatMessage('✅ Restore complete. Reloading preview…', 'system');
@@ -1325,9 +1437,10 @@ Apply these design specifications consistently across all components.`;
     applying: 4,
     pr_review: 5,
     merge_queued: 6,
-    merging: 7,
-    testing: 8,
-    done: 9,
+    rebasing: 7,
+    merging: 8,
+    testing: 9,
+    done: 10,
     blocked: -1,
     failed: -1,
     skipped: -1,
@@ -1341,6 +1454,7 @@ Apply these design specifications consistently across all components.`;
     applying: 'Applying',
     pr_review: 'PR Review',
     merge_queued: 'Merge Queued',
+    rebasing: 'Rebasing',
     merging: 'Merging',
     testing: 'Testing',
     done: 'Done',
@@ -1843,6 +1957,18 @@ Requirements:
         setKanbanBuildActive(false);
         kanban.setIsPaused(false);
         setGenerationProgress(prev => ({ ...prev, isGenerating: false, status: 'Build complete' }));
+        // If the user is viewing the preview, force a refresh so the latest merged state is visible.
+        try {
+          if ((activeTab === 'preview' || activeTab === 'split') && iframeRef.current && sandboxData?.url) {
+            setIsPreviewRefreshing(true);
+            iframeRef.current.src = `${sandboxData.url}?t=${Date.now()}&merged=true`;
+            setTimeout(() => setIsPreviewRefreshing(false), 1200);
+          } else {
+            setPreviewHasUpdate(true);
+          }
+        } catch {
+          setPreviewHasUpdate(true);
+        }
       } else if (evt.status === 'failed') {
         setKanbanBuildActive(false);
         kanban.setIsPaused(false);
@@ -1857,6 +1983,9 @@ Requirements:
       if (typeof evt.ticketId === 'string') {
         kanban.setCurrentTicketId(evt.ticketId);
         kanban.updateTicketStatus(evt.ticketId, evt.status as TicketStatus, evt.error);
+        if (typeof evt.retryCount === 'number' && Number.isFinite(evt.retryCount)) {
+          kanban.editTicket(evt.ticketId, { retryCount: evt.retryCount });
+        }
         if (typeof evt.progress === 'number') {
           kanban.updateTicketProgress(evt.ticketId, evt.progress);
         }
@@ -1867,6 +1996,16 @@ Requirements:
             setPreviewHasUpdate(false);
           } else {
             setPreviewHasUpdate(true);
+          }
+          // Best-effort: refresh iframe when a merge is accepted so View shows the latest app without manual reload.
+          try {
+            if ((activeTab === 'preview' || activeTab === 'split' || autoOpenPreviewOnApply) && iframeRef.current && sandboxData?.url) {
+              setIsPreviewRefreshing(true);
+              iframeRef.current.src = `${sandboxData.url}?t=${Date.now()}&merged=true`;
+              setTimeout(() => setIsPreviewRefreshing(false), 1200);
+            }
+          } catch {
+            // ignore
           }
         }
       }
@@ -1891,6 +2030,14 @@ Requirements:
         if (typeof evt.validationDurationMs === 'number') {
           addChatMessage(`⏱️ Validation: ${(evt.validationDurationMs / 1000).toFixed(1)}s`, 'system');
         }
+      }
+      return;
+    }
+
+    if (evt.type === 'ticket_warnings') {
+      if (typeof evt.ticketId === 'string') {
+        const warnings = Array.isArray(evt.warnings) ? evt.warnings : [];
+        kanban.editTicket(evt.ticketId, { warnings });
       }
       return;
     }
@@ -1957,7 +2104,10 @@ Requirements:
         model: aiModel,
         uiStyle: (kanban.plan as any)?.uiStyle,
         onlyTicketId,
-        maxConcurrency: 4,
+        maxConcurrency,
+        // Demo speed: skip PR review + integration gate ("testing") so tickets don't bottleneck on quality gates.
+        skipPrReview: true,
+        skipIntegrationGate: true,
       }),
     });
 
@@ -2961,11 +3111,20 @@ Tip: I automatically detect and install npm packages from your code imports (lik
       sandboxCreationRef.current = false; // Reset to allow retry
 
       const code = error?.code as string | undefined;
-      const nonRetryable =
-        code === 'SANDBOX_PROVIDER_NOT_CONFIGURED' ||
-        code === 'USAGE_LIMIT_REACHED' ||
-        code === 'RATE_LIMITED' ||
-        /rate limit/i.test(error?.message || '');
+      const isRateLimited = code === 'RATE_LIMITED' || /rate limit/i.test(error?.message || '');
+      const nonRetryable = code === 'SANDBOX_PROVIDER_NOT_CONFIGURED' || code === 'USAGE_LIMIT_REACHED';
+
+      if (isRateLimited && retryCount < MAX_RETRIES) {
+        const retryAfterSeconds = (() => {
+          const v = Number(error?.retryAfter);
+          if (Number.isFinite(v) && v > 0) return Math.min(120, Math.max(1, Math.floor(v)));
+          return 15;
+        })();
+        console.log(`[createSandbox] Rate limited. Retrying in ${retryAfterSeconds}s (${retryCount + 1}/${MAX_RETRIES})...`);
+        updateStatus(`Rate limited. Retrying in ${retryAfterSeconds}s...`, false);
+        await new Promise(resolve => setTimeout(resolve, retryAfterSeconds * 1000));
+        return createSandbox(fromHomeScreen, retryCount + 1, template);
+      }
 
       // Auto-retry on transient failure only
       if (!nonRetryable && retryCount < MAX_RETRIES) {
@@ -4138,6 +4297,22 @@ Tip: I automatically detect and install npm packages from your code imports (lik
                   </svg>
                 </button>
               ) : null}
+              {sandboxData?.sandboxId ? (
+                <button
+                  onClick={runPreviewDiagnostics}
+                  className="bg-white/90 hover:bg-white text-gray-700 p-2 rounded-lg shadow-lg transition-all duration-200 hover:scale-105"
+                  title="Diagnostics (fetch Vite logs)"
+                >
+                  <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M11.25 9.75h1.5m-1.5 4.5h1.5M12 3.75c-4.56 0-8.25 3.69-8.25 8.25S7.44 20.25 12 20.25 20.25 16.56 20.25 12 16.56 3.75 12 3.75z"
+                    />
+                  </svg>
+                </button>
+              ) : null}
               <button
                 disabled={isRestoringSandbox}
                 onClick={async () => {
@@ -4180,6 +4355,29 @@ Tip: I automatically detect and install npm packages from your code imports (lik
                 </svg>
               </button>
             </div>
+
+            {previewDiagnostics && (
+              <div className="absolute left-4 bottom-4 max-w-lg bg-white/95 border border-gray-200 rounded-lg shadow-lg p-3 text-xs text-gray-700">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="font-medium">Preview diagnostics</div>
+                    <div className="text-gray-600 mt-1">{previewDiagnostics.message}</div>
+                  </div>
+                  <button
+                    onClick={() => setPreviewDiagnostics(null)}
+                    className="text-gray-500 hover:text-gray-800"
+                    title="Close"
+                  >
+                    ✕
+                  </button>
+                </div>
+                {Array.isArray(previewDiagnostics.logs) && previewDiagnostics.logs.length > 0 && (
+                  <pre className="mt-2 max-h-40 overflow-auto bg-gray-50 border border-gray-200 rounded p-2 whitespace-pre-wrap">
+                    {previewDiagnostics.logs.join('\n')}
+                  </pre>
+                )}
+              </div>
+            )}
           </div>
         );
       }
