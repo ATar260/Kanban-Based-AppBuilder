@@ -34,6 +34,31 @@ export async function POST(request: NextRequest) {
     const skipPrReview = parseBool(body?.skipPrReview);
     const skipIntegrationGate = parseBool(body?.skipIntegrationGate);
 
+    // #region agent log (debug)
+    fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'debug-session',
+        runId: 'start-build-pre',
+        hypothesisId: 'SB8',
+        location: 'app/api/build-runs/start/route.ts:POST:received',
+        message: 'build-runs/start received request',
+        data: {
+          sandboxId: sandboxId || null,
+          model: model || null,
+          ticketsCount: Array.isArray(tickets) ? tickets.length : null,
+          planId: typeof (plan as any)?.id === 'string' ? (plan as any).id : null,
+          onlyTicketId: onlyTicketId || null,
+          maxConcurrency: maxConcurrency ?? null,
+          skipPrReview: typeof skipPrReview === 'boolean' ? skipPrReview : null,
+          skipIntegrationGate: typeof skipIntegrationGate === 'boolean' ? skipIntegrationGate : null,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion agent log (debug)
+
     if (!sandboxId) {
       return NextResponse.json({ success: false, error: 'sandboxId is required' }, { status: 400 });
     }

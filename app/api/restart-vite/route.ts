@@ -12,6 +12,111 @@ declare global {
 
 const RESTART_COOLDOWN_MS = 5000; // 5 second cooldown between restarts
 
+function patchViteConfigAllowAllHosts(contents: string): { patched: string; changed: boolean } {
+  if (!contents) return { patched: contents, changed: false };
+
+  // Most reliable for ephemeral sandbox preview domains: disable the host check.
+  // This prevents Vite's "Blocked request. This host is not allowed." error for tunnel hosts.
+  const allowedHostsValue = `allowedHosts: true`;
+
+  // If allowedHosts already exists, normalize it.
+  if (/\ballowedHosts\b/.test(contents)) {
+    const replaced = contents.replace(
+      /allowedHosts\s*:\s*([\s\S]*?)(?=,\s*\w+\s*:|,\s*\}|}\s*\)|\n\s*\})/m,
+      allowedHostsValue
+    );
+    return { patched: replaced, changed: replaced !== contents };
+  }
+
+  // If there's an existing server block, inject allowedHosts inside it.
+  const serverBlock = /(server\s*:\s*\{\s*)/m;
+  if (serverBlock.test(contents)) {
+    return {
+      patched: contents.replace(serverBlock, `$1${allowedHostsValue}, `),
+      changed: true,
+    };
+  }
+
+  // If using defineConfig({ ... }), inject a server block at the top-level.
+  const defineConfigBlock = /(defineConfig\s*\(\s*\{\s*)/m;
+  if (defineConfigBlock.test(contents)) {
+    return {
+      patched: contents.replace(defineConfigBlock, `$1\n  server: { ${allowedHostsValue} },\n  `),
+      changed: true,
+    };
+  }
+
+  // If exporting a plain object, inject server at the top-level.
+  const exportDefaultObject = /(export\s+default\s+\{\s*)/m;
+  if (exportDefaultObject.test(contents)) {
+    return {
+      patched: contents.replace(exportDefaultObject, `$1\n  server: { ${allowedHostsValue} },\n  `),
+      changed: true,
+    };
+  }
+
+  return { patched: contents, changed: false };
+}
+
+async function ensureViteHostAllowed(provider: any): Promise<{
+  createdConfigPath: string | null;
+  patchedConfigPaths: string[];
+  attemptedConfigPaths: string[];
+}> {
+  const attempted: string[] = [];
+  const patched: string[] = [];
+
+  let devScript = '';
+  try {
+    const pkgRaw = await provider.readFile('package.json');
+    const pkg = JSON.parse(pkgRaw);
+    devScript = String(pkg?.scripts?.dev || '');
+  } catch {
+    devScript = '';
+  }
+
+  const configMatch = devScript.match(/--config(?:=|\s+)(['"]?)([^'"\s]+)\1/);
+  const candidates = [
+    configMatch?.[2],
+    'vite.config.ts',
+    'vite.config.mts',
+    'vite.config.js',
+    'vite.config.mjs',
+    'vite.config.cjs',
+  ].filter(Boolean) as string[];
+
+  // Deduplicate while preserving order
+  const uniqueCandidates = Array.from(new Set(candidates.map(p => String(p))));
+
+  for (const p of uniqueCandidates) {
+    attempted.push(p);
+    try {
+      const raw = await provider.readFile(p);
+      const { patched: next, changed } = patchViteConfigAllowAllHosts(raw);
+      if (changed) {
+        await provider.writeFile(p, next);
+        patched.push(p);
+      }
+    } catch {
+      // try next
+    }
+  }
+
+  if (patched.length === 0) {
+    // If we couldn't find/patch any config file, create a minimal config so Vite will pick it up.
+    const createdConfigPath = 'vite.config.ts';
+    const content = `import { defineConfig } from 'vite';\n\nexport default defineConfig({\n  server: {\n    allowedHosts: true,\n  },\n});\n`;
+    try {
+      await provider.writeFile(createdConfigPath, content);
+      return { createdConfigPath, patchedConfigPaths: [], attemptedConfigPaths: attempted };
+    } catch {
+      // ignore
+    }
+  }
+
+  return { createdConfigPath: null, patchedConfigPaths: patched, attemptedConfigPaths: attempted };
+}
+
 export async function POST(request: NextRequest) {
   let sandboxKeyForError = 'active';
   try {
@@ -79,6 +184,42 @@ export async function POST(request: NextRequest) {
     global.viteRestartInProgressBySandbox[sandboxKey] = true;
 
     console.log('[restart-vite] Using provider method to restart Vite...');
+
+    // Patch Vite config to allow tunnel hosts (avoids "Blocked request" on modal/vercel domains).
+    try {
+      const patchResult = await ensureViteHostAllowed(provider);
+      // #region agent log (debug)
+      fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: 'debug-session',
+          runId: 'preview-stuck-pre',
+          hypothesisId: 'VH1',
+          location: 'app/api/restart-vite/route.ts:POST:ensureViteHostAllowed',
+          message: 'ensureViteHostAllowed completed',
+          data: patchResult,
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      // #endregion agent log (debug)
+    } catch (e: any) {
+      // #region agent log (debug)
+      fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: 'debug-session',
+          runId: 'preview-stuck-pre',
+          hypothesisId: 'VH1',
+          location: 'app/api/restart-vite/route.ts:POST:ensureViteHostAllowed:error',
+          message: 'ensureViteHostAllowed failed',
+          data: { error: String(e?.message || e).slice(0, 200) },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      // #endregion agent log (debug)
+    }
 
     // Use the provider's restartViteServer method if available
     if (typeof provider.restartViteServer === 'function') {

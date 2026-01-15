@@ -6,6 +6,8 @@ import { sandboxManager } from '@/lib/sandbox/sandbox-manager';
 import { sandboxCreationLimiter } from '@/lib/rateLimit';
 import { getUsageActor } from '@/lib/usage/identity';
 import { getUsageSnapshotForActor, startSandboxSessionForActor } from '@/lib/usage/persistence';
+import { ModalProvider } from '@/lib/sandbox/providers/modal-provider';
+import { VercelProvider } from '@/lib/sandbox/providers/vercel-provider';
 
 // Store active sandbox globally
 declare global {
@@ -54,13 +56,46 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const body = await (async () => {
+      try {
+        return await request.json();
+      } catch {
+        return null;
+      }
+    })();
+
     let templateTarget: 'vite' | 'next' = 'vite';
-    try {
-      const body = await request.json();
-      if (body?.template === 'next') templateTarget = 'next';
-      if (body?.template === 'vite') templateTarget = 'vite';
-    } catch {
-      // No body provided; default to vite
+    if (body?.template === 'next') templateTarget = 'next';
+    if (body?.template === 'vite') templateTarget = 'vite';
+
+    const requestedProvider: 'auto' | 'modal' | 'vercel' = (() => {
+      const raw = String(body?.provider ?? body?.sandboxProvider ?? '').trim().toLowerCase();
+      if (raw === 'modal') return 'modal';
+      if (raw === 'vercel') return 'vercel';
+      return 'auto';
+    })();
+
+    // If the UI explicitly requests a provider, fail fast if it isn't configured.
+    if (requestedProvider === 'modal' && !SandboxFactory.isModalAvailable()) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Modal sandbox provider not configured. Set MODAL_TOKEN_ID and MODAL_TOKEN_SECRET.',
+          code: 'SANDBOX_PROVIDER_NOT_CONFIGURED',
+        },
+        { status: 503 }
+      );
+    }
+    if (requestedProvider === 'vercel' && !SandboxFactory.isVercelAvailable()) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            'Vercel sandbox provider not configured. Set VERCEL_OIDC_TOKEN (or VERCEL_TOKEN + VERCEL_TEAM_ID + VERCEL_PROJECT_ID).',
+          code: 'SANDBOX_PROVIDER_NOT_CONFIGURED',
+        },
+        { status: 503 }
+      );
     }
 
     // Modal sandboxes currently support the Vite template only.
@@ -98,13 +133,21 @@ export async function POST(request: NextRequest) {
     }
 
     // Create new sandbox using factory (prefer pooled warm sandbox when enabled)
-    let provider = await sandboxManager.getPooledSandbox();
+    let provider = requestedProvider === 'auto' ? await sandboxManager.getPooledSandbox() : null;
     let sandboxInfo = provider?.getSandboxInfo?.() || null;
 
     if (provider && sandboxInfo?.sandboxId) {
       console.log(`[create-ai-sandbox-v2] Reused pooled sandbox ${sandboxInfo.sandboxId}`);
     } else {
-      provider = SandboxFactory.create();
+      if (requestedProvider === 'modal') {
+        console.log('[create-ai-sandbox-v2] Creating Modal sandbox (UI override)');
+        provider = new ModalProvider({});
+      } else if (requestedProvider === 'vercel') {
+        console.log('[create-ai-sandbox-v2] Creating Vercel sandbox (UI override)');
+        provider = new VercelProvider({});
+      } else {
+        provider = SandboxFactory.create();
+      }
       sandboxInfo = await provider.createSandbox();
 
       console.log('[create-ai-sandbox-v2] Setting up Vite React app...');
