@@ -27,7 +27,9 @@ export class SandboxFactory {
     const modalOk = this.isModalConfigured(resolvedConfig);
     const vercelOk = this.isVercelConfigured(resolvedConfig);
 
-    // Prefer Vercel for preview stability when both are configured, unless explicitly pinned to Modal.
+    // IMPORTANT:
+    // - "auto" should be reliable and low-surprise. We prefer Modal when both are configured.
+    // - Vercel Sandboxes may return 402 depending on plan/limits; Modal remains the default fallback.
     if (preferred === 'vercel') {
       if (vercelOk) {
         console.log(`[SandboxFactory] Creating Vercel sandbox (SANDBOX_PROVIDER=vercel)`);
@@ -48,13 +50,13 @@ export class SandboxFactory {
       }
     } else {
       // auto
-      if (vercelOk) {
-        console.log(`[SandboxFactory] Creating Vercel sandbox (auto)`);
-        return new VercelProvider(resolvedConfig);
-      }
       if (modalOk) {
         console.log(`[SandboxFactory] Creating Modal sandbox (auto)`);
         return new ModalProvider(resolvedConfig);
+      }
+      if (vercelOk) {
+        console.log(`[SandboxFactory] Creating Vercel sandbox (auto; Modal not configured)`);
+        return new VercelProvider(resolvedConfig);
       }
     }
 
@@ -92,6 +94,8 @@ export class SandboxFactory {
   }
 
   private static isVercelConfigured(_config?: SandboxProviderConfig): boolean {
+    // Opt-out switch (useful if Vercel Sandboxes are not available due to billing/limits).
+    if (process.env.SANDBOX_DISABLE_VERCEL === 'true') return false;
     // Support either OIDC or token+team+project for Vercel Sandboxes
     if (process.env.VERCEL_OIDC_TOKEN) return true;
     return !!(process.env.VERCEL_TOKEN && process.env.VERCEL_TEAM_ID && process.env.VERCEL_PROJECT_ID);

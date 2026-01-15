@@ -39,7 +39,15 @@ export class ModalProvider extends SandboxProvider {
         encryptedPorts: [5173],
       });
 
-      const sandboxId = this.modalSandbox.id || `modal_${Date.now()}`;
+      // IMPORTANT: Modal's JS SDK uses `object_id` for the stable sandbox identifier (used by `sandboxes.fromId`).
+      // Do NOT fall back to a synthetic id in normal operation, or reconnect-by-id will be impossible in prod/serverless.
+      const rawId =
+        (this.modalSandbox as any)?.object_id ??
+        (this.modalSandbox as any)?.id ??
+        (this.modalSandbox as any)?.objectId ??
+        (this.modalSandbox as any)?.objectID ??
+        null;
+      const sandboxId = rawId ? String(rawId) : `modal_${Date.now()}`;
 
       const tunnels = await this.modalSandbox.tunnels();
       console.log('[ModalProvider] Initial tunnels:', JSON.stringify(tunnels, null, 2));
@@ -63,6 +71,45 @@ export class ModalProvider extends SandboxProvider {
     } catch (error) {
       console.error('[ModalProvider] Error creating sandbox:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Reconnect to an existing Modal Sandbox by its sandboxId.
+   * This is critical in production/serverless where route handlers can run in different isolates.
+   */
+  async reconnect(sandboxId: string): Promise<boolean> {
+    const id = String(sandboxId || '').trim();
+    if (!id) return false;
+
+    try {
+      // Modal JS SDK exposes `sandboxes.fromId(...)` to get a handle to an existing sandbox.
+      const sandbox = await (this.modal as any).sandboxes.fromId(id);
+      this.modalSandbox = sandbox;
+      this.sandbox = sandbox;
+
+      // Best-effort: refresh tunnel URL so health checks + preview have a URL.
+      try {
+        const tunnels = await sandbox.tunnels();
+        this.tunnelUrl = tunnels?.[5173]?.url || null;
+      } catch {
+        this.tunnelUrl = null;
+      }
+
+      this.sandboxInfo = {
+        sandboxId: id,
+        url: this.tunnelUrl || 'pending',
+        provider: 'modal',
+        createdAt: new Date(),
+      };
+
+      return true;
+    } catch (error) {
+      console.error('[ModalProvider] Failed to reconnect to Modal sandbox:', {
+        sandboxId: id,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return false;
     }
   }
 

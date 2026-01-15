@@ -70,13 +70,15 @@ class SandboxManager {
     if (pref === 'vercel') return 'vercel';
     if (pref === 'modal') return 'modal';
 
-    // auto: prefer Vercel when configured, else Modal
-    const vercelOk =
-      Boolean(process.env.VERCEL_OIDC_TOKEN) ||
-      Boolean(process.env.VERCEL_TOKEN && process.env.VERCEL_TEAM_ID && process.env.VERCEL_PROJECT_ID);
+    // auto: prefer Modal when configured, else Vercel
+    const disableVercel = process.env.SANDBOX_DISABLE_VERCEL === 'true';
     const modalOk = Boolean(process.env.MODAL_TOKEN_ID && process.env.MODAL_TOKEN_SECRET);
-    if (vercelOk) return 'vercel';
+    const vercelOk = !disableVercel && (
+      Boolean(process.env.VERCEL_OIDC_TOKEN) ||
+      Boolean(process.env.VERCEL_TOKEN && process.env.VERCEL_TEAM_ID && process.env.VERCEL_PROJECT_ID)
+    );
     if (modalOk) return 'modal';
+    if (vercelOk) return 'vercel';
     return null;
   }
 

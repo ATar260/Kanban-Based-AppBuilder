@@ -307,37 +307,50 @@ export async function POST(request: NextRequest) {
       global.existingFiles = new Set<string>();
     }
 
+    const requestedSandboxId = typeof sandboxId === 'string' ? sandboxId.trim() : '';
+
     // Try to get provider from sandbox manager first
-    let provider = sandboxId ? sandboxManager.getProvider(sandboxId) : sandboxManager.getActiveProvider();
+    let provider = requestedSandboxId ? sandboxManager.getProvider(requestedSandboxId) : sandboxManager.getActiveProvider();
 
     // Fall back to global state if not found in manager
     if (!provider) {
       provider = global.activeSandboxProvider;
     }
 
-    // If we have a sandboxId but no provider, try to get or create one
-    if (!provider && sandboxId) {
-      console.log(`[apply-ai-code-stream] No provider found for sandbox ${sandboxId}, attempting to get or create...`);
+    // If we found a provider but it points at a different sandbox, prefer the requested sandboxId.
+    if (requestedSandboxId && provider?.getSandboxInfo?.()?.sandboxId && provider.getSandboxInfo()!.sandboxId !== requestedSandboxId) {
+      provider = sandboxManager.getProvider(requestedSandboxId) || null;
+    }
+
+    // If we have a sandboxId but no provider, try to reconnect (serverless-safe).
+    if (!provider && requestedSandboxId) {
+      console.log(`[apply-ai-code-stream] No provider found for sandbox ${requestedSandboxId}, attempting to reconnect...`);
 
       try {
-        provider = await sandboxManager.getOrCreateProvider(sandboxId);
-
-        // If we got a new provider (not reconnected), we need to create a new sandbox
-        if (!provider.getSandboxInfo()) {
-          console.log(`[apply-ai-code-stream] Creating new sandbox since reconnection failed for ${sandboxId}`);
-          await provider.createSandbox();
-          await provider.setupViteApp();
-          sandboxManager.registerSandbox(sandboxId, provider);
-        }
+        provider = await sandboxManager.getOrCreateProvider(requestedSandboxId);
 
         // Update legacy global state
         global.activeSandboxProvider = provider;
-        console.log(`[apply-ai-code-stream] Successfully got provider for sandbox ${sandboxId}`);
+
+        const info = provider?.getSandboxInfo?.();
+        if (!info || info.sandboxId !== requestedSandboxId) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: `Sandbox ${requestedSandboxId} is not available. Please create a new sandbox and try again.`,
+              code: 'SANDBOX_NOT_FOUND',
+            },
+            { status: 404 }
+          );
+        }
+
+        console.log(`[apply-ai-code-stream] Successfully reconnected provider for sandbox ${requestedSandboxId}`);
       } catch (providerError) {
-        console.error(`[apply-ai-code-stream] Failed to get or create provider for sandbox ${sandboxId}:`, providerError);
+        console.error(`[apply-ai-code-stream] Failed to reconnect provider for sandbox ${requestedSandboxId}:`, providerError);
         return NextResponse.json({
           success: false,
-          error: `Failed to create sandbox provider for ${sandboxId}. The sandbox may have expired.`,
+          error: `Failed to reconnect to sandbox ${requestedSandboxId}. The sandbox may have expired.`,
+          code: 'SANDBOX_RECONNECT_FAILED',
           results: {
             filesCreated: [],
             packagesInstalled: [],
