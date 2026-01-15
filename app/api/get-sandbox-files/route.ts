@@ -3,6 +3,7 @@ import { sandboxManager } from '@/lib/sandbox/sandbox-manager';
 import { parseJavaScriptFile, buildComponentTree } from '@/lib/file-parser';
 import { FileManifest, FileInfo, RouteInfo } from '@/types/file-manifest';
 import type { SandboxState } from '@/types/sandbox';
+import { shJoin, shQuote } from '@/lib/sandbox/sh';
 // SandboxState type used implicitly through global.sandboxState
 
 declare global {
@@ -35,8 +36,16 @@ export async function GET(request: NextRequest) {
 
     console.log('[get-sandbox-files] Fetching and analyzing file structure...');
     
-    // Get list of all relevant files
-    const findCommand = [
+    const RELEVANT_EXTS = new Set(['.jsx', '.js', '.tsx', '.ts', '.css', '.json']);
+    const isRelevantFile = (p: string) => {
+      const s = String(p || '').trim().replace(/\\/g, '/');
+      const dot = s.lastIndexOf('.');
+      if (dot === -1) return false;
+      return RELEVANT_EXTS.has(s.slice(dot).toLowerCase());
+    };
+
+    // Get list of all relevant files (primary strategy: find with grouped -name predicates)
+    const findCommand = shJoin([
       'find', '.',
       '-name', 'node_modules', '-prune', '-o',
       '-name', '.git', '-prune', '-o',
@@ -52,11 +61,13 @@ export async function GET(request: NextRequest) {
       '-o', '-name', '*.json',
       ')',
       '-print'
-    ].join(' ');
+    ]);
 
+    let fileList: string[] = [];
     const findResult = await provider.runCommand(findCommand);
-    
-    if (findResult.exitCode !== 0) {
+    if (findResult.exitCode === 0) {
+      fileList = (findResult.stdout || '').split('\n').filter((f: string) => f.trim());
+    } else {
       const msg = findResult.stderr || 'Failed to list files';
       if (msg.includes('Status code 410')) {
         return NextResponse.json(
@@ -67,10 +78,24 @@ export async function GET(request: NextRequest) {
           { status: 410 }
         );
       }
-      throw new Error(msg);
+
+      // Fallback strategy: provider-native file listing (avoid shell parsing issues)
+      try {
+        const listed = await provider.listFiles();
+        fileList = (listed || [])
+          .map((p: string) => String(p || '').trim())
+          .filter(Boolean)
+          .filter(isRelevantFile)
+          .map((p: string) => (p.startsWith('./') ? p : `./${p}`));
+      } catch {
+        fileList = [];
+      }
+
+      if (fileList.length === 0) {
+        throw new Error(msg);
+      }
     }
-    
-    const fileList = (findResult.stdout || '').split('\n').filter((f: string) => f.trim());
+
     console.log('[get-sandbox-files] Found', fileList.length, 'files');
     
     // Read content of each file (limit to reasonable sizes)
@@ -79,7 +104,7 @@ export async function GET(request: NextRequest) {
     for (const filePath of fileList) {
       try {
         // Check file size first (portable across Linux/macOS)
-        const sizeResult = await provider.runCommand(`wc -c ${filePath}`);
+        const sizeResult = await provider.runCommand(`wc -c -- ${shQuote(filePath)}`);
         if (sizeResult.exitCode !== 0) continue;
 
         const sizeToken = (sizeResult.stdout || '').trim().split(/\s+/)[0];
@@ -88,7 +113,7 @@ export async function GET(request: NextRequest) {
 
         // Only read files smaller than 10KB
         if (fileSize < 10000) {
-          const catResult = await provider.runCommand(`cat ${filePath}`);
+          const catResult = await provider.runCommand(`cat -- ${shQuote(filePath)}`);
           if (catResult.exitCode === 0) {
             const content = catResult.stdout || '';
             // Remove leading './' from path
@@ -104,7 +129,9 @@ export async function GET(request: NextRequest) {
     }
     
     // Get directory structure
-    const treeResult = await provider.runCommand('find . -type d -not -path */node_modules* -not -path */.git*');
+    const treeResult = await provider.runCommand(
+      shJoin(['find', '.', '-type', 'd', '-not', '-path', '*/node_modules*', '-not', '-path', '*/.git*'])
+    );
     
     let structure = '';
     if (treeResult.exitCode === 0) {

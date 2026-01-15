@@ -544,7 +544,7 @@ export class BuildRunManager {
           runId,
           at: now(),
           level: 'system',
-          message: `Integration gate: skipped (demo mode). Merges will be accepted immediately after apply.`,
+          message: `Integration gate: deferred to end (demo mode). Merges will be accepted immediately; a final build check runs once after all merges.`,
         });
       }
 
@@ -555,6 +555,15 @@ export class BuildRunManager {
         : Math.max(8, genConcurrency * 2);
       const maxBufferedPatches = maxBufferedEnv ?? defaultMaxBufferedPatches;
 
+      // Adaptive buffering: if merges stall (snapshot version doesn't advance), allow generation to continue
+      // by temporarily increasing the buffered patches cap. Once merges progress again, clamp back down.
+      let lastSnapshotVersion = internal.snapshotVersion;
+      let lastSnapshotAdvanceAt = Date.now();
+      let adaptiveBufferMode = false;
+      const mergeStallMs =
+        clampInt(Number(process.env.BUILD_MERGE_STALL_MS), 1_000, 120_000) ?? 15_000;
+      const maxBufferedHardCap = 200;
+
       while (true) {
         await this.waitIfPaused(runId);
 
@@ -563,6 +572,22 @@ export class BuildRunManager {
 
         // If any tickets are now impossible due to failed deps, mark them as blocked so the run can finish cleanly.
         this.propagateBlockedTickets(runId);
+
+        // Detect snapshot progress (merge acceptance) to control adaptive buffering.
+        if (internal.snapshotVersion !== lastSnapshotVersion) {
+          lastSnapshotVersion = internal.snapshotVersion;
+          lastSnapshotAdvanceAt = Date.now();
+          if (adaptiveBufferMode) {
+            adaptiveBufferMode = false;
+            this.emit(runId, {
+              type: 'log',
+              runId,
+              at: now(),
+              level: 'info',
+              message: `Merge progressed (snapshot v${internal.snapshotVersion}). Restoring buffer limit to ${maxBufferedPatches}.`,
+            });
+          }
+        }
 
         // Stage 2: PR review/refinement (bounded) while generation continues.
         if (!skipPrReview) {
@@ -607,7 +632,32 @@ export class BuildRunManager {
           const mergeQueueLen = internal.mergeQueue.length;
           const mergeBusy = this.mergePromises.has(runId) ? 1 : 0;
           const bufferedTotal = bufferedReview + mergeQueueLen + mergeBusy;
-          if (bufferedTotal >= maxBufferedPatches) break;
+
+          const mergeStalled =
+            (mergeQueueLen > 0 || mergeBusy > 0) && Date.now() - lastSnapshotAdvanceAt > mergeStallMs;
+          const effectiveMaxBufferedPatches = mergeStalled
+            ? Math.min(maxBufferedHardCap, Math.max(maxBufferedPatches, maxBufferedPatches * 3))
+            : maxBufferedPatches;
+
+          if (mergeStalled && !adaptiveBufferMode) {
+            adaptiveBufferMode = true;
+            this.emit(runId, {
+              type: 'log',
+              runId,
+              at: now(),
+              level: 'warning',
+              message: `Merge appears stalled (no snapshot advance for ${Math.round(
+                (Date.now() - lastSnapshotAdvanceAt) / 1000
+              )}s). Increasing buffer limit to ${effectiveMaxBufferedPatches} to keep generation moving.`,
+            });
+          }
+
+          if (!mergeStalled && adaptiveBufferMode && Date.now() - lastSnapshotAdvanceAt <= mergeStallMs) {
+            // Merge isn't stalled anymore (or the queue cleared) but snapshot hasn't advanced yet; keep mode until we
+            // observe actual progress via snapshotVersion change above.
+          }
+
+          if (bufferedTotal >= effectiveMaxBufferedPatches) break;
 
           const exclude = new Set(genInFlight.keys());
           let next: KanbanTicket | null = null;
@@ -715,6 +765,150 @@ export class BuildRunManager {
         await mergePromise;
       }
 
+      // If integration gating was deferred, run a single integration gate at the end (bounded healing attempts).
+      let deferredGateFailure: string | null = null;
+      if (skipIntegrationGate) {
+        const maxFinalGateAttempts =
+          clampInt(Number(process.env.BUILD_FINAL_INTEGRATION_GATE_ATTEMPTS), 1, 10) ?? 3;
+
+        this.emit(runId, {
+          type: 'log',
+          runId,
+          at: now(),
+          level: 'system',
+          message: `Final integration gate (deferred): running (max ${maxFinalGateAttempts} attempt(s))...`,
+        });
+
+        const history: string[] = [];
+        const state = this.internalState.get(runId);
+        const integrationSandboxId = state?.mainSandboxId || run.input.sandboxId;
+
+        const baseUrl = run.baseUrl;
+        if (!baseUrl) {
+          deferredGateFailure = 'Missing baseUrl for BuildRun (cannot call internal APIs)';
+        } else {
+          for (let attempt = 1; attempt <= maxFinalGateAttempts; attempt++) {
+            try {
+              await this.runIntegrationGate(baseUrl, integrationSandboxId);
+              deferredGateFailure = null;
+              break;
+            } catch (e: any) {
+              const msg = e?.message || 'Final integration gate failed';
+              deferredGateFailure = msg;
+              history.push(msg);
+
+              this.emit(runId, {
+                type: 'log',
+                runId,
+                at: now(),
+                level: 'warning',
+                message: `Final integration gate failed (attempt ${attempt}/${maxFinalGateAttempts}). Auto-healing and retrying...`,
+              });
+
+              const extracted = extractLikelyFilePathsFromText(msg);
+              const fallbackCandidates = [
+                'src/App.tsx',
+                'src/main.tsx',
+                'src/App.jsx',
+                'src/main.jsx',
+                'index.html',
+                'package.json',
+                'vite.config.ts',
+                'vite.config.js',
+              ];
+
+              const candidatePaths = extracted.length > 0 ? extracted : fallbackCandidates;
+
+              let problemFiles: Record<string, string> = {};
+              try {
+                if (candidatePaths.length > 0) {
+                  problemFiles = await this.captureFilesFromSandbox(integrationSandboxId, candidatePaths);
+                }
+              } catch {
+                problemFiles = {};
+              }
+
+              const historyText = history
+                .slice(-5)
+                .map((h, idx) => `- [${idx + 1}] ${h.slice(0, 800)}`)
+                .join('\n');
+
+              const problemFilesText = Object.keys(problemFiles).length > 0 ? buildFileBlocks(problemFiles) : '';
+
+              const fixPrompt =
+                `Fix the build/runtime issues preventing the application from passing the FINAL integration gate.\n\n` +
+                `Final integration gate failure:\n${msg}\n\n` +
+                `Previous attempts history (do NOT repeat failed approaches; adapt):\n${historyText || '(none)'}\n\n` +
+                `Rules:\n` +
+                `- Your goal is to make the app pass \`npm run build\` and eliminate obvious runtime errors.\n` +
+                `- Make the smallest possible changes.\n` +
+                `- Do NOT add features.\n` +
+                `- Prefer fixing the files implicated by the error output.\n` +
+                `- NEVER include markdown fences like \`\`\` or language tags inside files.\n` +
+                `- If a file contains accidental markdown markers (e.g. \`\`\`css), remove them.\n` +
+                `- Output ONLY <file path=\"...\"> blocks for files you change. Each block must contain the full updated file content.\n\n` +
+                (extracted.length > 0 ? `You MUST output ONLY these file(s): ${extracted.join(', ')}\n\n` : '') +
+                (problemFilesText ? `Current file contents (authoritative):\n${problemFilesText}\n\n` : '');
+
+              let fixCode = '';
+              try {
+                fixCode = await this.generateTicketCode(
+                  baseUrl,
+                  run.input.model,
+                  fixPrompt,
+                  integrationSandboxId,
+                  'fix_validation'
+                );
+              } catch {
+                fixCode = '';
+              }
+
+              if (fixCode && fixCode.includes('<file path="')) {
+                try {
+                  await this.applyCode(baseUrl, integrationSandboxId, fixCode, true);
+                } catch {
+                  // ignore and retry gate
+                }
+              } else {
+                // Avoid a tight loop if the model returns unusable output.
+                await sleep(2000);
+              }
+
+              await sleep(1500);
+            }
+          }
+        }
+
+        if (deferredGateFailure) {
+          this.emit(runId, {
+            type: 'log',
+            runId,
+            at: now(),
+            level: 'error',
+            message: `Final integration gate failed after ${maxFinalGateAttempts} attempt(s): ${deferredGateFailure.slice(0, 800)}`,
+          });
+        } else {
+          this.emit(runId, {
+            type: 'log',
+            runId,
+            at: now(),
+            level: 'system',
+            message: `Final integration gate passed.`,
+          });
+
+          // Update the final snapshot to include any end-of-run healing fixes.
+          try {
+            const st = this.internalState.get(runId);
+            if (st) {
+              const finalSnapshot = await this.captureSandboxSnapshot(integrationSandboxId);
+              st.snapshotsByVersion.set(st.snapshotVersion, finalSnapshot);
+            }
+          } catch {
+            // ignore
+          }
+        }
+      }
+
       // Re-run block propagation in case merges caused failures/blocks.
       this.propagateBlockedTickets(runId);
 
@@ -727,16 +921,19 @@ export class BuildRunManager {
       const anyUnfinished =
         finalRun?.tickets?.some(t => t.status === 'backlog' || t.status === 'rebasing') ?? false;
 
-      const reason = anyTicketFailures
-        ? 'One or more tickets failed/blocked'
-        : anyAwaitingInput
-          ? 'One or more tickets are awaiting user input'
-          : anyUnfinished
-            ? 'One or more tickets were not completed'
-            : undefined;
+      const reason = deferredGateFailure
+        ? `Final integration gate failed`
+        : anyTicketFailures
+          ? 'One or more tickets failed/blocked'
+          : anyAwaitingInput
+            ? 'One or more tickets are awaiting user input'
+            : anyUnfinished
+              ? 'One or more tickets were not completed'
+              : undefined;
 
-      if (hasFailures.value || anyTicketFailures || anyAwaitingInput || anyUnfinished) {
-        this.setStatus(runId, 'failed', 'Build finished with failures', reason || 'Build finished incomplete');
+      if (hasFailures.value || anyTicketFailures || anyAwaitingInput || anyUnfinished || Boolean(deferredGateFailure)) {
+        const err = deferredGateFailure ? `Final integration gate failed: ${deferredGateFailure}` : (reason || 'Build finished incomplete');
+        this.setStatus(runId, 'failed', 'Build finished with failures', err);
         this.emit(runId, { type: 'run_completed', runId, status: 'failed', at: now() });
       } else {
         this.setStatus(runId, 'completed', 'Build complete');
@@ -1631,6 +1828,18 @@ export class BuildRunManager {
       const next = state.mergeQueue.shift();
       if (!next) break;
 
+      // Immediately reflect that this ticket is actively being processed by the merge loop
+      // (otherwise it can appear "stuck" in merge_queued while we resolve conflicts, etc).
+      this.updateTicketStatus(runId, next.ticketId, 'merging', 98);
+      this.emit(runId, {
+        type: 'log',
+        runId,
+        at: now(),
+        level: 'info',
+        message: `Merge started: ${next.ticketId} (base v${next.baseVersion} → main v${state.snapshotVersion})`,
+        ticketId: next.ticketId,
+      });
+
       const baseSnapshot = state.snapshotsByVersion.get(next.baseVersion) || {};
       const mainSnapshot = state.snapshotsByVersion.get(state.snapshotVersion) || {};
 
@@ -1640,6 +1849,9 @@ export class BuildRunManager {
           conflicts.length === 1
             ? `Merge conflict: ${conflicts[0]}`
             : `Merge conflict: ${conflicts.slice(0, 3).join(', ')}${conflicts.length > 3 ? '…' : ''}`;
+
+        // Show conflict-resolution work explicitly (UI column + status), since it can take time.
+        this.updateTicketStatus(runId, next.ticketId, 'rebasing', 0, msg);
 
         // First: deterministic "3-way-ish" rebase (fast path).
         this.emit(runId, {
@@ -1929,38 +2141,8 @@ export class BuildRunManager {
         message: `Merging into integration sandbox (v${state.snapshotVersion} → v${state.snapshotVersion + 1})`,
         ticketId: next.ticketId,
       });
-
-      // Defensive: ensure integration sandbox is exactly on the current "mainSnapshot" before each merge.
-      // This prevents a failed merge from leaving the integration sandbox in a partial/broken state.
-      try {
-        await this.resetSandboxToSnapshot(state.mainSandboxId, mainSnapshot);
-      } catch (e: any) {
-        const msg = e?.message || 'Failed to reset integration sandbox before merge';
-        this.updateTicketStatus(runId, next.ticketId, 'failed', undefined, msg);
-        this.emit(runId, {
-          type: 'log',
-          runId,
-          at: now(),
-          level: 'error',
-          message: msg,
-          ticketId: next.ticketId,
-        });
-        // If we cannot reset integration to a known-good snapshot, further merges are unsafe.
-        // Fail any remaining queued merges so the overall run can converge and finalize cleanly.
-        const remaining = state.mergeQueue.splice(0, state.mergeQueue.length);
-        for (const b of remaining) {
-          this.updateTicketStatus(runId, b.ticketId, 'failed', undefined, `Merge aborted: ${msg}`);
-          this.emit(runId, {
-            type: 'log',
-            runId,
-            at: now(),
-            level: 'error',
-            message: `Merge aborted for ${b.ticketId}: ${msg}`,
-            ticketId: b.ticketId,
-          });
-        }
-        break;
-      }
+      // Optimistic merge: the integration sandbox should already reflect `mainSnapshot` (the last accepted version).
+      // If apply fails, we reset back to `mainSnapshot` in the failure path below.
 
       // Apply patch (merge)
       let applyRes: { appliedFiles: string[]; durationMs?: number } | null = null;
@@ -2120,30 +2302,44 @@ export class BuildRunManager {
           runId,
           at: now(),
           level: 'warning',
-          message: `Integration gate skipped (demo mode).`,
+          message: `Integration gate deferred to end (demo mode).`,
           ticketId: next.ticketId,
         });
       }
 
       // Accept merge: advance main snapshot version only after gate passes.
       const newVersion = state.snapshotVersion + 1;
-      // Capture a fresh snapshot from the integration sandbox so the accepted state includes any healing fixes.
-      const updatedSnapshot: Record<string, string> = await this.captureSandboxSnapshot(state.mainSandboxId);
+      // Performance: instead of re-snapshotting the entire repo after every merge, capture only the
+      // files touched by this merge (including any auto-heal edits) and update the snapshot incrementally.
+      let finalPatchFiles: Record<string, string> = {};
+      try {
+        finalPatchFiles = await this.captureFilesFromSandbox(state.mainSandboxId, mergedFiles);
+      } catch {
+        finalPatchFiles = {};
+      }
+
+      const updatedSnapshot: Record<string, string> =
+        Object.keys(finalPatchFiles).length > 0
+          ? { ...mainSnapshot, ...finalPatchFiles }
+          : await this.captureSandboxSnapshot(state.mainSandboxId);
+
+      // If we fell back to a full snapshot, derive the per-ticket patch files from it for restore/debugging.
+      if (Object.keys(finalPatchFiles).length === 0) {
+        for (const p of mergedFiles) {
+          const key = normalizeSandboxPath(String(p || ''));
+          if (key && Object.prototype.hasOwnProperty.call(updatedSnapshot, key)) {
+            finalPatchFiles[key] = updatedSnapshot[key];
+          }
+        }
+      }
+
       state.snapshotVersion = newVersion;
       state.snapshotsByVersion.set(newVersion, updatedSnapshot);
 
       // Update ticket artifacts to reflect the integration sandbox reality.
+      const finalPatchCode = Object.keys(finalPatchFiles).length > 0 ? buildFileBlocks(finalPatchFiles) : undefined;
       const latest = this.runs.get(runId);
       if (latest) {
-        // Capture the final file contents for this ticket (post-heal) so restore reproduces the real app.
-        let finalPatchFiles: Record<string, string> = {};
-        try {
-          finalPatchFiles = await this.captureFilesFromSandbox(state.mainSandboxId, mergedFiles);
-        } catch {
-          finalPatchFiles = {};
-        }
-        const finalPatchCode = Object.keys(finalPatchFiles).length > 0 ? buildFileBlocks(finalPatchFiles) : undefined;
-
         latest.tickets = updateTicket(latest.tickets, next.ticketId, {
           actualFiles: mergedFiles,
           previewAvailable: true,

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { sandboxManager } from '@/lib/sandbox/sandbox-manager';
 import type { SandboxState } from '@/types/sandbox';
+import { shJoin, shQuote } from '@/lib/sandbox/sh';
 
 declare global {
   // eslint-disable-next-line no-var
@@ -64,9 +65,9 @@ export async function GET() {
       '-type',
       'f',
       '-print',
-    ].join(' ');
+    ];
 
-    const findResult = await provider.runCommand(findCmd);
+    const findResult = await provider.runCommand(shJoin(findCmd));
     if (findResult.exitCode !== 0) {
       return NextResponse.json(
         { success: false, error: findResult.stderr || 'Failed to list files' },
@@ -82,7 +83,7 @@ export async function GET() {
 
     for (const filePath of allowedFiles) {
       try {
-        const sizeResult = await provider.runCommand(`wc -c ${filePath}`);
+        const sizeResult = await provider.runCommand(`wc -c -- ${shQuote(filePath)}`);
         if (sizeResult.exitCode !== 0) continue;
 
         const sizeToken = (sizeResult.stdout || '').trim().split(/\s+/)[0];
@@ -94,7 +95,7 @@ export async function GET() {
           continue;
         }
 
-        const catResult = await provider.runCommand(`cat ${filePath}`);
+        const catResult = await provider.runCommand(`cat -- ${shQuote(filePath)}`);
         if (catResult.exitCode === 0) {
           const relativePath = filePath.replace(/^\.\//, '');
           files[relativePath] = catResult.stdout || '';
