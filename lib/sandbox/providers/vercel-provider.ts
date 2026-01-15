@@ -22,7 +22,8 @@ export class VercelProvider extends SandboxProvider {
       this.existingFiles.clear();
 
       // Create Vercel sandbox
-      const defaultTimeoutMs = 30 * 60 * 1000; // 30 minutes
+      // For demo/build runs, sandboxes need to survive long idle periods. Pro/Enterprise max is 5 hours.
+      const defaultTimeoutMs = 4 * 60 * 60 * 1000; // 4 hours
       const envTimeoutMs = Number(process.env.VERCEL_SANDBOX_TIMEOUT_MS);
       const timeoutMs = Number.isFinite(envTimeoutMs) && envTimeoutMs > 0 ? envTimeoutMs : defaultTimeoutMs;
 
@@ -64,22 +65,59 @@ export class VercelProvider extends SandboxProvider {
     }
   }
 
+  /**
+   * Reconnect to an existing Vercel Sandbox by sandboxId.
+   * This is critical because Next.js route handlers may run in different isolates/processes,
+   * so we cannot rely on an in-memory Sandbox instance being available across requests.
+   */
+  async reconnect(sandboxId: string): Promise<boolean> {
+    const id = String(sandboxId || '').trim();
+    if (!id) return false;
+
+    try {
+      const token = process.env.VERCEL_TOKEN;
+      const teamId = process.env.VERCEL_TEAM_ID;
+      const projectId = process.env.VERCEL_PROJECT_ID;
+
+      const params: any = { sandboxId: id };
+      // Prefer explicit token/team/project if present; otherwise Sandbox.get can use VERCEL_OIDC_TOKEN.
+      if (token && teamId && projectId) {
+        params.token = token;
+        params.teamId = teamId;
+        params.projectId = projectId;
+      }
+
+      const sandbox = await Sandbox.get(params);
+      this.sandbox = sandbox;
+
+      const url = sandbox.domain(5173);
+      this.sandboxInfo = {
+        sandboxId: sandbox.sandboxId,
+        url,
+        provider: 'vercel',
+        createdAt: new Date(),
+      };
+
+      return true;
+    } catch (error) {
+      console.error('[VercelProvider] Failed to reconnect to sandbox:', {
+        sandboxId: id,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  }
+
   async runCommand(command: string): Promise<CommandResult> {
     if (!this.sandbox) {
       throw new Error('No active sandbox');
     }
 
-
     try {
-      // Parse command into cmd and args (matching PR syntax)
-      const parts = command.split(' ');
-      const cmd = parts[0];
-      const args = parts.slice(1);
-
-      // Vercel uses runCommand with cmd and args object (based on PR)
+      // Execute via shell so pipes/redirects/&&/quotes work correctly.
       const result = await this.sandbox.runCommand({
-        cmd: cmd,
-        args: args,
+        cmd: 'sh',
+        args: ['-c', command],
         cwd: '/vercel/sandbox',
         env: {}
       });
@@ -377,6 +415,7 @@ export default defineConfig({
     allowedHosts: [
       '.vercel.run',  // Allow all Vercel sandbox domains
       '.e2b.dev',     // Allow all E2B sandbox domains
+      '.modal.host',  // Allow Modal tunnel domains (when embedding previews)
       'localhost'
     ],
     hmr: {

@@ -65,7 +65,14 @@ export default function KanbanColumn({
     e.dataTransfer.setData('ticketId', ticketId);
   };
 
-  const isActiveColumn = id === 'generating' || id === 'applying' || id === 'testing' || id === 'pr_review';
+  const isActiveColumn =
+    id === 'generating' ||
+    id === 'applying' ||
+    id === 'pr_review' ||
+    id === 'merge_queued' ||
+    id === 'rebasing' ||
+    id === 'merging' ||
+    id === 'testing';
 
   const emptyStates: Record<TicketStatus, { icon: string; title: string; description: string; animate?: boolean }> = {
     planning: {
@@ -109,6 +116,24 @@ export default function KanbanColumn({
       title: 'Review',
       description: 'Code review happens here',
       animate: false,
+    },
+    merge_queued: {
+      icon: '📬',
+      title: 'Queued',
+      description: 'Waiting to merge into main',
+      animate: false,
+    },
+    rebasing: {
+      icon: '🔁',
+      title: 'Rebasing',
+      description: 'Retrying on latest changes',
+      animate: true,
+    },
+    merging: {
+      icon: '🔀',
+      title: 'Merging',
+      description: 'Applying changes to main',
+      animate: true,
     },
     done: {
       icon: '✅',
@@ -160,6 +185,7 @@ export default function KanbanColumn({
                   {id === 'applying' && 'Builder'}
                   {id === 'testing' && 'Validator'}
                   {id === 'pr_review' && 'Reviewer'}
+                  {id === 'rebasing' && 'Retrying'}
                   {id === 'done' && 'Complete'}
                   {id === 'awaiting_input' && 'User'}
                   {id === 'planning' && 'Planner'}

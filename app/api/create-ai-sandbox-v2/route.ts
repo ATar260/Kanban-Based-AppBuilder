@@ -6,6 +6,8 @@ import { sandboxManager } from '@/lib/sandbox/sandbox-manager';
 import { sandboxCreationLimiter } from '@/lib/rateLimit';
 import { getUsageActor } from '@/lib/usage/identity';
 import { getUsageSnapshotForActor, startSandboxSessionForActor } from '@/lib/usage/persistence';
+import { ModalProvider } from '@/lib/sandbox/providers/modal-provider';
+import { VercelProvider } from '@/lib/sandbox/providers/vercel-provider';
 
 // Store active sandbox globally
 declare global {
@@ -39,7 +41,9 @@ export async function POST(request: NextRequest) {
     if (rl instanceof NextResponse) return rl;
 
     const usage = await getUsageSnapshotForActor(actor);
-    if (usage.exceeded.sandboxMinutes) {
+    const disableSandboxUsageLimit =
+      process.env.USAGE_DISABLE_SANDBOX_LIMIT === 'true' || process.env.USAGE_DISABLE_LIMITS === 'true';
+    if (!disableSandboxUsageLimit && usage.exceeded.sandboxMinutes) {
       return NextResponse.json(
         {
           success: false,
@@ -52,13 +56,46 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const body = await (async () => {
+      try {
+        return await request.json();
+      } catch {
+        return null;
+      }
+    })();
+
     let templateTarget: 'vite' | 'next' = 'vite';
-    try {
-      const body = await request.json();
-      if (body?.template === 'next') templateTarget = 'next';
-      if (body?.template === 'vite') templateTarget = 'vite';
-    } catch {
-      // No body provided; default to vite
+    if (body?.template === 'next') templateTarget = 'next';
+    if (body?.template === 'vite') templateTarget = 'vite';
+
+    const requestedProvider: 'auto' | 'modal' | 'vercel' = (() => {
+      const raw = String(body?.provider ?? body?.sandboxProvider ?? '').trim().toLowerCase();
+      if (raw === 'modal') return 'modal';
+      if (raw === 'vercel') return 'vercel';
+      return 'auto';
+    })();
+
+    // If the UI explicitly requests a provider, fail fast if it isn't configured.
+    if (requestedProvider === 'modal' && !SandboxFactory.isModalAvailable()) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Modal sandbox provider not configured. Set MODAL_TOKEN_ID and MODAL_TOKEN_SECRET.',
+          code: 'SANDBOX_PROVIDER_NOT_CONFIGURED',
+        },
+        { status: 503 }
+      );
+    }
+    if (requestedProvider === 'vercel' && !SandboxFactory.isVercelAvailable()) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            'Vercel sandbox provider not configured. Set VERCEL_OIDC_TOKEN (or VERCEL_TOKEN + VERCEL_TEAM_ID + VERCEL_PROJECT_ID).',
+          code: 'SANDBOX_PROVIDER_NOT_CONFIGURED',
+        },
+        { status: 503 }
+      );
     }
 
     // Modal sandboxes currently support the Vite template only.
@@ -69,18 +106,23 @@ export async function POST(request: NextRequest) {
       templateTarget = 'vite';
     }
     
-    // Clean up all existing sandboxes
-    console.log('[create-ai-sandbox-v2] Cleaning up existing sandboxes...');
-    await sandboxManager.terminateAll();
-    
-    // Also clean up legacy global state
-    if (global.activeSandboxProvider) {
-      try {
-        await global.activeSandboxProvider.terminate();
-      } catch (e) {
-        console.error('Failed to terminate legacy global sandbox:', e);
+    // Clean up the previously active sandbox only (do not terminate all sandboxes).
+    // This enables a bounded pool of warm sandboxes for faster startup and supports multi-sandbox workflows.
+    console.log('[create-ai-sandbox-v2] Cleaning up previous active sandbox (if any)...');
+    try {
+      const activeProvider = sandboxManager.getActiveProvider() || global.activeSandboxProvider;
+      const activeId = activeProvider?.getSandboxInfo?.()?.sandboxId || global.sandboxData?.sandboxId;
+      if (activeId) {
+        await sandboxManager.terminateSandbox(activeId);
+      } else if (activeProvider) {
+        await activeProvider.terminate();
       }
+    } catch (e) {
+      console.warn('[create-ai-sandbox-v2] Failed to terminate previous active sandbox (non-fatal):', e);
+    } finally {
+      sandboxManager.clearActiveProvider();
       global.activeSandboxProvider = null;
+      global.sandboxData = null;
     }
     
     // Clear existing files tracking
@@ -90,19 +132,34 @@ export async function POST(request: NextRequest) {
       global.existingFiles = new Set<string>();
     }
 
-    // Create new sandbox using factory
-    const provider = SandboxFactory.create();
-    const sandboxInfo = await provider.createSandbox();
-    
-    console.log('[create-ai-sandbox-v2] Setting up Vite React app...');
-    await provider.setupViteApp();
+    // Create new sandbox using factory (prefer pooled warm sandbox when enabled)
+    let provider = requestedProvider === 'auto' ? await sandboxManager.getPooledSandbox() : null;
+    let sandboxInfo = provider?.getSandboxInfo?.() || null;
+
+    if (provider && sandboxInfo?.sandboxId) {
+      console.log(`[create-ai-sandbox-v2] Reused pooled sandbox ${sandboxInfo.sandboxId}`);
+    } else {
+      if (requestedProvider === 'modal') {
+        console.log('[create-ai-sandbox-v2] Creating Modal sandbox (UI override)');
+        provider = new ModalProvider({});
+      } else if (requestedProvider === 'vercel') {
+        console.log('[create-ai-sandbox-v2] Creating Vercel sandbox (UI override)');
+        provider = new VercelProvider({});
+      } else {
+        provider = SandboxFactory.create();
+      }
+      sandboxInfo = await provider.createSandbox();
+
+      console.log('[create-ai-sandbox-v2] Setting up Vite React app...');
+      await provider.setupViteApp();
+    }
 
     // Annotate info for the UI (provider may not set these fields)
     (sandboxInfo as any).templateTarget = templateTarget;
     if (!(sandboxInfo as any).devPort) (sandboxInfo as any).devPort = 5173;
     
-    // Register with sandbox manager
-    sandboxManager.registerSandbox(sandboxInfo.sandboxId, provider);
+    // Register with sandbox manager (active)
+    sandboxManager.registerSandbox(sandboxInfo.sandboxId, provider, { setActive: true });
 
     // Start tracking sandbox time for this user/ip (best-effort)
     try {
@@ -149,24 +206,68 @@ export async function POST(request: NextRequest) {
       message: 'Sandbox created and Vite React app initialized'
     });
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('[create-ai-sandbox-v2] Error:', error);
     
-    // Clean up on error
-    await sandboxManager.terminateAll();
-    if (global.activeSandboxProvider) {
-      try {
-        await global.activeSandboxProvider.terminate();
-      } catch (e) {
-        console.error('Failed to terminate sandbox on error:', e);
+    // Clean up on error (best-effort)
+    try {
+      const activeProvider = sandboxManager.getActiveProvider() || global.activeSandboxProvider;
+      const activeId = activeProvider?.getSandboxInfo?.()?.sandboxId || global.sandboxData?.sandboxId;
+      if (activeId) {
+        await sandboxManager.terminateSandbox(activeId);
+      } else if (activeProvider) {
+        await activeProvider.terminate();
       }
+    } catch (e) {
+      console.warn('[create-ai-sandbox-v2] Failed to terminate sandbox on error (non-fatal):', e);
+    } finally {
+      sandboxManager.clearActiveProvider();
       global.activeSandboxProvider = null;
+      global.sandboxData = null;
     }
     
+    // Surface upstream provider status codes (e.g., Vercel 402/429) instead of always returning 500.
+    const upstreamStatus = Number(error?.response?.status);
+    if (Number.isFinite(upstreamStatus) && upstreamStatus >= 400 && upstreamStatus < 600) {
+      let retryAfter: number | undefined;
+      try {
+        const ra = Number(error?.response?.headers?.get?.('Retry-After'));
+        if (Number.isFinite(ra) && ra > 0) retryAfter = Math.floor(ra);
+      } catch {
+        // ignore
+      }
+
+      const code =
+        upstreamStatus === 402
+          ? 'PAYMENT_REQUIRED'
+          : upstreamStatus === 429
+            ? 'UPSTREAM_RATE_LIMITED'
+            : 'SANDBOX_PROVIDER_ERROR';
+
+      const message =
+        upstreamStatus === 402
+          ? 'Sandbox provider returned Payment Required (402). Check Vercel billing/spend limits and sandbox entitlement.'
+          : upstreamStatus === 429
+            ? 'Sandbox provider rate-limited the request. Please retry shortly.'
+            : (error?.message || 'Failed to create sandbox');
+
+      return NextResponse.json(
+        {
+          success: false,
+          error: message,
+          code,
+          retryAfter,
+        },
+        { status: upstreamStatus }
+      );
+    }
+
     return NextResponse.json(
-      { 
+      {
+        success: false,
         error: error instanceof Error ? error.message : 'Failed to create sandbox',
-        details: error instanceof Error ? error.stack : undefined
+        code: 'SANDBOX_CREATE_FAILED',
+        details: error instanceof Error ? error.stack : undefined,
       },
       { status: 500 }
     );

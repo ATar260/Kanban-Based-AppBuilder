@@ -94,6 +94,71 @@ declare global {
   var conversationState: ConversationState | null;
 }
 
+type BackendFileCacheEntry = { content: string; lastModified: number };
+type BackendFileCache = Record<string, BackendFileCacheEntry>;
+
+type PlannedBuildSandboxCacheEntry = {
+  files: BackendFileCache;
+  manifest?: FileManifest;
+  lastSync: number;
+};
+
+const PLANNED_BUILD_CONTEXT_TTL_MS = 15_000;
+
+// In-memory per-sandbox cache to avoid cross-sandbox contamination during parallel builds.
+const plannedBuildSandboxCache: Map<string, PlannedBuildSandboxCacheEntry> = (() => {
+  const g = globalThis as any;
+  if (!g.__plannedBuildSandboxCache) {
+    g.__plannedBuildSandboxCache = new Map<string, PlannedBuildSandboxCacheEntry>();
+  }
+  return g.__plannedBuildSandboxCache as Map<string, PlannedBuildSandboxCacheEntry>;
+})();
+
+async function getPlannedBuildSandboxContext(
+  appBaseUrl: string,
+  sandboxId: string
+): Promise<PlannedBuildSandboxCacheEntry | null> {
+  const id = String(sandboxId || '').trim();
+  if (!id) return null;
+
+  const cached = plannedBuildSandboxCache.get(id);
+  if (cached && Date.now() - cached.lastSync < PLANNED_BUILD_CONTEXT_TTL_MS) {
+    return cached;
+  }
+
+  try {
+    const res = await fetch(`${appBaseUrl}/api/get-sandbox-files?sandboxId=${encodeURIComponent(id)}`, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
+    });
+
+    if (!res.ok) return cached || null;
+
+    const json = await res.json().catch(() => null);
+    if (!json?.success || !json?.files) return cached || null;
+
+    const files: BackendFileCache = {};
+    for (const [path, content] of Object.entries(json.files as Record<string, unknown>)) {
+      const rel = String(path || '').replace(/^\//, '');
+      const text = typeof content === 'string' ? content : String(content ?? '');
+      if (!rel) continue;
+      files[rel] = { content: text, lastModified: Date.now() };
+    }
+
+    const entry: PlannedBuildSandboxCacheEntry = {
+      files,
+      manifest: json.manifest as FileManifest | undefined,
+      lastSync: Date.now(),
+    };
+
+    plannedBuildSandboxCache.set(id, entry);
+    return entry;
+  } catch {
+    return cached || null;
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const {
@@ -690,23 +755,44 @@ MORPH FAST APPLY MODE (EDIT-ONLY):
         }
 
         // Use backend file cache instead of frontend-provided files
+        const plannedBuildSandboxId =
+          isPlannedBuildStep && typeof context?.sandboxId === 'string' ? String(context.sandboxId).trim() : '';
+        const appBaseUrl = new URL(request.url).origin;
+
         let backendFiles = global.sandboxState?.fileCache?.files || {};
+        let effectiveManifest: FileManifest | undefined = global.sandboxState?.fileCache?.manifest;
+
+        if (plannedBuildSandboxId) {
+          const plannedCtx = await getPlannedBuildSandboxContext(appBaseUrl, plannedBuildSandboxId);
+          if (plannedCtx) {
+            backendFiles = plannedCtx.files;
+            effectiveManifest = plannedCtx.manifest;
+          } else {
+            backendFiles = {};
+            effectiveManifest = undefined;
+          }
+        }
+
         let hasBackendFiles = Object.keys(backendFiles).length > 0;
 
         console.log('[generate-ai-code-stream] Backend file cache status:');
+        console.log('[generate-ai-code-stream] - Planned build sandboxId:', plannedBuildSandboxId || '(none)');
         console.log('[generate-ai-code-stream] - Has sandboxState:', !!global.sandboxState);
         console.log('[generate-ai-code-stream] - Has fileCache:', !!global.sandboxState?.fileCache);
         console.log('[generate-ai-code-stream] - File count:', Object.keys(backendFiles).length);
-        console.log('[generate-ai-code-stream] - Has manifest:', !!global.sandboxState?.fileCache?.manifest);
+        console.log('[generate-ai-code-stream] - Has manifest:', !!effectiveManifest);
 
         // If no backend files and we're in edit mode, try to fetch from sandbox
-        if (!hasBackendFiles && isEdit && (global.activeSandbox || context?.sandboxId)) {
+        if (!hasBackendFiles && isEdit && !plannedBuildSandboxId && (global.activeSandbox || context?.sandboxId)) {
           console.log('[generate-ai-code-stream] No backend files, attempting to fetch from sandbox...');
 
           try {
-            const filesResponse = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/get-sandbox-files`, {
+            const qsSandboxId = typeof context?.sandboxId === 'string' ? String(context.sandboxId).trim() : '';
+            const filesUrl = `${appBaseUrl}/api/get-sandbox-files${qsSandboxId ? `?sandboxId=${encodeURIComponent(qsSandboxId)}` : ''}`;
+            const filesResponse = await fetch(filesUrl, {
               method: 'GET',
-              headers: { 'Content-Type': 'application/json' }
+              headers: { 'Content-Type': 'application/json' },
+              cache: 'no-store',
             });
 
             if (filesResponse.ok) {
@@ -744,12 +830,13 @@ MORPH FAST APPLY MODE (EDIT-ONLY):
 
                 if (filesData.manifest && global.sandboxState.fileCache) {
                   global.sandboxState.fileCache.manifest = filesData.manifest;
+                  effectiveManifest = filesData.manifest;
 
                   // Now try to analyze edit intent with the fetched manifest
                   if (isSurgicalEdit && !editContext) {
                     console.log('[generate-ai-code-stream] Analyzing edit intent with fetched manifest');
                     try {
-                      const intentResponse = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/analyze-edit-intent`, {
+                      const intentResponse = await fetch(`${appBaseUrl}/api/analyze-edit-intent`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ prompt, manifest: filesData.manifest, model })
@@ -792,14 +879,19 @@ MORPH FAST APPLY MODE (EDIT-ONLY):
             contextParts.push(`\n${editContext.systemPrompt || enhancedSystemPrompt}\n`);
 
             // Get contents of primary and context files
-            const primaryFileContents = await getFileContents(editContext.primaryFiles, global.sandboxState!.fileCache!.manifest!);
-            const contextFileContents = await getFileContents(editContext.contextFiles, global.sandboxState!.fileCache!.manifest!);
+            const manifest = effectiveManifest || global.sandboxState?.fileCache?.manifest;
+            if (!manifest) {
+              console.warn('[generate-ai-code-stream] Missing manifest for targeted edit context');
+            } else {
+              const primaryFileContents = await getFileContents(editContext.primaryFiles, manifest);
+              const contextFileContents = await getFileContents(editContext.contextFiles, manifest);
 
-            // Format files for AI
-            const formattedFiles = formatFilesForAI(primaryFileContents, contextFileContents);
-            contextParts.push(formattedFiles);
+              // Format files for AI
+              const formattedFiles = formatFilesForAI(primaryFileContents, contextFileContents);
+              contextParts.push(formattedFiles);
 
-            contextParts.push('\nIMPORTANT: Only modify the files listed under "Files to Edit". The context files are provided for reference only.');
+              contextParts.push('\nIMPORTANT: Only modify the files listed under \"Files to Edit\". The context files are provided for reference only.');
+            }
           } else {
             // Fallback to showing all files if no edit context
             console.log('[generate-ai-code-stream] WARNING: Using fallback mode - no edit context available');

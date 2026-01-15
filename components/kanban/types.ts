@@ -7,8 +7,11 @@ export type TicketStatus =
   | 'awaiting_input'
   | 'generating'
   | 'applying'
-  | 'testing'
   | 'pr_review'
+  | 'merge_queued'
+  | 'rebasing'
+  | 'merging'
+  | 'testing'
   | 'done'
   | 'blocked'
   | 'failed'
@@ -75,6 +78,7 @@ export interface KanbanTicket {
   generatedCode?: string;
   previewAvailable: boolean;
   error?: string;
+  warnings?: string[];
   retryCount: number;
   userModified: boolean;
   userNotes?: string;
@@ -147,9 +151,16 @@ export const COLUMN_CONFIG: { id: TicketStatus; title: string; color: string }[]
   { id: 'awaiting_input', title: 'Awaiting Input', color: '#F97316' },
   { id: 'generating', title: 'Generating', color: '#3B82F6' },
   { id: 'applying', title: 'Applying', color: '#F59E0B' },
-  { id: 'testing', title: 'Testing', color: '#8B5CF6' },
   { id: 'pr_review', title: 'PR Review', color: '#6366F1' },
+  { id: 'merge_queued', title: 'Merge Queued', color: '#A855F7' },
+  { id: 'rebasing', title: 'Rebasing', color: '#9333EA' },
+  { id: 'merging', title: 'Merging', color: '#7C3AED' },
+  { id: 'testing', title: 'Testing', color: '#8B5CF6' },
   { id: 'done', title: 'Done', color: '#22C55E' },
+  // Always render these so tickets don't "disappear" when they fail/block/skip.
+  { id: 'blocked', title: 'Blocked', color: '#EF4444' },
+  { id: 'failed', title: 'Failed', color: '#DC2626' },
+  { id: 'skipped', title: 'Skipped', color: '#A3A3A3' },
 ];
 
 export const TYPE_COLORS: Record<TicketType, string> = {
@@ -183,8 +194,11 @@ export const TICKET_ACTIONS: Record<TicketStatus, string[]> = {
   awaiting_input: ['provide-input', 'skip', 'edit'],
   generating: ['view-code'],
   applying: ['view-code'],
-  testing: ['view-code'],
   pr_review: ['view-code'],
+  merge_queued: ['view-code'],
+  rebasing: ['view-code'],
+  merging: ['view-code'],
+  testing: ['view-code'],
   done: ['view-code', 'regenerate'],
   failed: ['retry', 'skip', 'edit', 'view-error'],
   blocked: ['view-blockers'],

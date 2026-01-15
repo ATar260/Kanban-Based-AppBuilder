@@ -50,6 +50,7 @@ export default function KanbanTicket({
       case 'delete': onDelete(ticket.id); break;
       case 'restore': onRestore(ticket.id); break;
       case 'view-code':
+      case 'view-blockers':
       case 'view-error': onViewCode(ticket.id); break;
       case 'move-up': onMoveUp(ticket.id); break;
       case 'move-down': onMoveDown(ticket.id); break;
@@ -99,6 +100,16 @@ export default function KanbanTicket({
 
       <h4 className="font-medium text-sm text-gray-900 mb-1 line-clamp-1">{ticket.title}</h4>
       <p className="text-xs text-gray-500 line-clamp-2 mb-2">{ticket.description}</p>
+      {(ticket.status === 'failed' || ticket.status === 'blocked' || ticket.status === 'rebasing') && ticket.error && (
+        <p className="text-[10px] text-red-600 line-clamp-1 mb-2">
+          {ticket.error}
+        </p>
+      )}
+      {Array.isArray(ticket.warnings) && ticket.warnings.length > 0 && (
+        <p className="text-[10px] text-amber-700 line-clamp-1 mb-2">
+          {ticket.warnings[0]}
+        </p>
+      )}
 
       <div className="flex items-center gap-3 text-[10px] text-gray-400 mb-2">
         <span className="flex items-center gap-1">
@@ -115,6 +126,15 @@ export default function KanbanTicket({
               <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
             </svg>
             {ticket.dependencies.length} deps
+          </span>
+        )}
+        {ticket.retryCount > 0 && (
+          <span className="flex items-center gap-1">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M21 12a9 9 0 1 1-3-6.7" />
+              <polyline points="21 3 21 9 15 9" />
+            </svg>
+            {ticket.retryCount} retry{ticket.retryCount === 1 ? '' : 'ies'}
           </span>
         )}
         {ticket.duration && (

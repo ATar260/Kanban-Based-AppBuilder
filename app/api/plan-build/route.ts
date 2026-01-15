@@ -64,6 +64,88 @@ interface PlanningResponse {
   summary?: string;
 }
 
+function normalizeOpenAiModelId(raw: any): string | null {
+  if (typeof raw !== 'string') return null;
+  const v = raw.trim();
+  if (!v) return null;
+  if (v.startsWith('openai/')) return v.slice('openai/'.length).trim() || null;
+  // Reject other provider-style model strings (e.g. anthropic/*, google/*)
+  if (v.includes('/')) return null;
+  return v;
+}
+
+function extractBalancedJsonObject(text: string, startIndex: number): string | null {
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let i = startIndex; i < text.length; i++) {
+    const ch = text[i];
+
+    if (inString) {
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (ch === '\\') {
+        escape = true;
+        continue;
+      }
+      if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (ch === '{') depth += 1;
+    if (ch === '}') depth -= 1;
+
+    if (depth === 0 && ch === '}') {
+      return text.slice(startIndex, i + 1);
+    }
+  }
+
+  return null;
+}
+
+function parseFirstJsonObjectLike(text: string): any | null {
+  if (typeof text !== 'string' || text.length === 0) return null;
+
+  // Try fast path: trim is already valid JSON.
+  try {
+    const direct = JSON.parse(text.trim());
+    if (direct && typeof direct === 'object') return direct;
+  } catch {
+    // ignore
+  }
+
+  // Otherwise, scan for the first parsable JSON object (handles preambles like "Return JSON like { ... }").
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== '{') continue;
+    const candidate = extractBalancedJsonObject(text, i);
+    if (!candidate) continue;
+    try {
+      const obj = JSON.parse(candidate);
+      if (obj && typeof obj === 'object') {
+        if (Object.prototype.hasOwnProperty.call(obj, 'tickets') || Object.prototype.hasOwnProperty.call(obj, 'blueprint')) {
+          return obj;
+        }
+        // Still accept a generic object as a last resort.
+        return obj;
+      }
+    } catch {
+      // keep scanning
+    }
+  }
+
+  return null;
+}
+
 const SUPABASE_INPUT_REQUESTS: InputRequest[] = [
   {
     id: 'supabase_url',
@@ -543,9 +625,10 @@ function ensureMockFirstDataTickets(tickets: PlanTicket[], blueprint: BuildBluep
 }
 
 function ensureUiFoundationTickets(tickets: PlanTicket[], opts: { uiStyle?: UIStyle } = {}): PlanTicket[] {
-  const base: PlanTicket[] = [...tickets];
+  let base: PlanTicket[] = [...tickets];
 
-  const hasFoundation = base.some(t => /\b(design system|ui kit|app shell|visual foundation)\b/i.test(t.title || ''));
+  const existingFoundation = base.find(t => /\b(design system|ui kit|app shell|visual foundation)\b/i.test(t.title || ''));
+  const hasFoundation = Boolean(existingFoundation);
   if (!hasFoundation) {
     base.unshift({
       title: 'Design system + app shell',
@@ -562,7 +645,8 @@ function ensureUiFoundationTickets(tickets: PlanTicket[], opts: { uiStyle?: UISt
     });
   }
 
-  const hasPolish = base.some(t => /\b(ui polish|polish pass|final polish|responsive pass)\b/i.test(t.title || ''));
+  const existingPolish = base.find(t => /\b(ui polish|polish pass|final polish|responsive pass)\b/i.test(t.title || ''));
+  const hasPolish = Boolean(existingPolish);
   if (!hasPolish) {
     base.push({
       title: 'UI polish pass',
@@ -578,6 +662,41 @@ function ensureUiFoundationTickets(tickets: PlanTicket[], opts: { uiStyle?: UISt
     });
   }
 
+  // Dependency guidance for parallel builds:
+  // - Ensure most UI-facing tickets wait for the UI foundation ticket so naming/styling stays consistent.
+  // - Ensure the polish pass runs at the end (avoid racing with structural/component work).
+  const foundationTitle = (existingFoundation?.title || 'Design system + app shell').trim();
+  const polishTitle = (existingPolish?.title || 'UI polish pass').trim();
+
+  const shouldDependOnFoundation = (t: PlanTicket) => {
+    const type = (t.type || '').toString();
+    return type === 'layout' || type === 'component' || type === 'styling' || type === 'feature';
+  };
+
+  const allNonInputTitles = base
+    .filter(t => t.title && t.title !== polishTitle)
+    .filter(t => !t.requiresInput)
+    .filter(t => !(t.title || '').toLowerCase().includes('supabase'))
+    .map(t => String(t.title));
+
+  base = base.map(t => {
+    const title = String(t.title || '').trim();
+    const deps = Array.isArray(t.dependencies) ? [...t.dependencies] : [];
+
+    // Make UI-facing tickets follow the foundation ticket.
+    if (foundationTitle && title && title !== foundationTitle && shouldDependOnFoundation(t) && !deps.includes(foundationTitle)) {
+      deps.unshift(foundationTitle);
+    }
+
+    // Ensure the polish pass runs last among non-input tickets.
+    if (polishTitle && title === polishTitle) {
+      const finalDeps = Array.from(new Set([foundationTitle, ...allNonInputTitles].filter(Boolean)));
+      return { ...t, dependencies: finalDeps };
+    }
+
+    return { ...t, dependencies: deps };
+  });
+
   return base;
 }
 
@@ -588,8 +707,29 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const { prompt, context, uiStyle: rawUiStyle } = await request.json();
+    const { prompt, context, uiStyle: rawUiStyle, model: rawModel } = await request.json();
     const uiStyle = normalizeUiStyle(rawUiStyle);
+
+    // #region agent log (debug)
+    fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'debug-session',
+        runId: 'plan-stuck-pre',
+        hypothesisId: 'H2',
+        location: 'app/api/plan-build/route.ts:POST:parsedBody',
+        message: 'plan-build request received',
+        data: {
+          promptLen: typeof prompt === 'string' ? prompt.length : null,
+          hasContext: Boolean(context),
+          hasUiStyle: Boolean(uiStyle),
+          requestedModel: typeof rawModel === 'string' ? rawModel : null,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion agent log (debug)
 
     if (!prompt) {
       return NextResponse.json({ error: 'Prompt is required' }, { status: 400 });
@@ -598,7 +738,9 @@ export async function POST(request: NextRequest) {
     // Rate-limit + monthly usage limit gate (best-effort; in-memory counters by user/ip)
     const actor = await getUsageActor(request);
     const rl = await aiGenerationLimiter(request, actor.userId || actor.key);
-    if (rl instanceof NextResponse) return rl;
+    if (rl instanceof NextResponse) {
+      return rl;
+    }
 
     const usage = await consumeAiGenerationForActor(actor, 1);
     if (!usage.allowed) {
@@ -617,33 +759,165 @@ export async function POST(request: NextRequest) {
     const stream = new ReadableStream({
       async start(controller) {
         try {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'planning_start' })}\n\n`));
+          const allowedOpenAiModelIds = new Set(
+            (appConfig.ai.availableModels || [])
+              .filter((m: any) => typeof m === 'string' && m.startsWith('openai/'))
+              .map((m: string) => m.replace('openai/', ''))
+          );
+          // Planning needs to be fast/reliable; allow a small known-safe set even if not exposed in the UI selector.
+          const allowedForPlanning = new Set<string>([
+            ...Array.from(allowedOpenAiModelIds),
+            'gpt-4o',
+            'gpt-4o-mini',
+          ]);
 
-          const modelId = appConfig.ai.defaultModel.replace('openai/', '');
-          const { text } = await generateText({
-            model: openai(modelId),
-            messages: [
-              { role: 'system', content: PLANNING_PROMPT },
-              { 
-                role: 'user', 
-                content: `Build request: ${prompt}${
-                  uiStyle ? `\n\nSelected UI style (apply consistently):\n${JSON.stringify(uiStyle, null, 2)}` : ''
-                }${context?.existingFiles ? `\n\nExisting files: ${context.existingFiles.join(', ')}` : ''}` 
+          const requestedModelId = normalizeOpenAiModelId(rawModel);
+          const envModelId = normalizeOpenAiModelId(process.env.PLAN_BUILD_MODEL || process.env.BUILD_PLAN_MODEL || '');
+          const defaultFastPlanningModelId = 'gpt-4o';
+
+          const planningModelId = (() => {
+            const candidates = [
+              requestedModelId,
+              envModelId,
+              defaultFastPlanningModelId,
+              appConfig.ai.defaultModel.replace('openai/', ''),
+            ].filter(Boolean) as string[];
+
+            for (const c of candidates) {
+              if (allowedForPlanning.size === 0 || allowedForPlanning.has(c)) return c;
+            }
+            // If config is missing/empty, still allow defaultFastPlanningModelId.
+            return defaultFastPlanningModelId;
+          })();
+
+          const planningTimeoutMs = Math.max(15_000, Math.min(Number(process.env.PLAN_BUILD_TIMEOUT_MS) || 45_000, 180_000));
+
+          // #region agent log (debug)
+          fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sessionId: 'debug-session',
+              runId: 'plan-stuck-pre',
+              hypothesisId: 'H3',
+              location: 'app/api/plan-build/route.ts:stream:start',
+              message: 'planning stream starting',
+              data: { planningModelId, timeoutMs: planningTimeoutMs },
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
+          // #endregion agent log (debug)
+
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ type: 'planning_start', model: `openai/${planningModelId}` })}\n\n`
+            )
+          );
+
+          const promptText =
+            `Build request: ${prompt}` +
+            (uiStyle ? `\n\nSelected UI style (apply consistently):\n${JSON.stringify(uiStyle, null, 2)}` : '') +
+            (context?.existingFiles ? `\n\nExisting files: ${context.existingFiles.join(', ')}` : '');
+
+          const runPlanningOnce = async (modelId: string) => {
+            const opts: any = {
+              model: openai(modelId),
+              messages: [
+                { role: 'system', content: PLANNING_PROMPT },
+                {
+                  role: 'user',
+                  content: promptText,
+                },
+              ],
+              maxOutputTokens: 3000,
+            };
+
+            // GPT-5* models do not support temperature; sending it causes a hard error.
+            if (!modelId.startsWith('gpt-5')) {
+              opts.temperature = 0.3;
+            }
+
+            return await Promise.race([
+              generateText(opts),
+              new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error(`Planning timed out after ${planningTimeoutMs}ms (model ${modelId})`)), planningTimeoutMs)
+              ),
+            ]);
+          };
+
+          // Try the desired planning model first, then a safe fallback.
+          let text: string | null = null;
+          let lastErr: any = null;
+          let usedModelId: string | null = null;
+          for (const candidate of [planningModelId, 'gpt-4o-mini', 'gpt-4.1']) {
+            try {
+              const res = await runPlanningOnce(candidate);
+              const out = (res as any)?.text;
+              const outText = typeof out === 'string' ? out : '';
+              if (outText.trim().length === 0) {
+                throw new Error(`Model returned empty output`);
               }
-            ],
-            temperature: 0.3,
-            maxOutputTokens: 4000,
-          });
+              text = outText;
+              usedModelId = candidate;
+              lastErr = null;
+              break;
+            } catch (e: any) {
+              lastErr = e;
+              // #region agent log (debug)
+              fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  sessionId: 'debug-session',
+                  runId: 'plan-stuck-pre',
+                  hypothesisId: 'H3',
+                  location: 'app/api/plan-build/route.ts:planningAttemptFailed',
+                  message: 'planning attempt failed',
+                  data: { modelId: candidate, error: String(e?.message || e).slice(0, 300) },
+                  timestamp: Date.now(),
+                }),
+              }).catch(() => {});
+              // #endregion agent log (debug)
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({
+                    type: 'planning_status',
+                    level: 'warning',
+                    message: `Planner model ${candidate} failed; trying fallback...`,
+                  })}\n\n`
+                )
+              );
+            }
+          }
+
+          if (!text) {
+            throw lastErr || new Error('Planning failed');
+          }
+
+          // #region agent log (debug)
+          fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sessionId: 'debug-session',
+              runId: 'plan-stuck-pre',
+              hypothesisId: 'H3',
+              location: 'app/api/plan-build/route.ts:planningTextReceived',
+              message: 'planning text received',
+              data: { modelId: usedModelId, textLen: typeof text === 'string' ? text.length : null },
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
+          // #endregion agent log (debug)
 
           let parsed: PlanningResponse;
           try {
-            const jsonMatch = text.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-              parsed = JSON.parse(jsonMatch[0]);
-            } else {
-              throw new Error('No JSON found in response');
+            const obj = parseFirstJsonObjectLike(text);
+            if (!obj) {
+              throw new Error('No parsable JSON object found in model response');
             }
-          } catch (parseError) {
+            parsed = obj;
+          } catch (parseError: any) {
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ 
               type: 'error', 
               message: 'Failed to parse plan' 

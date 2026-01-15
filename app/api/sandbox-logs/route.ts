@@ -1,5 +1,6 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import type { SandboxState } from '@/types/sandbox';
+import { sandboxManager } from '@/lib/sandbox/sandbox-manager';
 
 declare global {
   var activeSandbox: any;
@@ -7,17 +8,26 @@ declare global {
   var sandboxState: SandboxState;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const provider: any =
-      global.activeSandboxProvider ||
-      global.sandboxState?.sandbox ||
-      null;
+    const requestedSandboxId = (() => {
+      try {
+        const url = new URL(request.url);
+        return String(url.searchParams.get('sandboxId') || '').trim();
+      } catch {
+        return '';
+      }
+    })();
+
+    const provider: any = requestedSandboxId
+      ? sandboxManager.getProvider(requestedSandboxId) ||
+        (await sandboxManager.getOrCreateProvider(requestedSandboxId))
+      : global.activeSandboxProvider || global.sandboxState?.sandbox || null;
 
     // Backward compatibility: older code paths may still set activeSandbox directly.
     const legacySandbox: any = global.activeSandbox || null;
 
-    if (!provider && !legacySandbox) {
+    if ((!provider || !provider.getSandboxInfo?.()) && !legacySandbox) {
       return NextResponse.json({ 
         success: false, 
         error: 'No active sandbox' 

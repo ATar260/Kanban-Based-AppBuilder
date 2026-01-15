@@ -32,21 +32,25 @@ export const appConfig = {
   ai: {
     // Default AI model
     // Higher default quality (users can still switch to faster models in the UI).
-    defaultModel: 'openai/gpt-4o',
+    defaultModel: 'openai/gpt-5-mini',
 
     // Available models
     availableModels: [
-      'openai/gpt-4o-mini',
-      'openai/gpt-4.1-nano',
-      'openai/gpt-4o',
+      'openai/gpt-5.2',
+      'openai/gpt-5.2-pro',
+      'openai/gpt-5-mini',
+      'openai/gpt-5-nano',
+      'openai/gpt-4.1',
       'openai/o4-mini'
     ],
 
     // Model display names
     modelDisplayNames: {
-      'openai/gpt-4o-mini': 'GPT-4o Mini (Fast)',
-      'openai/gpt-4.1-nano': 'GPT-4.1 Nano (Fastest)',
-      'openai/gpt-4o': 'GPT-4o',
+      'openai/gpt-5.2': 'GPT-5.2 (Best for coding)',
+      'openai/gpt-5.2-pro': 'GPT-5.2 Pro (Highest quality)',
+      'openai/gpt-5-mini': 'GPT-5 Mini (Fast)',
+      'openai/gpt-5-nano': 'GPT-5 Nano (Fastest)',
+      'openai/gpt-4.1': 'GPT-4.1 (Smart non-reasoning)',
       'openai/o4-mini': 'o4-mini (Reasoning)'
     } as Record<string, string>,
 

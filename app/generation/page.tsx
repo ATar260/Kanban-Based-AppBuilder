@@ -26,6 +26,7 @@ import { motion } from 'framer-motion';
 import CodeApplicationProgress, { type CodeApplicationState } from '@/components/CodeApplicationProgress';
 import { KanbanBoard, useKanbanBoard, BuildPlan, TicketStatus } from '@/components/kanban';
 import type { KanbanTicket as KanbanTicketType } from '@/components/kanban/types';
+import { Switch } from '@/components/ui/shadcn/switch';
 import { useVersioning } from '@/hooks/useVersioning';
 import { GitHubConnectButton, VersionHistoryPanel, SaveStatusIndicator, GitSyncToggle } from '@/components/versioning';
 import { saveGitHubConnection } from '@/lib/versioning/github';
@@ -51,6 +52,14 @@ interface SandboxData {
   url: string;
   [key: string]: any;
 }
+
+const SANDBOX_PROVIDER_CHOICES = [
+  { value: 'auto', label: 'Sandbox: Auto' },
+  { value: 'modal', label: 'Sandbox: Modal' },
+  { value: 'vercel', label: 'Sandbox: Vercel' },
+] as const;
+
+type SandboxProviderPreference = (typeof SANDBOX_PROVIDER_CHOICES)[number]['value'];
 
 interface ChatMessage {
   content: string;
@@ -97,6 +106,21 @@ function AISandboxPage() {
     const modelParam = searchParams.get('model');
     return appConfig.ai.availableModels.includes(modelParam || '') ? modelParam! : appConfig.ai.defaultModel;
   });
+  const [sandboxProviderPreference, setSandboxProviderPreference] = useState<SandboxProviderPreference>(() => {
+    const providerParam = String(searchParams.get('provider') || '').trim().toLowerCase();
+    if (providerParam === 'auto' || providerParam === 'modal' || providerParam === 'vercel') {
+      return providerParam as SandboxProviderPreference;
+    }
+
+    if (typeof window === 'undefined') return 'auto';
+    try {
+      const raw = String(localStorage.getItem('sandboxProviderPreference') || '').trim().toLowerCase();
+      if (raw === 'auto' || raw === 'modal' || raw === 'vercel') return raw as SandboxProviderPreference;
+    } catch {
+      // ignore
+    }
+    return 'auto';
+  });
   const [urlOverlayVisible, setUrlOverlayVisible] = useState(false);
   const [urlInput, setUrlInput] = useState('');
   const [urlStatus, setUrlStatus] = useState<string[]>([]);
@@ -134,6 +158,36 @@ function AISandboxPage() {
   const [isPreviewRefreshing, setIsPreviewRefreshing] = useState(false);
   const [sandboxExpired, setSandboxExpired] = useState(false);
   const [isRestoringSandbox, setIsRestoringSandbox] = useState(false);
+  const [previewHasUpdate, setPreviewHasUpdate] = useState(false);
+  const [previewDiagnostics, setPreviewDiagnostics] = useState<{ message: string; logs?: string[] } | null>(null);
+  const [autoOpenPreviewOnApply, setAutoOpenPreviewOnApply] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      return localStorage.getItem('autoOpenPreviewOnApply') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [demoSpeedMode, setDemoSpeedMode] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    try {
+      const raw = localStorage.getItem('demoSpeedMode');
+      if (raw === null) return true; // default ON (demo-first)
+      return raw === 'true';
+    } catch {
+      return true;
+    }
+  });
+  // Hard-coded parallelism setting (demo-first): default to 10 workers for server-side BuildRuns.
+  const maxConcurrency = 10;
+
+  // Server-side BuildRun (Phase 1): keep build execution truth on the server and stream events via SSE.
+  const [buildRunId, setBuildRunId] = useState<string | null>(null);
+  const buildRunEventSourceRef = useRef<EventSource | null>(null);
+  const sandboxUnhealthyStreakRef = useRef<number>(0);
+  const sandboxViteRestartAttemptsRef = useRef<number>(0);
+  const sandboxLastViteRestartAtRef = useRef<number>(0);
+  const sandboxHealthCheckInFlightRef = useRef<boolean>(false);
 
   // UI Options state for 3-mockup generation
   const [showUIOptions, setShowUIOptions] = useState(false);
@@ -175,6 +229,50 @@ function AISandboxPage() {
     toColumn: string;
     newStatus: TicketStatus;
   } | null>(null);
+
+  // Persist user preference: whether applying code should auto-open the preview tab.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.setItem('autoOpenPreviewOnApply', String(autoOpenPreviewOnApply));
+    } catch {
+      // ignore
+    }
+  }, [autoOpenPreviewOnApply]);
+
+  // Persist user preference: demo-speed mode (skip PR review + integration gate).
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.setItem('demoSpeedMode', String(demoSpeedMode));
+    } catch {
+      // ignore
+    }
+  }, [demoSpeedMode]);
+
+  // Persist user preference: sandbox provider.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.setItem('sandboxProviderPreference', String(sandboxProviderPreference));
+    } catch {
+      // ignore
+    }
+  }, [sandboxProviderPreference]);
+
+  // NOTE: Warm sandbox pooling / prewarming was removed.
+  // We run a single-sandbox workflow now, to reduce sandbox churn and billing surprises.
+
+  useEffect(() => {
+    return () => {
+      try {
+        buildRunEventSourceRef.current?.close();
+      } catch {
+        // ignore
+      }
+      buildRunEventSourceRef.current = null;
+    };
+  }, []);
 
   // Build Tracker Agent - monitors generation and updates Kanban tickets
   const buildTracker = useBuildTracker({
@@ -422,18 +520,54 @@ Visual Features: ${uiOption.features.join(', ')}`;
 
       setLoading(true);
       try {
-        // Always create a fresh sandbox - old sandbox IDs in URL are likely expired
+        // Reuse sandbox from URL when possible to avoid unnecessary sandbox creation (rate limits + usage caps).
+        // If the sandbox is stopped/unhealthy, fall back to creating a fresh sandbox.
+        let reused = false;
         if (sandboxIdParam) {
-          console.log('[home] Found sandbox ID in URL, but creating fresh sandbox (old ones expire)');
-          // Clear the old sandbox ID from URL
-          const newParams = new URLSearchParams(searchParams.toString());
-          newParams.delete('sandbox');
-          window.history.replaceState({}, '', `/generation?${newParams.toString()}`);
+          try {
+            console.log('[home] Found sandbox ID in URL, checking status...');
+            const statusRes = await fetch(`/api/sandbox-status?sandboxId=${encodeURIComponent(sandboxIdParam)}`, {
+              cache: 'no-store',
+            });
+            const statusJson: any = await statusRes.json().catch(() => null);
+            const s = statusJson?.sandboxData;
+            if (
+              statusRes.ok &&
+              statusJson?.success &&
+              statusJson?.active &&
+              s?.sandboxId &&
+              s?.url &&
+              statusJson?.sandboxStopped !== true
+            ) {
+              console.log('[home] Reusing sandbox from URL:', s.sandboxId);
+              sandboxCreated = true;
+              reused = true;
+              setSandboxData({
+                sandboxId: s.sandboxId,
+                url: s.url,
+                templateTarget: 'vite',
+                devPort: 5173,
+              } as any);
+              updateStatus('Sandbox active', true);
+              setTimeout(fetchSandboxFiles, 500);
+              setTimeout(() => {
+                if (iframeRef.current) {
+                  iframeRef.current.src = `${s.url}?t=${Date.now()}&restored=true`;
+                }
+              }, 100);
+            } else {
+              console.warn('[home] Sandbox from URL not reusable; will create fresh sandbox:', statusJson?.message);
+            }
+          } catch (e) {
+            console.warn('[home] Sandbox status check failed; will create fresh sandbox:', e);
+          }
         }
-        
-        console.log('[home] Creating new sandbox...');
-        sandboxCreated = true;
-        await createSandbox(true);
+
+        if (!reused) {
+          console.log('[home] Creating new sandbox...');
+          sandboxCreated = true;
+          await createSandbox(true);
+        }
 
         // If we have a URL from the home page, mark for automatic start
         if (storedUrl && isMounted) {
@@ -638,7 +772,12 @@ Visual Features: ${uiOption.features.join(', ')}`;
   }, [shouldAutoGenerate, homeUrlInput, showHomeScreen]);
 
   const hasTestingOrReviewTickets = useMemo(() => {
-    return kanban.tickets.some(t => t.status === 'testing' || t.status === 'pr_review');
+    return kanban.tickets.some(t =>
+      t.status === 'pr_review' ||
+      t.status === 'merge_queued' ||
+      t.status === 'merging' ||
+      t.status === 'testing'
+    );
   }, [kanban.tickets]);
 
   // Keep-alive effect: ping sandbox periodically during active builds AND during human gates
@@ -653,16 +792,98 @@ Visual Features: ${uiOption.features.join(', ')}`;
     if (!sandboxData?.sandboxId) return;
 
     const keepAlive = async () => {
+      if (sandboxHealthCheckInFlightRef.current) return;
+      sandboxHealthCheckInFlightRef.current = true;
       try {
-        const response = await fetch('/api/sandbox-status');
-        const data = await response.json();
-        
-        if (data.sandboxStopped) {
+        const sid = String(sandboxData?.sandboxId || '').trim();
+        const statusUrl = sid ? `/api/sandbox-status?sandboxId=${encodeURIComponent(sid)}` : '/api/sandbox-status';
+        const response = await fetch(statusUrl);
+        const data = await response.json().catch(() => null);
+
+        if (data?.sandboxData?.sandboxId) {
+          setSandboxData(prev => ({ ...(prev || {}), ...(data.sandboxData || {}) }));
+        }
+
+        const healthStatusCode = data?.sandboxData?.healthStatusCode;
+        const stopped = Boolean(data?.sandboxStopped || healthStatusCode === 410);
+        if (stopped) {
           console.log('[keep-alive] Sandbox expired during build');
+          sandboxUnhealthyStreakRef.current = 0;
+          sandboxViteRestartAttemptsRef.current = 0;
           setSandboxExpired(true);
+          return;
+        }
+
+        const isViteLikelyDown =
+          typeof healthStatusCode === 'number' && (healthStatusCode === 404 || healthStatusCode >= 500);
+
+        if (sid && data?.active && !data?.healthy && isViteLikelyDown) {
+          sandboxUnhealthyStreakRef.current += 1;
+
+          const now = Date.now();
+          const canAttemptRestart =
+            sandboxUnhealthyStreakRef.current >= 2 &&
+            now - sandboxLastViteRestartAtRef.current > 12_000 &&
+            sandboxViteRestartAttemptsRef.current < 2;
+
+          if (canAttemptRestart) {
+            sandboxLastViteRestartAtRef.current = now;
+            sandboxViteRestartAttemptsRef.current += 1;
+
+            setIsPreviewRefreshing(true);
+            try {
+              await fetch('/api/restart-vite', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sandboxId: sid }),
+              });
+            } catch (e) {
+              console.warn('[keep-alive] Vite restart request failed:', e);
+            }
+
+            await new Promise(resolve => setTimeout(resolve, 3000));
+
+            try {
+              const retryRes = await fetch(statusUrl);
+              const retryData = await retryRes.json().catch(() => null);
+
+              if (retryData?.sandboxData?.sandboxId) {
+                setSandboxData(prev => ({ ...(prev || {}), ...(retryData.sandboxData || {}) }));
+              }
+
+              const retryCode = retryData?.sandboxData?.healthStatusCode;
+              const retryStopped = Boolean(retryData?.sandboxStopped || retryCode === 410);
+              if (retryStopped) {
+                sandboxUnhealthyStreakRef.current = 0;
+                sandboxViteRestartAttemptsRef.current = 0;
+                setSandboxExpired(true);
+                return;
+              }
+
+              if (retryData?.active && retryData?.healthy) {
+                sandboxUnhealthyStreakRef.current = 0;
+                sandboxViteRestartAttemptsRef.current = 0;
+                if (iframeRef.current && retryData?.sandboxData?.url) {
+                  iframeRef.current.src = `${retryData.sandboxData.url}?t=${Date.now()}&recovered=true`;
+                }
+              } else if (sandboxViteRestartAttemptsRef.current >= 2) {
+                console.log('[keep-alive] Sandbox still unhealthy after restarts, recreating...');
+                setSandboxExpired(true);
+                return;
+              }
+            } finally {
+              setIsPreviewRefreshing(false);
+            }
+          }
+        } else {
+          // Reset streak once we get a healthy (or differently unhealthy) signal.
+          sandboxUnhealthyStreakRef.current = 0;
+          sandboxViteRestartAttemptsRef.current = 0;
         }
       } catch (e) {
         console.error('[keep-alive] Health check failed:', e);
+      } finally {
+        sandboxHealthCheckInFlightRef.current = false;
       }
     };
 
@@ -699,7 +920,8 @@ Visual Features: ${uiOption.features.join(', ')}`;
       if (newSandbox) {
         // If we have an existing Kanban plan with ticket code, restore automatically so the preview isn't a blank starter.
         const hasRestorableTickets = (kanban.tickets || []).some(t =>
-          Boolean(t.generatedCode) && ['done', 'testing', 'pr_review', 'applying', 'generating'].includes(t.status)
+          Boolean(t.generatedCode) &&
+          ['done', 'testing', 'merging', 'merge_queued', 'pr_review', 'applying', 'generating'].includes(t.status)
         );
         if ((kanban.plan as any)?.blueprint && hasRestorableTickets) {
           await restoreKanbanPlanToSandbox(newSandbox, 'recreate');
@@ -825,13 +1047,63 @@ Visual Features: ${uiOption.features.join(', ')}`;
 
   const checkSandboxStatus = async (desiredTemplate: 'vite' | 'next' = 'vite') => {
     try {
-      const response = await fetch('/api/sandbox-status');
+      const hintedSandboxId = String(searchParams.get('sandbox') || sandboxData?.sandboxId || '').trim();
+      const statusUrl = hintedSandboxId
+        ? `/api/sandbox-status?sandboxId=${encodeURIComponent(hintedSandboxId)}`
+        : '/api/sandbox-status';
+
+      // #region agent log (debug)
+      fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: 'debug-session',
+          runId: 'preview-stuck-pre',
+          hypothesisId: 'H3',
+          location: 'app/generation/page.tsx:checkSandboxStatus:start',
+          message: 'checkSandboxStatus start',
+          data: { desiredTemplate, hintedSandboxId: hintedSandboxId || null, statusUrl },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      // #endregion agent log (debug)
+
+      const response = await fetch(statusUrl);
       const data = await response.json();
+
+      if (data?.sandboxData?.sandboxId) {
+        // Keep local sandbox state in sync even when unhealthy so the UI can surface status codes/errors.
+        setSandboxData(prev => ({ ...(prev || {}), ...(data.sandboxData || {}) }));
+      }
 
       const hasSandboxHint = Boolean(searchParams.get('sandbox')) || Boolean(sandboxData?.sandboxId);
       const shouldRecreate =
         Boolean(data?.sandboxStopped) ||
         (hasSandboxHint && (!data?.active || data?.sandboxData?.healthStatusCode === 410));
+
+      // #region agent log (debug)
+      fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: 'debug-session',
+          runId: 'preview-stuck-pre',
+          hypothesisId: 'H3',
+          location: 'app/generation/page.tsx:checkSandboxStatus:result',
+          message: 'checkSandboxStatus status response',
+          data: {
+            ok: Boolean(response.ok),
+            active: Boolean(data?.active),
+            healthy: Boolean(data?.healthy),
+            sandboxStopped: Boolean(data?.sandboxStopped),
+            healthStatusCode: typeof data?.sandboxData?.healthStatusCode === 'number' ? data.sandboxData.healthStatusCode : null,
+            healthError: typeof data?.sandboxData?.healthError === 'string' ? data.sandboxData.healthError.slice(0, 200) : null,
+            shouldRecreate,
+          },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      // #endregion agent log (debug)
 
       if (shouldRecreate) {
         console.log('[checkSandboxStatus] Sandbox unavailable, clearing state and creating new one');
@@ -848,7 +1120,8 @@ Visual Features: ${uiOption.features.join(', ')}`;
           // If we have an existing Kanban plan (often completed), rehydrate the new sandbox
           // so the preview returns to the generated app instead of the default Vite starter.
           const hasRestorableTickets = (kanban.tickets || []).some(t =>
-            Boolean(t.generatedCode) && ['done', 'testing', 'pr_review', 'applying', 'generating'].includes(t.status)
+            Boolean(t.generatedCode) &&
+            ['done', 'testing', 'merging', 'merge_queued', 'pr_review', 'applying', 'generating'].includes(t.status)
           );
           if (kanban.plan?.blueprint && hasRestorableTickets) {
             await restoreKanbanPlanToSandbox(created, 'recreate');
@@ -866,6 +1139,95 @@ Visual Features: ${uiOption.features.join(', ')}`;
       } else if (data.active && !data.healthy) {
         const healthStatusCode = data?.sandboxData?.healthStatusCode;
         const healthError = data?.sandboxData?.healthError;
+
+        // If the sandbox URL is responding with 404/5xx, Vite likely isn't serving. Try a restart before recreating.
+        const isViteLikelyDown =
+          typeof healthStatusCode === 'number' && (healthStatusCode === 404 || healthStatusCode >= 500);
+        // If the sandbox URL is responding with 403, Vite is likely blocking the tunnel host.
+        const isViteHostBlocked = typeof healthStatusCode === 'number' && healthStatusCode === 403;
+        if ((isViteLikelyDown || isViteHostBlocked) && hintedSandboxId) {
+          const reason = isViteHostBlocked ? 'host blocked (HTTP 403)' : `HTTP ${healthStatusCode}`;
+          updateStatus(`Sandbox unhealthy (${reason}) - restarting Vite…`, false);
+          // #region agent log (debug)
+          fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sessionId: 'debug-session',
+              runId: 'preview-stuck-pre',
+              hypothesisId: 'VH2',
+              location: 'app/generation/page.tsx:checkSandboxStatus:restartVite',
+              message: 'Requesting restart-vite due to unhealthy sandbox',
+              data: {
+                sandboxId: hintedSandboxId,
+                healthStatusCode: typeof healthStatusCode === 'number' ? healthStatusCode : null,
+                healthError: typeof healthError === 'string' ? healthError.slice(0, 200) : null,
+              },
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
+          // #endregion agent log (debug)
+          try {
+            await fetch('/api/restart-vite', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sandboxId: hintedSandboxId }),
+            });
+          } catch (e) {
+            console.warn('[checkSandboxStatus] Vite restart request failed:', e);
+          }
+
+          // Give Vite a moment to come back, then re-check.
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          try {
+            const retryRes = await fetch(statusUrl);
+            const retryData = await retryRes.json().catch(() => null);
+            if (retryData?.sandboxData?.sandboxId) {
+              setSandboxData(prev => ({ ...(prev || {}), ...(retryData.sandboxData || {}) }));
+            }
+            if (retryData?.active && retryData?.healthy && retryData?.sandboxData) {
+              updateStatus('Sandbox active', true);
+              // If the user is currently viewing the preview, force a reload so a prior 403/blank page is cleared.
+              try {
+                const isViewingPreview = activeTab === 'preview' || activeTab === 'split';
+                const url = retryData?.sandboxData?.url || sandboxData?.url;
+                if (isViewingPreview && iframeRef.current && url) {
+                  iframeRef.current.src = `${url}?t=${Date.now()}&recovered=true`;
+                }
+              } catch {
+                // ignore
+              }
+              return;
+            }
+          } catch (e) {
+            console.warn('[checkSandboxStatus] Status re-check after restart failed:', e);
+          }
+
+          // Still unhealthy: recreate if we had a sandbox reference.
+          if (hasSandboxHint) {
+            console.log('[checkSandboxStatus] Sandbox still unhealthy after restart, recreating...');
+            setSandboxData(null);
+            updateStatus('Sandbox unhealthy - creating new one...', false);
+
+            const newParams = new URLSearchParams(searchParams.toString());
+            newParams.delete('sandbox');
+            router.replace(`/generation?${newParams.toString()}`, { scroll: false });
+
+            const created = await createSandbox(true, 0, desiredTemplate);
+            if (created) {
+              const hasRestorableTickets = (kanban.tickets || []).some(t =>
+                Boolean(t.generatedCode) &&
+                ['done', 'testing', 'merging', 'merge_queued', 'pr_review', 'applying', 'generating'].includes(t.status)
+              );
+              if (kanban.plan?.blueprint && hasRestorableTickets) {
+                await restoreKanbanPlanToSandbox(created, 'recreate');
+              } else {
+                addChatMessage('Sandbox was recreated after recovery. Please retry your last action.', 'system');
+              }
+            }
+            return;
+          }
+        }
 
         updateStatus(healthStatusCode === 410 ? 'Sandbox stopped' : 'Sandbox not responding', false);
         if (healthError) {
@@ -892,10 +1254,53 @@ Visual Features: ${uiOption.features.join(', ')}`;
     }
   };
 
+  const runPreviewDiagnostics = async () => {
+    const sid = String(sandboxData?.sandboxId || '').trim();
+    if (!sid) return;
+    try {
+      const res = await fetch(`/api/sandbox-logs?sandboxId=${encodeURIComponent(sid)}`);
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) {
+        setPreviewDiagnostics({ message: data?.error || `Failed to fetch sandbox logs (HTTP ${res.status})` });
+        return;
+      }
+      const logs = Array.isArray(data.logs) ? data.logs : [];
+      setPreviewDiagnostics({
+        message: data.status === 'running' ? 'Vite appears to be running. If the iframe is blank, it may be a runtime crash or render error.' : 'Vite may not be running.',
+        logs,
+      });
+    } catch (e: any) {
+      setPreviewDiagnostics({ message: e?.message || 'Failed to fetch sandbox logs' });
+    }
+  };
+
   const restoreKanbanPlanToSandbox = async (
     overrideSandbox?: SandboxData,
     reason: 'manual' | 'recreate' = 'manual'
   ) => {
+    // #region agent log (debug)
+    fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'debug-session',
+        runId: 'preview-stuck-pre',
+        hypothesisId: 'H4',
+        location: 'app/generation/page.tsx:restoreKanbanPlanToSandbox:start',
+        message: 'restoreKanbanPlanToSandbox called',
+        data: {
+          reason,
+          restoringInFlight: Boolean(restoringSandboxRef.current),
+          overrideSandboxId: overrideSandbox?.sandboxId || null,
+          activeSandboxId: (overrideSandbox || sandboxData)?.sandboxId || null,
+          hasPlanBlueprint: Boolean(kanban.plan?.blueprint),
+          ticketsTotal: Array.isArray(kanban.tickets) ? kanban.tickets.length : null,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion agent log (debug)
+
     if (restoringSandboxRef.current) return;
 
     const activeSandbox = overrideSandbox || sandboxData;
@@ -911,13 +1316,36 @@ Visual Features: ${uiOption.features.join(', ')}`;
     }
 
     const restorableTickets = (kanban.tickets || [])
-      .filter(t => Boolean(t.generatedCode) && ['done', 'testing', 'pr_review', 'applying', 'generating'].includes(t.status))
+      .filter(t =>
+        Boolean(t.generatedCode) &&
+        ['done', 'testing', 'merging', 'merge_queued', 'pr_review', 'applying', 'generating'].includes(t.status)
+      )
       .sort((a, b) => (a.order || 0) - (b.order || 0));
 
     if (restorableTickets.length === 0) {
       addChatMessage('No ticket code found to restore. Use “Plan Build” to rebuild into this sandbox.', 'system');
       return;
     }
+
+    // #region agent log (debug)
+    fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'debug-session',
+        runId: 'preview-stuck-pre',
+        hypothesisId: 'H4',
+        location: 'app/generation/page.tsx:restoreKanbanPlanToSandbox:ready',
+        message: 'restoreKanbanPlanToSandbox starting restore',
+        data: {
+          sandboxId: activeSandbox.sandboxId,
+          restorableTickets: restorableTickets.length,
+          firstTicket: restorableTickets[0]?.title ? String(restorableTickets[0].title).slice(0, 80) : null,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion agent log (debug)
 
     const planTemplate = (plan as any).templateTarget;
     const template: 'vite' | 'next' = planTemplate === 'next' || planTemplate === 'nextjs' ? 'next' : 'vite';
@@ -962,8 +1390,41 @@ Visual Features: ${uiOption.features.join(', ')}`;
         const ticket = restorableTickets[i];
         if (!ticket.generatedCode) continue;
         addChatMessage(`Restoring ${i + 1}/${restorableTickets.length}: ${ticket.title}`, 'system');
+        // #region agent log (debug)
+        fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: 'debug-session',
+            runId: 'preview-flicker-pre',
+            hypothesisId: 'PF1',
+            location: 'app/generation/page.tsx:restoreKanbanPlanToSandbox:applyTicket',
+            message: 'Restoring ticket into sandbox (applyGeneratedCode)',
+            data: {
+              sandboxId: activeSandbox.sandboxId,
+              idx: i,
+              total: restorableTickets.length,
+              ticketId: ticket.id,
+              ticketTitle: typeof ticket.title === 'string' ? ticket.title.slice(0, 120) : null,
+              generatedCodeLen: typeof ticket.generatedCode === 'string' ? ticket.generatedCode.length : null,
+            },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion agent log (debug)
         // Apply sequentially so later tickets can override earlier ones even if files shrink.
         await applyGeneratedCode(ticket.generatedCode, false, activeSandbox, { throwOnError: true });
+      }
+
+      // Sanity fix for demo reliability: remove common runtime footguns that produce blank previews (e.g. nested routers).
+      try {
+        await fetch('/api/preview-sanity-fix', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sandboxId: activeSandbox.sandboxId, restartVite: false }),
+        });
+      } catch {
+        // ignore
       }
 
       // Re-apply Supabase env vars if present in any ticket inputs (so the restored preview switches to Supabase mode).
@@ -1008,8 +1469,50 @@ Visual Features: ${uiOption.features.join(', ')}`;
         }
       }
 
+      // Best-effort: restart Vite after a full restore so the preview isn't stuck on a blank/old bundle.
+      try {
+        // #region agent log (debug)
+        fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: 'debug-session',
+            runId: 'preview-flicker-pre',
+            hypothesisId: 'PF2',
+            location: 'app/generation/page.tsx:restoreKanbanPlanToSandbox:restartVite',
+            message: 'Calling restart-vite after restore',
+            data: { sandboxId: activeSandbox.sandboxId },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion agent log (debug)
+        await fetch('/api/restart-vite', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sandboxId: activeSandbox.sandboxId }),
+        });
+        await new Promise(r => setTimeout(r, 1500));
+      } catch {
+        // ignore
+      }
+
       addChatMessage('✅ Restore complete. Reloading preview…', 'system');
       if (iframeRef.current && activeSandbox.url) {
+        // #region agent log (debug)
+        fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: 'debug-session',
+            runId: 'preview-flicker-pre',
+            hypothesisId: 'PF3',
+            location: 'app/generation/page.tsx:restoreKanbanPlanToSandbox:reloadIframe',
+            message: 'Reloading iframe after restore',
+            data: { sandboxId: activeSandbox.sandboxId, url: String(activeSandbox.url || '').slice(0, 200) },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion agent log (debug)
         iframeRef.current.src = `${activeSandbox.url}?t=${Date.now()}&restored=true`;
       }
     } catch (e: any) {
@@ -1124,9 +1627,12 @@ Apply these design specifications consistently across all components.`;
     awaiting_input: 2,
     generating: 3,
     applying: 4,
-    testing: 5,
-    pr_review: 6,
-    done: 7,
+    pr_review: 5,
+    merge_queued: 6,
+    rebasing: 7,
+    merging: 8,
+    testing: 9,
+    done: 10,
     blocked: -1,
     failed: -1,
     skipped: -1,
@@ -1138,8 +1644,11 @@ Apply these design specifications consistently across all components.`;
     awaiting_input: 'Awaiting Input',
     generating: 'Generating',
     applying: 'Applying',
-    testing: 'Testing',
     pr_review: 'PR Review',
+    merge_queued: 'Merge Queued',
+    rebasing: 'Rebasing',
+    merging: 'Merging',
+    testing: 'Testing',
     done: 'Done',
     blocked: 'Blocked',
     failed: 'Failed',
@@ -1222,6 +1731,32 @@ Apply these design specifications consistently across all components.`;
   };
 
   const planBuild = async (prompt: string, uiStyle?: UIOption, context?: any) => {
+    // For demo speed + reliability, use a fast, stable planner model even if codegen uses GPT-5.
+    const planningModel = demoSpeedMode ? 'openai/gpt-4o' : aiModel;
+
+    // #region agent log (debug)
+    fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'debug-session',
+        runId: 'plan-stuck-pre',
+        hypothesisId: 'H1',
+        location: 'app/generation/page.tsx:planBuild:start',
+        message: 'planBuild called',
+        data: {
+          promptLen: typeof prompt === 'string' ? prompt.length : null,
+          hasContext: Boolean(context),
+          demoSpeedMode,
+          aiModel,
+          planningModel,
+          uiStyleName: uiStyle?.name || null,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion agent log (debug)
+
     setIsPlanning(true);
     kanban.setTickets([]);
 
@@ -1232,6 +1767,7 @@ Apply these design specifications consistently across all components.`;
         body: JSON.stringify({ 
           prompt,
           context,
+          model: planningModel,
           uiStyle: uiStyle ? {
             name: uiStyle.name,
             description: uiStyle.description,
@@ -1243,11 +1779,27 @@ Apply these design specifications consistently across all components.`;
         }),
       });
 
+      // #region agent log (debug)
+      fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: 'debug-session',
+          runId: 'plan-stuck-pre',
+          hypothesisId: 'H2',
+          location: 'app/generation/page.tsx:planBuild:response',
+          message: 'plan-build response headers received',
+          data: { ok: response.ok, status: response.status, hasBody: Boolean(response.body) },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      // #endregion agent log (debug)
+
       if (!response.ok || !response.body) {
         throw new Error('Failed to create build plan');
       }
 
-      const reader = response.body.getReader();
+      const reader = response.body!.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
 
@@ -1276,6 +1828,43 @@ Apply these design specifications consistently across all components.`;
 
           try {
             const data = JSON.parse(payload);
+
+            // #region agent log (debug)
+            if (data && typeof data === 'object' && (data.type === 'planning_start' || data.type === 'planning_status' || data.type === 'plan_complete' || data.type === 'error')) {
+              fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  sessionId: 'debug-session',
+                  runId: 'plan-stuck-pre',
+                  hypothesisId: 'H4',
+                  location: 'app/generation/page.tsx:planBuild:event',
+                  message: 'plan-build SSE event received',
+                  data: {
+                    type: data.type,
+                    model: typeof data.model === 'string' ? data.model : null,
+                    message: typeof data.message === 'string' ? data.message.slice(0, 200) : null,
+                    ticketsCount: Array.isArray(data?.plan?.tickets) ? data.plan.tickets.length : null,
+                  },
+                  timestamp: Date.now(),
+                }),
+              }).catch(() => {});
+            }
+            // #endregion agent log (debug)
+
+            if (data.type === 'planning_start') {
+              if (data.model) {
+                addChatMessage(`🧠 Planning build (${data.model})...`, 'system');
+              }
+              continue;
+            }
+
+            if (data.type === 'planning_status') {
+              if (data.message) {
+                addChatMessage(`⚠️ ${data.message}`, 'system');
+              }
+              continue;
+            }
 
             if (data.type === 'ticket') {
               kanban.setTickets(prev => [...prev, data.ticket]);
@@ -1316,7 +1905,6 @@ Apply these design specifications consistently across all components.`;
                   planIdOverride: serverPlan?.id || null,
                 });
               }
-
               continue;
             }
 
@@ -1333,6 +1921,21 @@ Apply these design specifications consistently across all components.`;
       addChatMessage(`Failed to create build plan: ${error.message}`, 'system');
     } finally {
       setIsPlanning(false);
+      // #region agent log (debug)
+      fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: 'debug-session',
+          runId: 'plan-stuck-pre',
+          hypothesisId: 'H1',
+          location: 'app/generation/page.tsx:planBuild:finally',
+          message: 'planBuild finished (finally)',
+          data: {},
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      // #endregion agent log (debug)
     }
   };
 
@@ -1481,7 +2084,7 @@ Requirements:
         throw new Error(data?.error || `Failed to load repo into sandbox (HTTP ${response.status})`);
       }
 
-      const reader = response.body.getReader();
+      const reader = response.body!.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
       let sawComplete = false;
@@ -1619,9 +2222,294 @@ Requirements:
     router.push(`/generation?${params.toString()}`);
   }, [kanban, sandboxData, aiModel, router, setConversationContext, setChatMessages, setHasInitialSubmission, setPendingPrompt]);
 
+  const handleBuildRunEvent = (evt: any) => {
+    if (!evt || typeof evt !== 'object') return;
+    if (evt.type === 'ping') return;
+
+    if (evt.type === 'run_started') {
+      setKanbanBuildActive(true);
+      kanban.setIsPaused(false);
+      return;
+    }
+
+    if (evt.type === 'run_status') {
+      if (evt.status === 'paused') {
+        setKanbanBuildActive(true);
+        kanban.setIsPaused(true);
+      } else if (evt.status === 'running') {
+        setKanbanBuildActive(true);
+        kanban.setIsPaused(false);
+      } else if (evt.status === 'completed') {
+        setKanbanBuildActive(false);
+        kanban.setIsPaused(false);
+        setGenerationProgress(prev => ({ ...prev, isGenerating: false, status: 'Build complete' }));
+        // If the user is viewing the preview, force a refresh so the latest merged state is visible.
+        try {
+          if ((activeTab === 'preview' || activeTab === 'split') && iframeRef.current && sandboxData?.url) {
+            setIsPreviewRefreshing(true);
+            iframeRef.current.src = `${sandboxData.url}?t=${Date.now()}&merged=true`;
+            setTimeout(() => setIsPreviewRefreshing(false), 1200);
+          } else {
+            setPreviewHasUpdate(true);
+          }
+        } catch {
+          setPreviewHasUpdate(true);
+        }
+      } else if (evt.status === 'failed') {
+        setKanbanBuildActive(false);
+        kanban.setIsPaused(false);
+        const msg = evt.error || evt.message || 'Build failed';
+        setGenerationProgress(prev => ({ ...prev, isGenerating: false, status: `Failed: ${msg}` }));
+        addChatMessage(`Build failed: ${msg}`, 'error');
+      }
+      return;
+    }
+
+    if (evt.type === 'ticket_status') {
+      if (typeof evt.ticketId === 'string') {
+        kanban.setCurrentTicketId(evt.ticketId);
+        kanban.updateTicketStatus(evt.ticketId, evt.status as TicketStatus, evt.error);
+        if (typeof evt.retryCount === 'number' && Number.isFinite(evt.retryCount)) {
+          kanban.editTicket(evt.ticketId, { retryCount: evt.retryCount });
+        }
+        if (typeof evt.progress === 'number') {
+          kanban.updateTicketProgress(evt.ticketId, evt.progress);
+        }
+        // Surface "preview updated" signal only when a ticket is actually merged/done.
+        if (evt.status === 'done') {
+          if (autoOpenPreviewOnApply) {
+            setActiveTab('preview');
+            setPreviewHasUpdate(false);
+          } else {
+            setPreviewHasUpdate(true);
+          }
+          // Best-effort: refresh iframe when a merge is accepted so View shows the latest app without manual reload.
+          try {
+            if ((activeTab === 'preview' || activeTab === 'split' || autoOpenPreviewOnApply) && iframeRef.current && sandboxData?.url) {
+              setIsPreviewRefreshing(true);
+              iframeRef.current.src = `${sandboxData.url}?t=${Date.now()}&merged=true`;
+              setTimeout(() => setIsPreviewRefreshing(false), 1200);
+            }
+          } catch {
+            // ignore
+          }
+        }
+      }
+      return;
+    }
+
+    if (evt.type === 'ticket_artifacts') {
+      if (typeof evt.ticketId === 'string') {
+        if (typeof evt.generatedCode === 'string' && evt.generatedCode.includes('<file path="')) {
+          kanban.updateTicketCode(evt.ticketId, evt.generatedCode);
+        }
+        if (Array.isArray(evt.appliedFiles) && evt.appliedFiles.length > 0) {
+          kanban.updateTicketFiles(evt.ticketId, evt.appliedFiles);
+        }
+        if (typeof evt.applyDurationMs === 'number') {
+          addChatMessage(`⏱️ Apply: ${(evt.applyDurationMs / 1000).toFixed(1)}s`, 'system');
+        }
+        if (typeof evt.reviewDurationMs === 'number') {
+          const issues = typeof evt.reviewIssuesCount === 'number' ? ` (${evt.reviewIssuesCount} issue(s))` : '';
+          addChatMessage(`⏱️ PR review: ${(evt.reviewDurationMs / 1000).toFixed(1)}s${issues}`, 'system');
+        }
+        if (typeof evt.validationDurationMs === 'number') {
+          addChatMessage(`⏱️ Validation: ${(evt.validationDurationMs / 1000).toFixed(1)}s`, 'system');
+        }
+      }
+      return;
+    }
+
+    if (evt.type === 'ticket_warnings') {
+      if (typeof evt.ticketId === 'string') {
+        const warnings = Array.isArray(evt.warnings) ? evt.warnings : [];
+        kanban.editTicket(evt.ticketId, { warnings });
+      }
+      return;
+    }
+
+    if (evt.type === 'log') {
+      const level = evt.level as string | undefined;
+      const message = typeof evt.message === 'string' ? evt.message : '';
+      if (!message) return;
+      if (level === 'error') {
+        addChatMessage(message, 'error');
+      } else {
+        addChatMessage(message, 'system');
+      }
+      return;
+    }
+  };
+
+  const connectBuildRunEvents = (runId: string) => {
+    try {
+      buildRunEventSourceRef.current?.close();
+    } catch {
+      // ignore
+    }
+
+    const es = new EventSource(`/api/build-runs/${runId}/events`);
+    buildRunEventSourceRef.current = es;
+
+    es.onmessage = (event) => {
+      try {
+        const evt = JSON.parse(event.data);
+        handleBuildRunEvent(evt);
+      } catch {
+        // ignore
+      }
+    };
+
+    es.onerror = () => {
+      // The EventSource will retry by default; surface a lightweight hint.
+      addChatMessage('⚠️ Build stream disconnected. Attempting to reconnect...', 'system');
+    };
+  };
+
+  const startServerBuildRun = async (activeSandbox: any, onlyTicketId?: string) => {
+    if (!kanban.plan) {
+      addChatMessage('❌ No plan found. Please create a build plan first.', 'error');
+      return;
+    }
+
+    const sandboxId = String(activeSandbox?.sandboxId || '').trim();
+    if (!sandboxId) {
+      addChatMessage('❌ No active sandbox. Create a sandbox first.', 'error');
+      return;
+    }
+
+    setGenerationProgress(prev => ({ ...prev, isGenerating: true, status: 'Starting build…', streamedCode: '' }));
+
+    // #region agent log (debug)
+    fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'debug-session',
+        runId: 'start-build-pre',
+        hypothesisId: 'SB2',
+        location: 'app/generation/page.tsx:startServerBuildRun:before_fetch',
+        message: 'Starting server build run request',
+        data: {
+          sandboxId,
+          onlyTicketId: onlyTicketId || null,
+          model: aiModel,
+          ticketsCount: Array.isArray(kanban.tickets) ? kanban.tickets.length : null,
+          skipPrReview: demoSpeedMode,
+          skipIntegrationGate: demoSpeedMode,
+          maxConcurrency,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion agent log (debug)
+
+    const res = await fetch('/api/build-runs/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        plan: kanban.plan,
+        tickets: kanban.tickets,
+        sandboxId,
+        model: aiModel,
+        uiStyle: (kanban.plan as any)?.uiStyle,
+        onlyTicketId,
+        maxConcurrency,
+        // Demo speed: skip PR review + integration gate ("testing") so tickets don't bottleneck on quality gates.
+        skipPrReview: demoSpeedMode,
+        skipIntegrationGate: demoSpeedMode,
+      }),
+    });
+
+    const data = await res.json().catch(() => null);
+
+    // #region agent log (debug)
+    fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'debug-session',
+        runId: 'start-build-pre',
+        hypothesisId: 'SB3',
+        location: 'app/generation/page.tsx:startServerBuildRun:after_fetch',
+        message: 'Server build run start response received',
+        data: {
+          httpStatus: res.status,
+          ok: res.ok,
+          success: Boolean((data as any)?.success),
+          runId: typeof (data as any)?.runId === 'string' ? (data as any).runId : null,
+          error: typeof (data as any)?.error === 'string' ? String((data as any).error).slice(0, 200) : null,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion agent log (debug)
+
+    if (!res.ok || !data?.success || !data?.runId) {
+      const msg = data?.error || `Failed to start build run (HTTP ${res.status})`;
+      setKanbanBuildActive(false);
+      setGenerationProgress(prev => ({ ...prev, isGenerating: false, status: `Failed: ${msg}` }));
+      addChatMessage(`❌ ${msg}`, 'error');
+      return;
+    }
+
+    setBuildRunId(data.runId);
+    connectBuildRunEvents(data.runId);
+    addChatMessage(`Build started (run: ${data.runId})`, 'system');
+  };
+
+  const pauseServerBuildRun = async () => {
+    if (!buildRunId) {
+      kanban.setIsPaused(true);
+      return;
+    }
+    try {
+      await fetch(`/api/build-runs/${buildRunId}/pause`, { method: 'POST' });
+    } catch {
+      // ignore
+    }
+  };
+
+  const resumeServerBuildRun = async () => {
+    if (!buildRunId) {
+      kanban.setIsPaused(false);
+      return;
+    }
+    try {
+      await fetch(`/api/build-runs/${buildRunId}/resume`, { method: 'POST' });
+    } catch {
+      // ignore
+    }
+  };
+
   const handleStartKanbanBuild = async (opts?: { onlyTicketId?: string }) => {
     const backlogTickets = kanban.tickets.filter(t => t.status === 'backlog');
     const awaitingInputTickets = kanban.tickets.filter(t => t.status === 'awaiting_input');
+
+    // #region agent log (debug)
+    fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'debug-session',
+        runId: 'start-build-pre',
+        hypothesisId: 'SB1',
+        location: 'app/generation/page.tsx:handleStartKanbanBuild:entry',
+        message: 'Start Build clicked',
+        data: {
+          onlyTicketId: opts?.onlyTicketId || null,
+          backlogCount: backlogTickets.length,
+          awaitingInputCount: awaitingInputTickets.length,
+          sandboxProviderPreference,
+          clientSandboxId: sandboxData?.sandboxId || null,
+          clientTemplateTarget: (sandboxData as any)?.templateTarget || null,
+          model: aiModel,
+          demoSpeedMode,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion agent log (debug)
 
     if (backlogTickets.length === 0 && awaitingInputTickets.length === 0) return;
 
@@ -1690,6 +2578,34 @@ Requirements:
         !statusData?.active ||
         Boolean(statusData?.sandboxStopped) ||
         statusSandbox?.healthStatusCode === 410;
+
+      // #region agent log (debug)
+      fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: 'debug-session',
+          runId: 'start-build-pre',
+          hypothesisId: 'SB4',
+          location: 'app/generation/page.tsx:handleStartKanbanBuild:sandbox_preflight',
+          message: 'Sandbox status preflight completed',
+          data: {
+            httpStatus: statusRes.status,
+            ok: statusRes.ok,
+            active: Boolean(statusData?.active),
+            healthy: Boolean(statusData?.healthy),
+            sandboxStopped: Boolean(statusData?.sandboxStopped),
+            sandboxUnavailable,
+            serverSandboxId: statusSandbox?.sandboxId || null,
+            healthStatusCode: statusSandbox?.healthStatusCode ?? null,
+            healthError:
+              typeof statusSandbox?.healthError === 'string' ? String(statusSandbox.healthError).slice(0, 200) : null,
+          },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      // #endregion agent log (debug)
+
       if (sandboxUnavailable) {
         if (activeSandbox) {
           addChatMessage('Sandbox is no longer available. Creating a new sandbox before continuing...', 'system');
@@ -1705,14 +2621,60 @@ Requirements:
       if (activeSandbox?.templateTarget && activeSandbox.templateTarget !== effectiveTemplate) {
         addChatMessage('Current sandbox template does not match the plan. Creating a new sandbox...', 'system');
       }
+      const sandboxCreateStartedAt = Date.now();
       const newSandbox = await createSandbox(true, 0, effectiveTemplate);
       activeSandbox = newSandbox || activeSandbox;
+
+      // #region agent log (debug)
+      fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: 'debug-session',
+          runId: 'start-build-pre',
+          hypothesisId: 'SB5',
+          location: 'app/generation/page.tsx:handleStartKanbanBuild:after_createSandbox',
+          message: 'createSandbox returned',
+          data: {
+            effectiveTemplate,
+            createReturnedSandboxId: (newSandbox as any)?.sandboxId || null,
+            activeSandboxIdAfter: (activeSandbox as any)?.sandboxId || null,
+            elapsedMs: Date.now() - sandboxCreateStartedAt,
+          },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      // #endregion agent log (debug)
+
+      if (newSandbox && typeof newSandbox?.sandboxId === 'string') {
+        const sandboxCreateMs = Date.now() - sandboxCreateStartedAt;
+        addChatMessage(
+          `⏱️ Sandbox ready in ${(sandboxCreateMs / 1000).toFixed(1)}s (id: ${newSandbox.sandboxId})`,
+          'system'
+        );
+      }
 
       // `createSandbox` can return null if a sandbox creation is already in progress.
       // In that case, wait briefly for the server-side active sandbox to become healthy.
       if (!activeSandbox) {
         const started = Date.now();
         const maxWaitMs = 30000;
+
+        // #region agent log (debug)
+        fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: 'debug-session',
+            runId: 'start-build-pre',
+            hypothesisId: 'SB6',
+            location: 'app/generation/page.tsx:handleStartKanbanBuild:wait_for_sandbox:enter',
+            message: 'Waiting for server active sandbox to become healthy',
+            data: { maxWaitMs },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion agent log (debug)
 
         while (Date.now() - started < maxWaitMs) {
           await new Promise(r => setTimeout(r, 1000));
@@ -1740,6 +2702,25 @@ Requirements:
             // ignore and keep waiting
           }
         }
+
+        // #region agent log (debug)
+        fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: 'debug-session',
+            runId: 'start-build-pre',
+            hypothesisId: 'SB7',
+            location: 'app/generation/page.tsx:handleStartKanbanBuild:wait_for_sandbox:exit',
+            message: 'Finished waiting for sandbox health',
+            data: {
+              elapsedMs: Date.now() - started,
+              activeSandboxIdAfterWait: (activeSandbox as any)?.sandboxId || null,
+            },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion agent log (debug)
       }
       if (!activeSandbox) {
         setKanbanBuildActive(false);
@@ -1837,6 +2818,10 @@ Requirements:
       }
     }
 
+    // Phase 1: execute the build server-side and stream ticket events back to the UI.
+    await startServerBuildRun(activeSandbox, opts?.onlyTicketId);
+    return;
+
     setGenerationProgress(prev => ({
       ...prev,
       isGenerating: true,
@@ -1872,7 +2857,7 @@ Requirements:
         throw new Error(`AI generation failed (HTTP ${response.status})`);
       }
 
-      const reader = response.body.getReader();
+      const reader = response.body!.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
       let generatedCode = '';
@@ -1909,17 +2894,22 @@ Requirements:
           break;
         }
 
-        const nextTicket = opts?.onlyTicketId
-          ? (() => {
-              const res = kanban.buildSingleTicket(opts.onlyTicketId);
-              if (!res) return null;
-              if (typeof (res as any).error === 'string') {
-                addChatMessage(`❌ Can't build that ticket yet: ${(res as any).error}`, 'error');
-                return null;
-              }
-              return res as any;
-            })()
-          : kanban.getNextBuildableTicket();
+        const onlyTicketId = opts?.onlyTicketId;
+        let nextTicket: any = null;
+        const tid = onlyTicketId || '';
+        if (tid.length > 0) {
+          const res = kanban.buildSingleTicket(tid);
+          if (!res) {
+            nextTicket = null;
+          } else if (typeof (res as any).error === 'string') {
+            addChatMessage(`❌ Can't build that ticket yet: ${(res as any).error}`, 'error');
+            nextTicket = null;
+          } else {
+            nextTicket = res as any;
+          }
+        } else {
+          nextTicket = kanban.getNextBuildableTicket();
+        }
 
         if (!nextTicket) break;
 
@@ -2015,7 +3005,7 @@ Requirements:
           throw new Error(`Generation failed for "${nextTicket.title}" (HTTP ${response.status})`);
         }
 
-        const reader = response.body.getReader();
+        const reader = response.body!.getReader();
         const decoder = new TextDecoder();
         let generatedCode = '';
 
@@ -2054,8 +3044,13 @@ Requirements:
         kanban.updateTicketStatus(nextTicket.id, 'applying');
         kanban.updateTicketProgress(nextTicket.id, 90);
         setGenerationProgress(prev => ({ ...prev, status: `Applying: ${nextTicket.title}` }));
-        setActiveTab('preview');
         const applyOutcome = await applyGeneratedCode(generatedCode, true, activeSandbox, { throwOnError: true });
+        const applyDurationMs = applyOutcome.durationMs;
+        if (applyDurationMs !== undefined) {
+          const seconds = ((applyDurationMs as number) / 1000).toFixed(1);
+          const fileCount = (applyOutcome.appliedFiles || []).length;
+          addChatMessage(`⏱️ Apply: ${seconds}s (${fileCount} file(s))`, 'system');
+        }
 
         const appliedFiles = Array.from(new Set(applyOutcome.appliedFiles || []));
         const allFiles =
@@ -2079,6 +3074,7 @@ Requirements:
           fileContents.push({ path: fileMatch[1], content: fileMatch[2].trim() });
         }
 
+        const reviewStartedAt = Date.now();
         const reviewResult = await bugbot.reviewCode({
           ticketId: nextTicket.id,
           ticketTitle: nextTicket.title,
@@ -2161,6 +3157,13 @@ Requirements:
           });
         }
 
+        const reviewDurationMs = Date.now() - reviewStartedAt;
+        const issueCount = currentReview?.issues?.length ?? 0;
+        addChatMessage(
+          `⏱️ PR review: ${(reviewDurationMs / 1000).toFixed(1)}s (${issueCount} issue(s), ${autoFixAttempts} auto-fix attempt(s))`,
+          'system'
+        );
+
         // Persist the final ticket code after any auto-fixes so restore + traceability remain accurate.
         if (currentFiles.length > 0) {
           const finalGeneratedCode = currentFiles
@@ -2198,11 +3201,14 @@ Requirements:
 
         // Blueprint coverage gate (static)
         try {
+          const validateStartedAt = Date.now();
           const { validateBlueprint } = await import('@/lib/blueprint-validator');
           const bpResult = validateBlueprint(planBlueprint);
           if (!bpResult.ok) {
             throw new Error(`Blueprint validation failed: ${bpResult.errors.join('; ')}`);
           }
+          const validateMs = Date.now() - validateStartedAt;
+          addChatMessage(`⏱️ Validation: ${(validateMs / 1000).toFixed(1)}s (blueprint)`, 'system');
         } catch (e: any) {
           kanban.updateTicketStatus(nextTicket.id, 'failed', e.message || 'Blueprint validation failed');
           setKanbanBuildActive(false);
@@ -2240,7 +3246,7 @@ Requirements:
       const message = error?.message || 'Build failed';
       const currentId = kanban.currentTicketId;
       if (currentId) {
-        kanban.updateTicketStatus(currentId, 'failed', message);
+        kanban.updateTicketStatus(currentId as string, 'failed', message);
       }
       setKanbanBuildActive(false);
       setGenerationProgress(prev => ({ ...prev, isGenerating: false, status: `Failed: ${message}` }));
@@ -2478,7 +3484,7 @@ Requirements:
       const response = await fetch('/api/create-ai-sandbox-v2', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ template })
+        body: JSON.stringify({ template, provider: sandboxProviderPreference })
       });
 
       const data = await response.json().catch(() => ({}));
@@ -2504,6 +3510,7 @@ Requirements:
         const newParams = new URLSearchParams(searchParams.toString());
         newParams.set('sandbox', data.sandboxId);
         newParams.set('model', aiModel);
+        newParams.set('provider', sandboxProviderPreference);
         router.push(`/generation?${newParams.toString()}`, { scroll: false });
 
         // Fade out loading background after sandbox loads
@@ -2548,11 +3555,20 @@ Tip: I automatically detect and install npm packages from your code imports (lik
       sandboxCreationRef.current = false; // Reset to allow retry
 
       const code = error?.code as string | undefined;
-      const nonRetryable =
-        code === 'SANDBOX_PROVIDER_NOT_CONFIGURED' ||
-        code === 'USAGE_LIMIT_REACHED' ||
-        code === 'RATE_LIMITED' ||
-        /rate limit/i.test(error?.message || '');
+      const isRateLimited = code === 'RATE_LIMITED' || /rate limit/i.test(error?.message || '');
+      const nonRetryable = code === 'SANDBOX_PROVIDER_NOT_CONFIGURED' || code === 'USAGE_LIMIT_REACHED';
+
+      if (isRateLimited && retryCount < MAX_RETRIES) {
+        const retryAfterSeconds = (() => {
+          const v = Number(error?.retryAfter);
+          if (Number.isFinite(v) && v > 0) return Math.min(120, Math.max(1, Math.floor(v)));
+          return 15;
+        })();
+        console.log(`[createSandbox] Rate limited. Retrying in ${retryAfterSeconds}s (${retryCount + 1}/${MAX_RETRIES})...`);
+        updateStatus(`Rate limited. Retrying in ${retryAfterSeconds}s...`, false);
+        await new Promise(resolve => setTimeout(resolve, retryAfterSeconds * 1000));
+        return createSandbox(fromHomeScreen, retryCount + 1, template);
+      }
 
       // Auto-retry on transient failure only
       if (!nonRetryable && retryCount < MAX_RETRIES) {
@@ -2584,6 +3600,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
     success: boolean;
     results?: any;
     appliedFiles?: string[];
+    durationMs?: number;
     error?: string;
   };
 
@@ -2594,6 +3611,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
     opts?: { throwOnError?: boolean }
   ): Promise<ApplyGeneratedCodeOutcome> => {
     const throwOnError = Boolean(opts?.throwOnError);
+    const startedAt = Date.now();
     setLoading(true);
     log('Applying AI-generated code...');
 
@@ -2943,6 +3961,25 @@ Tip: I automatically detect and install npm packages from your code imports (lik
 
                 // Method 1: Change src with timestamp
                 const urlWithTimestamp = `${currentSandboxData.url}?t=${Date.now()}&applied=true`;
+              // #region agent log (debug)
+              fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  sessionId: 'debug-session',
+                  runId: 'preview-flicker-pre',
+                  hypothesisId: 'PF4',
+                  location: 'app/generation/page.tsx:applyGeneratedCode:iframeRefresh:applied',
+                  message: 'applyGeneratedCode setting iframe src (applied)',
+                  data: {
+                    throwOnError,
+                    packagesInstalled: Boolean(results?.packagesInstalled?.length > 0),
+                    url: String(currentSandboxData.url || '').slice(0, 200),
+                  },
+                  timestamp: Date.now(),
+                }),
+              }).catch(() => {});
+              // #endregion agent log (debug)
                 iframeRef.current.src = urlWithTimestamp;
 
                 // Method 2: Force reload after a short delay
@@ -2973,7 +4010,33 @@ Tip: I automatically detect and install npm packages from your code imports (lik
             console.log(`[applyGeneratedCode] Packages installed: ${packagesInstalled}, refresh delay: ${refreshDelay}ms`);
 
             setIsPreviewRefreshing(true);
-            setActiveTab('preview');
+            // #region agent log (debug)
+            fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                sessionId: 'debug-session',
+                runId: 'preview-flicker-pre',
+                hypothesisId: 'PF5',
+                location: 'app/generation/page.tsx:applyGeneratedCode:iframeRefresh:force',
+                message: 'applyGeneratedCode starting preview refresh sequence',
+                data: {
+                  throwOnError,
+                  packagesInstalled,
+                  refreshDelay,
+                  url: String(currentSandboxData.url || '').slice(0, 200),
+                },
+                timestamp: Date.now(),
+              }),
+            }).catch(() => {});
+            // #endregion agent log (debug)
+            // Never force tab switches during apply. If the user opts in, auto-open preview; otherwise show an indicator.
+            if (autoOpenPreviewOnApply) {
+              setActiveTab('preview');
+              setPreviewHasUpdate(false);
+            } else {
+              setPreviewHasUpdate(true);
+            }
             
             setTimeout(async () => {
               if (iframeRef.current && currentSandboxData?.url) {
@@ -3008,21 +4071,21 @@ Tip: I automatically detect and install npm packages from your code imports (lik
           throw new Error(finalData?.error || 'Failed to apply code');
         }
 
-        return { success: true, results: data.results, appliedFiles };
+        return { success: true, results: data.results, appliedFiles, durationMs: Date.now() - startedAt };
       } else {
         const msg = 'No completion event received from code application stream.';
         addChatMessage('Code application may have partially succeeded. Check the preview.', 'system');
         if (throwOnError) {
           throw new Error(msg);
         }
-        return { success: false, error: msg };
+        return { success: false, error: msg, durationMs: Date.now() - startedAt };
       }
     } catch (error: any) {
       log(`Failed to apply code: ${error.message}`, 'error');
       if (throwOnError) {
         throw error;
       }
-      return { success: false, error: error?.message || 'Failed to apply code' };
+      return { success: false, error: error?.message || 'Failed to apply code', durationMs: Date.now() - startedAt };
     } finally {
       setLoading(false);
       // Clear isEdit flag after applying code
@@ -3696,7 +4759,8 @@ Tip: I automatically detect and install npm packages from your code imports (lik
               {sandboxData &&
               kanban.plan?.blueprint &&
               (kanban.tickets || []).some(t =>
-                Boolean(t.generatedCode) && ['done', 'testing', 'pr_review', 'applying', 'generating'].includes(t.status)
+                Boolean(t.generatedCode) &&
+                ['done', 'testing', 'merging', 'merge_queued', 'pr_review', 'applying', 'generating'].includes(t.status)
               ) ? (
                 <button
                   onClick={() => restoreKanbanPlanToSandbox(undefined, 'manual')}
@@ -3716,17 +4780,93 @@ Tip: I automatically detect and install npm packages from your code imports (lik
                   </svg>
                 </button>
               ) : null}
+              {sandboxData?.sandboxId ? (
+                <button
+                  onClick={runPreviewDiagnostics}
+                  className="bg-white/90 hover:bg-white text-gray-700 p-2 rounded-lg shadow-lg transition-all duration-200 hover:scale-105"
+                  title="Diagnostics (fetch Vite logs)"
+                >
+                  <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M11.25 9.75h1.5m-1.5 4.5h1.5M12 3.75c-4.56 0-8.25 3.69-8.25 8.25S7.44 20.25 12 20.25 20.25 16.56 20.25 12 16.56 3.75 12 3.75z"
+                    />
+                  </svg>
+                </button>
+              ) : null}
               <button
                 disabled={isRestoringSandbox}
                 onClick={async () => {
                   if (!sandboxData?.sandboxId) return;
+                  // #region agent log (debug)
+                  fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      sessionId: 'debug-session',
+                      runId: 'preview-stuck-pre',
+                      hypothesisId: 'H1',
+                      location: 'app/generation/page.tsx:preview:manualRefresh:click',
+                      message: 'Manual refresh clicked',
+                      data: {
+                        sandboxId: sandboxData.sandboxId,
+                        url: sandboxData.url || null,
+                        isRestoringSandbox,
+                        hasIframe: Boolean(iframeRef.current),
+                      },
+                      timestamp: Date.now(),
+                    }),
+                  }).catch(() => {});
+                  // #endregion agent log (debug)
 
                   // If the sandbox expired while idle, recreate it instead of just reloading the iframe.
                   try {
-                    const res = await fetch('/api/sandbox-status');
+                    const statusUrl = `/api/sandbox-status?sandboxId=${encodeURIComponent(sandboxData.sandboxId)}`;
+                    const res = await fetch(statusUrl);
                     const data = await res.json().catch(() => null);
-                    if (data?.sandboxStopped || !data?.active || data?.sandboxData?.healthStatusCode === 410) {
-                      console.log('[Manual Refresh] Sandbox stopped - recreating...');
+                    const code = data?.sandboxData?.healthStatusCode;
+                    const healthError = data?.sandboxData?.healthError;
+                    // #region agent log (debug)
+                    fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        sessionId: 'debug-session',
+                        runId: 'preview-stuck-pre',
+                        hypothesisId: 'H2',
+                        location: 'app/generation/page.tsx:preview:manualRefresh:status',
+                        message: 'Manual refresh status result',
+                        data: {
+                          ok: Boolean(res.ok),
+                          active: Boolean(data?.active),
+                          sandboxStopped: Boolean(data?.sandboxStopped),
+                          healthStatusCode: typeof code === 'number' ? code : null,
+                          healthError: typeof healthError === 'string' ? healthError.slice(0, 200) : null,
+                        },
+                        timestamp: Date.now(),
+                      }),
+                    }).catch(() => {});
+                    // #endregion agent log (debug)
+                    const isViteLikelyDown = typeof code === 'number' && (code === 404 || code >= 500);
+                    if (data?.sandboxStopped || !data?.active || code === 410 || isViteLikelyDown) {
+                      console.log('[Manual Refresh] Sandbox unhealthy - recovering...');
+                      // #region agent log (debug)
+                      fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          sessionId: 'debug-session',
+                          runId: 'preview-stuck-pre',
+                          hypothesisId: 'H3',
+                          location: 'app/generation/page.tsx:preview:manualRefresh:recover',
+                          message: 'Manual refresh invoking checkSandboxStatus (recover)',
+                          data: { template: (sandboxData as any)?.templateTarget || 'vite' },
+                          timestamp: Date.now(),
+                        }),
+                      }).catch(() => {});
+                      // #endregion agent log (debug)
                       await checkSandboxStatus((sandboxData as any)?.templateTarget || 'vite');
                       return;
                     }
@@ -3738,6 +4878,21 @@ Tip: I automatically detect and install npm packages from your code imports (lik
                     console.log('[Manual Refresh] Forcing iframe reload...');
                     const newSrc = `${sandboxData.url}?t=${Date.now()}&manual=true`;
                     iframeRef.current.src = newSrc;
+                    // #region agent log (debug)
+                    fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        sessionId: 'debug-session',
+                        runId: 'preview-stuck-pre',
+                        hypothesisId: 'H2',
+                        location: 'app/generation/page.tsx:preview:manualRefresh:iframe',
+                        message: 'Manual refresh reloaded iframe src',
+                        data: { newSrc: newSrc.slice(0, 200) },
+                        timestamp: Date.now(),
+                      }),
+                    }).catch(() => {});
+                    // #endregion agent log (debug)
                   }
                 }}
                 className={`bg-white/90 hover:bg-white text-gray-700 p-2 rounded-lg shadow-lg transition-all duration-200 hover:scale-105 ${
@@ -3755,6 +4910,29 @@ Tip: I automatically detect and install npm packages from your code imports (lik
                 </svg>
               </button>
             </div>
+
+            {previewDiagnostics && (
+              <div className="absolute left-4 bottom-4 max-w-lg bg-white/95 border border-gray-200 rounded-lg shadow-lg p-3 text-xs text-gray-700">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="font-medium">Preview diagnostics</div>
+                    <div className="text-gray-600 mt-1">{previewDiagnostics.message}</div>
+                  </div>
+                  <button
+                    onClick={() => setPreviewDiagnostics(null)}
+                    className="text-gray-500 hover:text-gray-800"
+                    title="Close"
+                  >
+                    ✕
+                  </button>
+                </div>
+                {Array.isArray(previewDiagnostics.logs) && previewDiagnostics.logs.length > 0 && (
+                  <pre className="mt-2 max-h-40 overflow-auto bg-gray-50 border border-gray-200 rounded p-2 whitespace-pre-wrap">
+                    {previewDiagnostics.logs.join('\n')}
+                  </pre>
+                )}
+              </div>
+            )}
           </div>
         );
       }
@@ -3791,11 +4969,8 @@ Tip: I automatically detect and install npm packages from your code imports (lik
           isPlanning={isPlanning}
           onPlanBuild={planBuild}
           onStartBuild={handleStartKanbanBuild}
-          onPauseBuild={() => kanban.setIsPaused(true)}
-          onResumeBuild={() => {
-            kanban.setIsPaused(false);
-            handleStartKanbanBuild();
-          }}
+          onPauseBuild={pauseServerBuildRun}
+          onResumeBuild={resumeServerBuildRun}
           onEditTicket={kanban.editTicket}
           onSkipTicket={kanban.skipTicket}
           onRetryTicket={kanban.retryTicket}
@@ -3830,11 +5005,8 @@ Tip: I automatically detect and install npm packages from your code imports (lik
               isPlanning={isPlanning}
               onPlanBuild={planBuild}
               onStartBuild={handleStartKanbanBuild}
-              onPauseBuild={() => kanban.setIsPaused(true)}
-              onResumeBuild={() => {
-                kanban.setIsPaused(false);
-                handleStartKanbanBuild();
-              }}
+              onPauseBuild={pauseServerBuildRun}
+              onResumeBuild={resumeServerBuildRun}
               onEditTicket={kanban.editTicket}
               onSkipTicket={kanban.skipTicket}
               onRetryTicket={kanban.retryTicket}
@@ -4302,8 +5474,13 @@ Tip: I automatically detect and install npm packages from your code imports (lik
       }));
 
       setTimeout(() => {
-        // Switch to preview but keep files for display
-        setActiveTab('preview');
+        // Never force a tab switch on completion. If the user opted in, auto-open View; otherwise show an indicator.
+        if (autoOpenPreviewOnApply) {
+          setActiveTab('preview');
+          setPreviewHasUpdate(false);
+        } else {
+          setPreviewHasUpdate(true);
+        }
       }, 1000); // Reduced from 3000ms to 1000ms
     } catch (error: any) {
       setChatMessages(prev => prev.filter(msg => msg.content !== 'Thinking...'));
@@ -4323,7 +5500,13 @@ Tip: I automatically detect and install npm packages from your code imports (lik
         currentFile: undefined,
         lastProcessedPosition: 0
       });
-      setActiveTab('preview');
+      // Don't force View on error; surface an indicator instead.
+      if (autoOpenPreviewOnApply) {
+        setActiveTab('preview');
+        setPreviewHasUpdate(false);
+      } else {
+        setPreviewHasUpdate(true);
+      }
     }
   };
 
@@ -4739,7 +5922,12 @@ Focus on the key sections and content, making it clean and modern while preservi
         setShowLoadingBackground(false);
 
         setTimeout(() => {
-          setActiveTab('preview');
+          if (autoOpenPreviewOnApply) {
+            setActiveTab('preview');
+            setPreviewHasUpdate(false);
+          } else {
+            setPreviewHasUpdate(true);
+          }
         }, 1000);
       } else {
         throw new Error('Failed to generate recreation');
@@ -4760,7 +5948,12 @@ Focus on the key sections and content, making it clean and modern while preservi
         status: '',
         files: prev.files
       }));
-      setActiveTab('preview');
+      if (autoOpenPreviewOnApply) {
+        setActiveTab('preview');
+        setPreviewHasUpdate(false);
+      } else {
+        setPreviewHasUpdate(true);
+      }
     }
   };
 
@@ -4897,7 +6090,7 @@ IMPORTANT INSTRUCTIONS:
           throw new Error('Failed to generate code');
         }
 
-        const reader = aiResponse.body.getReader();
+        const reader = aiResponse.body!.getReader();
         const decoder = new TextDecoder();
         let generatedCode = '';
 
@@ -5033,7 +6226,12 @@ IMPORTANT INSTRUCTIONS:
           status: 'Complete'
         }));
         setKanbanBuildActive(false);
-        setActiveTab('preview');
+        if (autoOpenPreviewOnApply) {
+          setActiveTab('preview');
+          setPreviewHasUpdate(false);
+        } else {
+          setPreviewHasUpdate(true);
+        }
 
       } catch (error) {
         console.error('[generation] Error in prompt generation:', error);
@@ -5437,7 +6635,7 @@ Focus on the key sections and content, making it clean and modern.`;
           throw new Error('Failed to generate code');
         }
 
-        const reader = aiResponse.body.getReader();
+        const reader = aiResponse.body!.getReader();
         const decoder = new TextDecoder();
         let generatedCode = '';
         let explanation = '';
@@ -5669,8 +6867,13 @@ Focus on the key sections and content, making it clean and modern.`;
         setShowLoadingBackground(false); // Clear loading background
 
         setTimeout(() => {
-          // Switch back to preview tab but keep files
-          setActiveTab('preview');
+          // Never force a tab switch on completion. If the user opted in, auto-open View; otherwise show an indicator.
+          if (autoOpenPreviewOnApply) {
+            setActiveTab('preview');
+            setPreviewHasUpdate(false);
+          } else {
+            setPreviewHasUpdate(true);
+          }
         }, 1000); // Show completion briefly then switch
       } catch (error: any) {
         addChatMessage(`Failed to clone website: ${error.message}`, 'system');
@@ -5749,6 +6952,31 @@ Focus on the key sections and content, making it clean and modern.`;
             </button>
           </div>
           <div className="flex items-center gap-2">
+            {/* Sandbox Provider Selector */}
+            <select
+              value={sandboxProviderPreference}
+              onChange={(e) => {
+                const nextPref = String(e.target.value || '').trim().toLowerCase();
+                if (nextPref !== 'auto' && nextPref !== 'modal' && nextPref !== 'vercel') return;
+                setSandboxProviderPreference(nextPref as SandboxProviderPreference);
+
+                const params = new URLSearchParams(searchParams);
+                params.set('provider', nextPref);
+                params.set('model', aiModel);
+                if (sandboxData?.sandboxId) {
+                  params.set('sandbox', sandboxData.sandboxId);
+                }
+                router.push(`/generation?${params.toString()}`);
+              }}
+              className="px-3 py-1.5 text-sm text-gray-900 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:border-gray-300 transition-colors"
+              title="Sandbox provider (Auto uses server default)"
+            >
+              {SANDBOX_PROVIDER_CHOICES.map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
             {/* Model Selector - Left side */}
             <select
               value={aiModel}
@@ -5855,6 +7083,22 @@ Focus on the key sections and content, making it clean and modern.`;
                       </span>
                     </div>
                     <div className="flex items-center gap-2">
+                      {!isPlanning && kanban.tickets.length > 0 && (
+                        <div
+                          className={`flex items-center gap-2 px-2 py-1 rounded border ${
+                            demoSpeedMode ? 'bg-orange-50 border-orange-200' : 'bg-white border-gray-200'
+                          }`}
+                          title="Demo speed mode: skips PR review + integration gate (testing/healing) for faster builds"
+                        >
+                          <span className="text-[10px] font-medium text-gray-700">Demo speed</span>
+                          <Switch
+                            size="sm"
+                            checked={demoSpeedMode}
+                            onCheckedChange={(v) => setDemoSpeedMode(Boolean(v))}
+                            disabled={kanbanBuildActive}
+                          />
+                        </div>
+                      )}
                       {!isPlanning && kanban.tickets.length > 0 && lastImportedRepo && sandboxData && (
                         <button
                           onClick={handleLoadImportedRepoIntoSandbox}
@@ -6410,7 +7654,10 @@ Focus on the key sections and content, making it clean and modern.`;
                     </div>
                   </button>
                   <button
-                    onClick={() => setActiveTab('preview')}
+                    onClick={() => {
+                      setActiveTab('preview');
+                      setPreviewHasUpdate(false);
+                    }}
                     className={`px-3 py-1 rounded transition-all text-xs font-medium ${activeTab === 'preview'
                       ? 'bg-white text-gray-900 shadow-sm'
                       : 'bg-transparent text-gray-600 hover:text-gray-900'
@@ -6422,6 +7669,11 @@ Focus on the key sections and content, making it clean and modern.`;
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
                       </svg>
                       <span>View</span>
+                      {previewHasUpdate && activeTab !== 'preview' && (
+                        <span className="ml-0.5 inline-flex">
+                          <span className="w-1.5 h-1.5 rounded-full bg-orange-500" />
+                        </span>
+                      )}
                     </div>
                   </button>
                   <button
@@ -6444,7 +7696,10 @@ Focus on the key sections and content, making it clean and modern.`;
                     </div>
                   </button>
                   <button
-                    onClick={() => setActiveTab('split')}
+                    onClick={() => {
+                      setActiveTab('split');
+                      setPreviewHasUpdate(false);
+                    }}
                     className={`px-3 py-1 rounded transition-all text-xs font-medium ${activeTab === 'split'
                       ? 'bg-white text-gray-900 shadow-sm'
                       : 'bg-transparent text-gray-600 hover:text-gray-900'
@@ -6501,6 +7756,29 @@ Focus on the key sections and content, making it clean and modern.`;
                   </div>
                 )}
 
+                {/* Preview auto-open setting */}
+                <label
+                  className="hidden md:inline-flex items-center gap-2 px-2 py-1 rounded-md border border-gray-200 bg-white text-xs text-gray-600"
+                  title="When enabled, applying code will automatically switch to the View tab. When disabled, you'll see a small dot on View instead."
+                >
+                  <input
+                    type="checkbox"
+                    checked={autoOpenPreviewOnApply}
+                    onChange={(e) => setAutoOpenPreviewOnApply(e.target.checked)}
+                    className="h-3 w-3 accent-orange-500"
+                  />
+                  <span className="select-none">Auto-open View</span>
+                </label>
+
+                {/* Parallel worker pool size */}
+                <div
+                  className="hidden md:inline-flex items-center gap-2 px-2 py-1 rounded-md border border-gray-200 bg-white text-xs text-gray-600"
+                  title="Hard-coded worker pool size."
+                >
+                  <span className="select-none">Workers</span>
+                  <span className="font-mono text-gray-800">{maxConcurrency}</span>
+                </div>
+
                 {/* Live Code Generation Status */}
                 {activeTab === 'generation' && generationProgress.isGenerating && (
                   <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-gray-100 border border-gray-200 rounded-md text-xs font-medium text-gray-700">
@@ -6510,12 +7788,23 @@ Focus on the key sections and content, making it clean and modern.`;
                 )}
 
                 {/* Sandbox Status Indicator */}
-                {sandboxData && (
-                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-gray-100 border border-gray-200 rounded-md text-xs font-medium text-gray-700">
-                    <div className="w-1.5 h-1.5 bg-green-500 rounded-full" />
-                    Sandbox active
-                  </div>
-                )}
+                {sandboxData && (() => {
+                  const code = (sandboxData as any)?.healthStatusCode as number | null | undefined;
+                  const err = (sandboxData as any)?.healthError as string | undefined;
+                  const isOk = typeof code === 'number' ? code >= 200 && code < 300 : true;
+                  const label = typeof code === 'number' ? (isOk ? 'Sandbox healthy' : `Sandbox HTTP ${code}`) : 'Sandbox active';
+                  const dot = isOk ? 'bg-green-500' : 'bg-red-500';
+                  const title = err ? `${label}\n${err}` : label;
+                  return (
+                    <div
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-gray-100 border border-gray-200 rounded-md text-xs font-medium text-gray-700"
+                      title={title}
+                    >
+                      <div className={`w-1.5 h-1.5 ${dot} rounded-full`} />
+                      {label}
+                    </div>
+                  );
+                })()}
 
                 {/* Copy URL button */}
                 {sandboxData && (

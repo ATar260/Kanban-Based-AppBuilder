@@ -3,17 +3,59 @@ import { ModalProvider } from './providers/modal-provider';
 import { VercelProvider } from './providers/vercel-provider';
 
 export class SandboxFactory {
+  static getPreferredProvider(): 'auto' | 'modal' | 'vercel' {
+    const raw = String(process.env.SANDBOX_PROVIDER || process.env.PREFERRED_SANDBOX_PROVIDER || '')
+      .trim()
+      .toLowerCase();
+    if (raw === 'vercel') return 'vercel';
+    if (raw === 'modal') return 'modal';
+    return 'auto';
+  }
+
+  static isModalAvailable(): boolean {
+    return this.isModalConfigured();
+  }
+
+  static isVercelAvailable(): boolean {
+    return this.isVercelConfigured();
+  }
+
   static create(config?: SandboxProviderConfig): SandboxProvider {
     const resolvedConfig = config || {};
 
-    if (this.isModalConfigured(resolvedConfig)) {
-      console.log(`[SandboxFactory] Creating Modal sandbox`);
-      return new ModalProvider(resolvedConfig);
-    }
+    const preferred = this.getPreferredProvider();
+    const modalOk = this.isModalConfigured(resolvedConfig);
+    const vercelOk = this.isVercelConfigured(resolvedConfig);
 
-    if (this.isVercelConfigured(resolvedConfig)) {
-      console.log(`[SandboxFactory] Creating Vercel sandbox`);
-      return new VercelProvider(resolvedConfig);
+    // Prefer Vercel for preview stability when both are configured, unless explicitly pinned to Modal.
+    if (preferred === 'vercel') {
+      if (vercelOk) {
+        console.log(`[SandboxFactory] Creating Vercel sandbox (SANDBOX_PROVIDER=vercel)`);
+        return new VercelProvider(resolvedConfig);
+      }
+      if (modalOk) {
+        console.log(`[SandboxFactory] Creating Modal sandbox (fallback; Vercel not configured)`);
+        return new ModalProvider(resolvedConfig);
+      }
+    } else if (preferred === 'modal') {
+      if (modalOk) {
+        console.log(`[SandboxFactory] Creating Modal sandbox (SANDBOX_PROVIDER=modal)`);
+        return new ModalProvider(resolvedConfig);
+      }
+      if (vercelOk) {
+        console.log(`[SandboxFactory] Creating Vercel sandbox (fallback; Modal not configured)`);
+        return new VercelProvider(resolvedConfig);
+      }
+    } else {
+      // auto
+      if (vercelOk) {
+        console.log(`[SandboxFactory] Creating Vercel sandbox (auto)`);
+        return new VercelProvider(resolvedConfig);
+      }
+      if (modalOk) {
+        console.log(`[SandboxFactory] Creating Modal sandbox (auto)`);
+        return new ModalProvider(resolvedConfig);
+      }
     }
 
     // Default to Modal (will fail with a helpful error upstream)

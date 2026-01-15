@@ -57,6 +57,14 @@ export abstract class SandboxProvider {
   abstract getSandboxInfo(): SandboxInfo | null;
   abstract terminate(): Promise<void>;
   abstract isAlive(): boolean;
+
+  /**
+   * Optional: reconnect to an existing sandbox instance by sandboxId.
+   * Providers that support reconnection (e.g. Vercel Sandboxes) should override.
+   */
+  async reconnect(_sandboxId: string): Promise<boolean> {
+    return false;
+  }
   
   async makePersistent(): Promise<{ persistentUrl: string; expiresAt: Date } | null> {
     return null;

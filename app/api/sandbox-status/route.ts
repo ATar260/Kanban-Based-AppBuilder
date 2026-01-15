@@ -15,7 +15,35 @@ export async function GET(request: NextRequest) {
     // Best-effort usage tracking identity (user or IP)
     const actor = await getUsageActor(request);
 
-    const provider = sandboxManager.getActiveProvider() || global.activeSandboxProvider;
+    const requestedSandboxId = (() => {
+      try {
+        const url = new URL(request.url);
+        return String(url.searchParams.get('sandboxId') || '').trim();
+      } catch {
+        return '';
+      }
+    })();
+
+    const activeProvider = sandboxManager.getActiveProvider() || global.activeSandboxProvider;
+
+    let provider =
+      requestedSandboxId
+        ? sandboxManager.getProvider(requestedSandboxId) ||
+          (activeProvider?.getSandboxInfo?.()?.sandboxId === requestedSandboxId ? activeProvider : null)
+        : activeProvider;
+
+    // If the provider isn't registered in this process, attempt a best-effort reconnect by sandboxId.
+    if (!provider && requestedSandboxId) {
+      try {
+        provider = await sandboxManager.getOrCreateProvider(requestedSandboxId);
+        if (!provider?.getSandboxInfo?.() || provider.getSandboxInfo()?.sandboxId !== requestedSandboxId) {
+          provider = null;
+        }
+      } catch {
+        provider = null;
+      }
+    }
+
     const sandboxExists = !!provider;
 
     // Opportunistic lifecycle cleanup (idle sandboxes + stale prewarmed pool entries).
@@ -49,7 +77,18 @@ export async function GET(request: NextRequest) {
           if (!sandboxHealthy && healthResult.error) {
             healthError = healthResult.error;
           }
-          sandboxStopped = healthResult.error === 'SANDBOX_STOPPED';
+          const errMsg = String(healthResult.error || '');
+          // Providers use different error strings when the underlying container/sandbox is gone.
+          // Treat these as a stopped sandbox so the UI can recreate + restore automatically.
+          const looksStopped =
+            errMsg === 'SANDBOX_STOPPED' ||
+            errMsg.includes('SANDBOX_STOPPED') ||
+            // Modal: container finished / cannot exec
+            errMsg.includes('ContainerExec NOT_FOUND') ||
+            errMsg.includes('Container ID') && errMsg.includes('finished') ||
+            errMsg.includes('No connection established');
+
+          sandboxStopped = looksStopped;
         } else {
           sandboxHealthy = !!providerInfo;
         }
@@ -87,10 +126,16 @@ export async function GET(request: NextRequest) {
           healthError = 'No sandbox URL available';
         }
 
-        if (sandboxStopped) {
+        const activeSandboxId = activeProvider?.getSandboxInfo?.()?.sandboxId || null;
+        const isActiveSandbox = !requestedSandboxId || (activeSandboxId && requestedSandboxId === activeSandboxId);
+
+        if (sandboxStopped && isActiveSandbox) {
           global.activeSandboxProvider = null;
           global.sandboxData = null;
           sandboxManager.clearActiveProvider();
+          sandboxInfo = null;
+        } else if (sandboxStopped) {
+          // Don't clear the globally active sandbox if the caller is checking a specific sandboxId.
           sandboxInfo = null;
         } else {
           sandboxInfo = {
@@ -115,13 +160,40 @@ export async function GET(request: NextRequest) {
         console.error('[sandbox-status] Health check failed:', error);
         if (error?.message?.includes('SANDBOX_STOPPED') || error?.message?.includes('410')) {
           sandboxStopped = true;
-          global.activeSandboxProvider = null;
-          global.sandboxData = null;
-          sandboxManager.clearActiveProvider();
+          const activeSandboxId = activeProvider?.getSandboxInfo?.()?.sandboxId || null;
+          const isActiveSandbox = !requestedSandboxId || (activeSandboxId && requestedSandboxId === activeSandboxId);
+          if (isActiveSandbox) {
+            global.activeSandboxProvider = null;
+            global.sandboxData = null;
+            sandboxManager.clearActiveProvider();
+          }
         }
         sandboxHealthy = false;
       }
     }
+
+    // #region agent log (debug)
+    fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'debug-session',
+        runId: 'preview-stuck-pre',
+        hypothesisId: 'H2',
+        location: 'app/api/sandbox-status/route.ts:GET:result',
+        message: 'sandbox-status computed',
+        data: {
+          requestedSandboxId: requestedSandboxId || null,
+          sandboxExists,
+          sandboxHealthy,
+          sandboxStopped,
+          healthStatusCode: (sandboxInfo as any)?.healthStatusCode ?? null,
+          healthError: typeof (sandboxInfo as any)?.healthError === 'string' ? (sandboxInfo as any).healthError.slice(0, 200) : null,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion agent log (debug)
     
     return NextResponse.json({
       success: true,

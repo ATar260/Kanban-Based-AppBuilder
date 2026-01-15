@@ -37,7 +37,11 @@ export default function KanbanTicketModal({
     setIsEditing(false);
   };
 
-  const canApprove = ticket.status === 'testing' || ticket.status === 'pr_review';
+  const canApprove =
+    ticket.status === 'pr_review' ||
+    ticket.status === 'merge_queued' ||
+    ticket.status === 'merging' ||
+    ticket.status === 'testing';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
@@ -181,6 +185,17 @@ export default function KanbanTicketModal({
                     <div className="bg-red-50 border border-red-200 rounded-md p-3">
                       <h4 className="text-sm font-medium text-red-700 mb-1">Error</h4>
                       <p className="text-sm text-red-600">{ticket.error}</p>
+                    </div>
+                  )}
+
+                  {Array.isArray(ticket.warnings) && ticket.warnings.length > 0 && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-md p-3">
+                      <h4 className="text-sm font-medium text-amber-800 mb-1">Warnings</h4>
+                      <ul className="text-sm text-amber-800 list-disc pl-5 space-y-1">
+                        {ticket.warnings.slice(0, 8).map((w, idx) => (
+                          <li key={idx}>{w}</li>
+                        ))}
+                      </ul>
                     </div>
                   )}
                 </>

@@ -48,14 +48,17 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <ClerkProvider>
-      <html lang="en">
-        <body className={`${inter.variable} ${geistSans.variable} ${geistMono.variable} ${robotoMono.variable} ${plusJakarta.variable} font-sans`}>
+    <html lang="en" suppressHydrationWarning>
+      <body
+        suppressHydrationWarning
+        className={`${inter.variable} ${geistSans.variable} ${geistMono.variable} ${robotoMono.variable} ${plusJakarta.variable} font-sans`}
+      >
+        <ClerkProvider>
           <ErrorBoundary>
             {children}
           </ErrorBoundary>
-        </body>
-      </html>
-    </ClerkProvider>
+        </ClerkProvider>
+      </body>
+    </html>
   );
 }
