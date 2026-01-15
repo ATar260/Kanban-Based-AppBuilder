@@ -1,7 +1,7 @@
 'use client'
 
-import { motion, useScroll, useTransform } from 'framer-motion'
-import { useRef } from 'react'
+import { motion, useScroll, useTransform, AnimatePresence, Reorder } from 'framer-motion'
+import { useRef, useState, useEffect } from 'react'
 import Image from 'next/image'
 
 const agents = [
@@ -13,14 +13,14 @@ const agents = [
   { id: 'devops', name: 'DevOps', emoji: '🚀', color: '#4D8957' },
 ]
 
-const columns = [
+const columnsData = [
   { id: 'todo', name: 'To Do', color: '#5E9A68', emoji: '📝', description: 'Waiting to start' },
   { id: 'inprogress', name: 'In Progress', color: '#7FB589', emoji: '🔄', description: 'Agents working' },
   { id: 'review', name: 'Review', color: '#6BA875', emoji: '👀', description: 'Ready for review' },
   { id: 'done', name: 'Done', color: '#8FC298', emoji: '✅', description: 'Completed' },
 ]
 
-const tasks = [
+const initialTasks = [
   { id: 'TSK-001', title: 'Design dashboard layout', column: 'todo', priority: 'high', agent: 'designer', progress: 0 },
   { id: 'TSK-002', title: 'Create auth system', column: 'todo', priority: 'high', agent: 'architect', progress: 0 },
   { id: 'TSK-003', title: 'Build navigation', column: 'inprogress', priority: 'medium', agent: 'coder', progress: 65 },
@@ -31,7 +31,7 @@ const tasks = [
   { id: 'TSK-008', title: 'Database setup', column: 'done', priority: 'high', agent: 'devops', progress: 100 },
 ]
 
-const activityFeed = [
+const initialActivityFeed = [
   { time: '2s ago', agent: 'coder', action: 'Committed', detail: 'Navigation.tsx' },
   { time: '5s ago', agent: 'architect', action: 'Approved', detail: 'API schema' },
   { time: '12s ago', agent: 'designer', action: 'Created', detail: 'ProfileCard.tsx' },
@@ -39,13 +39,25 @@ const activityFeed = [
   { time: '30s ago', agent: 'devops', action: 'Deployed', detail: 'Preview build' },
 ]
 
-function AgentBadge({ agentId, showPulse = false }: { agentId: string, showPulse?: boolean }) {
+const newActivities = [
+  { agent: 'coder', action: 'Updated', detail: 'Button.tsx' },
+  { agent: 'designer', action: 'Styled', detail: 'Modal component' },
+  { agent: 'tester', action: 'Running', detail: 'Integration tests' },
+  { agent: 'architect', action: 'Reviewed', detail: 'Database schema' },
+  { agent: 'devops', action: 'Configured', detail: 'CI pipeline' },
+  { agent: 'planner', action: 'Created', detail: 'Sprint backlog' },
+]
+
+type Task = typeof initialTasks[0]
+
+function AgentBadge({ agentId, showPulse = false, onClick }: { agentId: string, showPulse?: boolean, onClick?: () => void }) {
   const agent = agents.find(a => a.id === agentId)
   if (!agent) return null
 
   return (
     <span
-      className="inline-flex items-center gap-1 rounded-full text-xs px-1.5 py-0.5"
+      onClick={onClick}
+      className={`inline-flex items-center gap-1 rounded-full text-xs px-1.5 py-0.5 ${onClick ? 'cursor-pointer hover:opacity-80' : ''}`}
       style={{ backgroundColor: `${agent.color}15`, color: agent.color }}
     >
       <span>{agent.emoji}</span>
@@ -60,7 +72,19 @@ function AgentBadge({ agentId, showPulse = false }: { agentId: string, showPulse
   )
 }
 
-function TaskCard({ task, isActive = false }: { task: typeof tasks[0], isActive?: boolean }) {
+function TaskCard({
+  task,
+  isActive = false,
+  isSelected = false,
+  onSelect,
+  onDragToColumn
+}: {
+  task: Task,
+  isActive?: boolean,
+  isSelected?: boolean,
+  onSelect: () => void,
+  onDragToColumn: (columnId: string) => void
+}) {
   const priorityColors: Record<string, string> = {
     high: 'bg-comfort-terracotta-100 text-comfort-terracotta-700',
     medium: 'bg-amber-100 text-amber-700',
@@ -69,10 +93,33 @@ function TaskCard({ task, isActive = false }: { task: typeof tasks[0], isActive?
 
   return (
     <motion.div
+      layout
       initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      whileHover={{ y: -2, boxShadow: '0 8px 30px rgba(0, 0, 0, 0.06)' }}
-      className="bg-white border border-comfort-sage-300 rounded-[16px] p-3 cursor-pointer transition-all duration-200"
+      animate={{
+        opacity: 1,
+        y: 0,
+        scale: isSelected ? 1.02 : 1,
+        boxShadow: isSelected ? '0 8px 30px rgba(0, 0, 0, 0.12)' : '0 1px 3px rgba(0, 0, 0, 0.05)'
+      }}
+      whileHover={{ y: -2, boxShadow: '0 8px 30px rgba(0, 0, 0, 0.08)' }}
+      whileTap={{ scale: 0.98 }}
+      drag
+      dragSnapToOrigin
+      onDragEnd={(_, info) => {
+        // Determine which column based on drag offset
+        if (Math.abs(info.offset.x) > 100) {
+          const direction = info.offset.x > 0 ? 1 : -1
+          const currentIndex = columnsData.findIndex(c => c.id === task.column)
+          const newIndex = Math.max(0, Math.min(columnsData.length - 1, currentIndex + direction))
+          if (newIndex !== currentIndex) {
+            onDragToColumn(columnsData[newIndex].id)
+          }
+        }
+      }}
+      onClick={onSelect}
+      className={`bg-white border rounded-[16px] p-3 cursor-grab active:cursor-grabbing transition-colors duration-200 ${
+        isSelected ? 'border-comfort-sage-500 ring-2 ring-comfort-sage-200' : 'border-comfort-sage-300'
+      }`}
     >
       <div className="flex items-center justify-between mb-2">
         <span className={`text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full ${priorityColors[task.priority]}`}>
@@ -101,12 +148,33 @@ function TaskCard({ task, isActive = false }: { task: typeof tasks[0], isActive?
 
       <div className="flex items-center justify-between pt-2 border-t border-comfort-sage-200">
         <AgentBadge agentId={task.agent} showPulse={isActive} />
+        {isSelected && (
+          <motion.span
+            initial={{ opacity: 0, scale: 0.8 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="text-[10px] text-comfort-sage-600 font-medium"
+          >
+            Selected
+          </motion.span>
+        )}
       </div>
     </motion.div>
   )
 }
 
-function Column({ column, columnTasks }: { column: typeof columns[0], columnTasks: typeof tasks }) {
+function Column({
+  column,
+  columnTasks,
+  selectedTaskId,
+  onSelectTask,
+  onMoveTask
+}: {
+  column: typeof columnsData[0],
+  columnTasks: Task[],
+  selectedTaskId: string | null,
+  onSelectTask: (id: string) => void,
+  onMoveTask: (taskId: string, columnId: string) => void
+}) {
   return (
     <div className="flex-shrink-0 w-[200px]">
       <div className="flex items-center gap-2 mb-3">
@@ -115,18 +183,28 @@ function Column({ column, columnTasks }: { column: typeof columns[0], columnTask
           <h3 className="text-xs font-semibold text-comfort-charcoal-800">{column.name}</h3>
           <p className="text-[9px] text-comfort-charcoal-400">{column.description}</p>
         </div>
-        <span className="text-[10px] text-comfort-charcoal-400 bg-comfort-sage-200 px-1.5 py-0.5 rounded-full ml-auto">
+        <motion.span
+          key={columnTasks.length}
+          initial={{ scale: 1.2 }}
+          animate={{ scale: 1 }}
+          className="text-[10px] text-comfort-charcoal-400 bg-comfort-sage-200 px-1.5 py-0.5 rounded-full ml-auto"
+        >
           {columnTasks.length}
-        </span>
+        </motion.span>
       </div>
-      <div className="space-y-2">
-        {columnTasks.map(task => (
-          <TaskCard
-            key={task.id}
-            task={task}
-            isActive={column.id === 'inprogress'}
-          />
-        ))}
+      <div className="space-y-2 min-h-[100px]">
+        <AnimatePresence mode="popLayout">
+          {columnTasks.map(task => (
+            <TaskCard
+              key={task.id}
+              task={task}
+              isActive={column.id === 'inprogress'}
+              isSelected={selectedTaskId === task.id}
+              onSelect={() => onSelectTask(task.id)}
+              onDragToColumn={(columnId) => onMoveTask(task.id, columnId)}
+            />
+          ))}
+        </AnimatePresence>
       </div>
     </div>
   )
@@ -134,6 +212,10 @@ function Column({ column, columnTasks }: { column: typeof columns[0], columnTask
 
 export default function MockUI() {
   const sectionRef = useRef<HTMLElement>(null)
+  const [tasks, setTasks] = useState(initialTasks)
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
+  const [activityFeed, setActivityFeed] = useState(initialActivityFeed)
+  const [activityIndex, setActivityIndex] = useState(0)
 
   const { scrollYProgress } = useScroll({
     target: sectionRef,
@@ -145,9 +227,72 @@ export default function MockUI() {
   const opacity = useTransform(scrollYProgress, [0, 0.15, 0.4], [0, 0.8, 1])
   const scale = useTransform(scrollYProgress, [0, 0.3, 0.5], [0.9, 0.95, 1])
 
+  // Simulate live activity updates
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const newActivity = newActivities[activityIndex % newActivities.length]
+      setActivityFeed(prev => [
+        { ...newActivity, time: 'just now' },
+        ...prev.slice(0, 4).map((a, i) => ({
+          ...a,
+          time: i === 0 ? '3s ago' : i === 1 ? '8s ago' : i === 2 ? '15s ago' : '25s ago'
+        }))
+      ])
+      setActivityIndex(prev => prev + 1)
+    }, 4000)
+
+    return () => clearInterval(interval)
+  }, [activityIndex])
+
+  // Simulate progress updates for in-progress tasks
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTasks(prev => prev.map(task => {
+        if (task.column === 'inprogress' && task.progress < 100) {
+          const newProgress = Math.min(100, task.progress + Math.floor(Math.random() * 5) + 1)
+          return { ...task, progress: newProgress }
+        }
+        return task
+      }))
+    }, 2000)
+
+    return () => clearInterval(interval)
+  }, [])
+
+  const handleMoveTask = (taskId: string, newColumnId: string) => {
+    setTasks(prev => prev.map(task => {
+      if (task.id === taskId) {
+        // Update progress based on column
+        let newProgress = task.progress
+        if (newColumnId === 'done') newProgress = 100
+        else if (newColumnId === 'todo') newProgress = 0
+        else if (newColumnId === 'review') newProgress = 100
+
+        // Add activity for the move
+        const agent = agents.find(a => a.id === task.agent)
+        const column = columnsData.find(c => c.id === newColumnId)
+        if (agent && column) {
+          setActivityFeed(prev => [
+            { time: 'just now', agent: task.agent, action: 'Moved to', detail: column.name },
+            ...prev.slice(0, 4)
+          ])
+        }
+
+        return { ...task, column: newColumnId, progress: newProgress }
+      }
+      return task
+    }))
+  }
+
+  const handleSelectTask = (taskId: string) => {
+    setSelectedTaskId(prev => prev === taskId ? null : taskId)
+  }
+
   const completedTasks = tasks.filter(t => t.column === 'done').length
   const totalTasks = tasks.length
   const progress = Math.round((completedTasks / totalTasks) * 100)
+
+  const selectedTask = tasks.find(t => t.id === selectedTaskId)
 
   return (
     <section ref={sectionRef} id="demo" className="py-16 md:py-24 bg-comfort-sage-50 overflow-hidden">
@@ -160,13 +305,17 @@ export default function MockUI() {
           className="text-center mb-12"
         >
           <div className="inline-flex items-center px-5 py-2 mb-6 text-sm font-medium text-comfort-sage-700 bg-comfort-sage-100 rounded-full">
-            Live Preview
+            <span className="relative flex h-2 w-2 mr-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-comfort-sage-500 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-comfort-sage-500"></span>
+            </span>
+            Interactive Demo
           </div>
           <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold mb-5 text-comfort-charcoal-800 tracking-tight">
             Your Command Centre
           </h2>
           <p className="text-lg text-comfort-charcoal-500 max-w-2xl mx-auto leading-relaxed">
-            A single interface to direct your entire AI development team
+            Drag cards between columns, click to select, and watch live updates
           </p>
         </motion.div>
 
@@ -209,9 +358,14 @@ export default function MockUI() {
                   </span>
                   6 Agents Active
                 </span>
-                <span className="px-2.5 py-1.5 text-xs bg-comfort-sage-200 text-comfort-charcoal-600 rounded-full">
+                <motion.span
+                  key={totalTasks}
+                  initial={{ scale: 1.1 }}
+                  animate={{ scale: 1 }}
+                  className="px-2.5 py-1.5 text-xs bg-comfort-sage-200 text-comfort-charcoal-600 rounded-full"
+                >
                   {totalTasks} Tasks
-                </span>
+                </motion.span>
               </div>
             </div>
 
@@ -221,33 +375,64 @@ export default function MockUI() {
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="font-semibold text-comfort-charcoal-800">Dashboard Builder</h2>
                   <span className="flex items-center gap-1.5 text-xs px-2 py-1 bg-comfort-sage-100 text-comfort-sage-700 rounded-full">
-                    <span className="w-1.5 h-1.5 bg-comfort-sage-500 rounded-full"></span>
+                    <span className="w-1.5 h-1.5 bg-comfort-sage-500 rounded-full animate-pulse"></span>
                     Live
                   </span>
                 </div>
 
+                {/* Selected Task or Current Task */}
                 <div className="mb-4">
-                  <div className="text-xs text-comfort-charcoal-400 mb-2">Current Task</div>
-                  <div className="bg-comfort-sage-50 border border-comfort-sage-200 rounded-[16px] p-3">
-                    <p className="text-sm text-comfort-charcoal-700">
-                      &quot;Build an analytics dashboard with charts and real-time data&quot;
-                    </p>
+                  <div className="text-xs text-comfort-charcoal-400 mb-2">
+                    {selectedTask ? 'Selected Task' : 'Current Task'}
                   </div>
+                  <motion.div
+                    key={selectedTask?.id || 'default'}
+                    initial={{ opacity: 0, y: 5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="bg-comfort-sage-50 border border-comfort-sage-200 rounded-[16px] p-3"
+                  >
+                    {selectedTask ? (
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] font-mono text-comfort-charcoal-400">{selectedTask.id}</span>
+                          <span className={`text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full ${
+                            selectedTask.priority === 'high' ? 'bg-comfort-terracotta-100 text-comfort-terracotta-700' :
+                            selectedTask.priority === 'medium' ? 'bg-amber-100 text-amber-700' :
+                            'bg-comfort-sage-100 text-comfort-sage-700'
+                          }`}>
+                            {selectedTask.priority}
+                          </span>
+                        </div>
+                        <p className="text-sm text-comfort-charcoal-700 font-medium mb-2">{selectedTask.title}</p>
+                        <AgentBadge agentId={selectedTask.agent} />
+                      </div>
+                    ) : (
+                      <p className="text-sm text-comfort-charcoal-700">
+                        &quot;Build an analytics dashboard with charts and real-time data&quot;
+                      </p>
+                    )}
+                  </motion.div>
                 </div>
 
                 {/* Progress */}
                 <div className="bg-white border border-comfort-sage-200 rounded-[16px] p-3 mb-3">
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="text-sm font-medium text-comfort-charcoal-800">Progress</h3>
-                    <span className="text-xs text-comfort-charcoal-400">{completedTasks}/{totalTasks}</span>
+                    <motion.span
+                      key={completedTasks}
+                      initial={{ scale: 1.2 }}
+                      animate={{ scale: 1 }}
+                      className="text-xs text-comfort-charcoal-400"
+                    >
+                      {completedTasks}/{totalTasks}
+                    </motion.span>
                   </div>
                   <div className="h-2 bg-comfort-sage-200 rounded-full overflow-hidden">
                     <motion.div
                       className="h-full bg-comfort-sage-500 rounded-full"
                       initial={{ width: 0 }}
-                      whileInView={{ width: `${progress}%` }}
-                      viewport={{ once: true }}
-                      transition={{ duration: 1.5, ease: "easeOut" }}
+                      animate={{ width: `${progress}%` }}
+                      transition={{ duration: 0.5, ease: "easeOut" }}
                     />
                   </div>
                   <div className="text-right mt-1 text-xs text-comfort-charcoal-400">{progress}% complete</div>
@@ -266,24 +451,27 @@ export default function MockUI() {
                     </span>
                   </div>
                   <div className="space-y-1.5 max-h-[120px] overflow-y-auto">
-                    {activityFeed.map((activity, i) => {
-                      const agent = agents.find(a => a.id === activity.agent)
-                      return (
-                        <motion.div
-                          key={i}
-                          initial={{ opacity: 0, x: -10 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          transition={{ delay: i * 0.1 }}
-                          className="flex items-center gap-2 text-[10px] py-1 border-b border-comfort-sage-100 last:border-0"
-                        >
-                          <span className="text-comfort-charcoal-400 w-12 flex-shrink-0">{activity.time}</span>
-                          <span style={{ color: agent?.color }}>{agent?.emoji}</span>
-                          <span className="text-comfort-charcoal-500 truncate">
-                            {activity.action} <span className="text-comfort-charcoal-700 font-medium">{activity.detail}</span>
-                          </span>
-                        </motion.div>
-                      )
-                    })}
+                    <AnimatePresence mode="popLayout">
+                      {activityFeed.map((activity, i) => {
+                        const agent = agents.find(a => a.id === activity.agent)
+                        return (
+                          <motion.div
+                            key={`${activity.detail}-${i}`}
+                            initial={{ opacity: 0, x: -10, height: 0 }}
+                            animate={{ opacity: 1, x: 0, height: 'auto' }}
+                            exit={{ opacity: 0, x: 10 }}
+                            transition={{ duration: 0.3 }}
+                            className="flex items-center gap-2 text-[10px] py-1 border-b border-comfort-sage-100 last:border-0"
+                          >
+                            <span className="text-comfort-charcoal-400 w-12 flex-shrink-0">{activity.time}</span>
+                            <span style={{ color: agent?.color }}>{agent?.emoji}</span>
+                            <span className="text-comfort-charcoal-500 truncate">
+                              {activity.action} <span className="text-comfort-charcoal-700 font-medium">{activity.detail}</span>
+                            </span>
+                          </motion.div>
+                        )
+                      })}
+                    </AnimatePresence>
                   </div>
                 </div>
               </div>
@@ -291,11 +479,14 @@ export default function MockUI() {
               {/* Kanban Board */}
               <div className="flex-1 p-3 bg-white min-h-[320px] overflow-x-auto">
                 <div className="flex gap-3 pb-3 min-w-[750px]">
-                  {columns.map(column => (
+                  {columnsData.map(column => (
                     <Column
                       key={column.id}
                       column={column}
                       columnTasks={tasks.filter(t => t.column === column.id)}
+                      selectedTaskId={selectedTaskId}
+                      onSelectTask={handleSelectTask}
+                      onMoveTask={handleMoveTask}
                     />
                   ))}
                 </div>
@@ -304,15 +495,31 @@ export default function MockUI() {
           </div>
         </motion.div>
 
-        <motion.p
+        <motion.div
           initial={{ opacity: 0 }}
           whileInView={{ opacity: 1 }}
           viewport={{ once: true }}
           transition={{ delay: 0.5 }}
-          className="text-center text-comfort-charcoal-400 text-sm mt-8"
+          className="text-center mt-8"
         >
-          Interactive preview &mdash; the real thing is even better
-        </motion.p>
+          <p className="text-comfort-charcoal-400 text-sm mb-2">
+            Try it out &mdash; drag cards between columns!
+          </p>
+          <div className="flex items-center justify-center gap-4 text-xs text-comfort-charcoal-400">
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-comfort-sage-400"></span>
+              Click to select
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-comfort-sage-500"></span>
+              Drag to move
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-comfort-sage-600 animate-pulse"></span>
+              Live updates
+            </span>
+          </div>
+        </motion.div>
       </div>
     </section>
   )

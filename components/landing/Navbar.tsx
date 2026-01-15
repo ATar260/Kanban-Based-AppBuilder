@@ -7,10 +7,9 @@ import Image from 'next/image'
 
 const navLinks = [
   { href: '#demo', label: 'Demo' },
-  { href: '#agents', label: 'Agents' },
-  { href: '#how-it-works', label: 'How It Works' },
   { href: '#features', label: 'Features' },
   { href: '#pricing', label: 'Pricing' },
+  { href: '#faq', label: 'FAQ' },
 ]
 
 export default function Navbar() {
@@ -46,11 +45,11 @@ export default function Navbar() {
       >
         <nav
           className={`max-w-5xl mx-auto px-5 sm:px-6 lg:px-8 rounded-xl transition-all duration-300 ${isScrolled
-              ? 'bg-white shadow-xl shadow-black/10 border border-comfort-sage-300'
-              : 'bg-white shadow-lg shadow-black/5 border border-comfort-sage-200'
+            ? 'bg-white/80 backdrop-blur-md shadow-xl shadow-black/10 border border-comfort-sage-300'
+            : 'bg-transparent'
             }`}
         >
-          <div className="flex items-center justify-between h-14 md:h-16">
+          <div className="flex items-center justify-between h-12 md:h-14">
             {/* Logo */}
             <Link href="/" className="flex items-center gap-3 flex-shrink-0">
               <Image

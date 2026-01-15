@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Inter, Roboto_Mono } from "next/font/google";
+import { Inter, Roboto_Mono, Plus_Jakarta_Sans } from "next/font/google";
 import localFont from "next/font/local";
 import "./globals.css";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -27,6 +27,12 @@ const robotoMono = Roboto_Mono({
   variable: "--font-roboto-mono",
 });
 
+const plusJakarta = Plus_Jakarta_Sans({
+  subsets: ["latin"],
+  variable: "--font-plus-jakarta",
+  weight: ["200", "300", "400", "500", "600", "700", "800"],
+});
+
 export const metadata: Metadata = {
   title: "Paynto A.I.",
   description: "Re-imagine any website in seconds with AI-powered website builder.",
@@ -45,7 +51,7 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body
         suppressHydrationWarning
-        className={`${inter.variable} ${geistSans.variable} ${geistMono.variable} ${robotoMono.variable} font-sans`}
+        className={`${inter.variable} ${geistSans.variable} ${geistMono.variable} ${robotoMono.variable} ${plusJakarta.variable} font-sans`}
       >
         <ClerkProvider>
           <ErrorBoundary>
