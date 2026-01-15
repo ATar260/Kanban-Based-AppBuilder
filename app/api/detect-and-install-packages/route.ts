@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { sandboxManager } from '@/lib/sandbox/sandbox-manager';
 
 declare global {
-  var activeSandbox: any;
+  var activeSandboxProvider: any;
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const { files } = await request.json();
+    const body = await request.json().catch(() => null);
+    const files = body?.files;
+    const requestedSandboxId = String(body?.sandboxId || body?.sandbox || '').trim();
     
     if (!files || typeof files !== 'object') {
       return NextResponse.json({ 
@@ -15,11 +18,21 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    if (!global.activeSandbox) {
-      return NextResponse.json({
-        success: false,
-        error: 'No active sandbox'
-      }, { status: 404 });
+    const activeProvider = sandboxManager.getActiveProvider() || global.activeSandboxProvider;
+    const provider = requestedSandboxId
+      ? sandboxManager.getProvider(requestedSandboxId) ||
+        (activeProvider?.getSandboxInfo?.()?.sandboxId === requestedSandboxId ? activeProvider : null) ||
+        (await sandboxManager.getOrCreateProvider(requestedSandboxId).catch(() => null))
+      : activeProvider;
+
+    if (!provider) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: requestedSandboxId ? `No sandbox provider for sandboxId: ${requestedSandboxId}` : 'No active sandbox',
+        },
+        { status: requestedSandboxId ? 404 : 400 }
+      );
     }
 
     console.log('[detect-and-install-packages] Processing files:', Object.keys(files));
@@ -98,11 +111,7 @@ export async function POST(request: NextRequest) {
     
     for (const packageName of uniquePackages) {
       try {
-        const checkResult = await global.activeSandbox.runCommand({
-          cmd: 'test',
-          args: ['-d', `node_modules/${packageName}`]
-        });
-        
+        const checkResult = await provider.runCommand(`test -d node_modules/${packageName}`);
         if (checkResult.exitCode === 0) {
           installed.push(packageName);
         } else {
@@ -128,14 +137,10 @@ export async function POST(request: NextRequest) {
 
     // Install missing packages
     console.log('[detect-and-install-packages] Installing packages:', missing);
-    
-    const installResult = await global.activeSandbox.runCommand({
-      cmd: 'npm',
-      args: ['install', '--save', ...missing]
-    });
 
-    const stdout = await installResult.stdout();
-    const stderr = await installResult.stderr();
+    const installResult = await provider.installPackages(missing);
+    const stdout = String(installResult.stdout || '');
+    const stderr = String(installResult.stderr || '');
     
     console.log('[detect-and-install-packages] Install stdout:', stdout);
     if (stderr) {
@@ -148,11 +153,7 @@ export async function POST(request: NextRequest) {
 
     for (const packageName of missing) {
       try {
-        const verifyResult = await global.activeSandbox.runCommand({
-          cmd: 'test',
-          args: ['-d', `node_modules/${packageName}`]
-        });
-        
+        const verifyResult = await provider.runCommand(`test -d node_modules/${packageName}`);
         if (verifyResult.exitCode === 0) {
           finalInstalled.push(packageName);
           console.log(`✓ Verified installation of ${packageName}`);

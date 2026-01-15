@@ -172,29 +172,6 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // #region agent log (debug)
-    fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sessionId: 'debug-session',
-        runId: 'preview-stuck-pre',
-        hypothesisId: 'H2',
-        location: 'app/api/sandbox-status/route.ts:GET:result',
-        message: 'sandbox-status computed',
-        data: {
-          requestedSandboxId: requestedSandboxId || null,
-          sandboxExists,
-          sandboxHealthy,
-          sandboxStopped,
-          healthStatusCode: (sandboxInfo as any)?.healthStatusCode ?? null,
-          healthError: typeof (sandboxInfo as any)?.healthError === 'string' ? (sandboxInfo as any).healthError.slice(0, 200) : null,
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion agent log (debug)
-    
     return NextResponse.json({
       success: true,
       active: sandboxExists && !sandboxStopped,

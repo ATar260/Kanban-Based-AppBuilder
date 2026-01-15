@@ -15,7 +15,7 @@ export interface SandboxFileCache {
 
 export interface SandboxState {
   fileCache: SandboxFileCache | null;
-  sandbox: any; // E2B sandbox instance
+  sandbox: any; // Sandbox provider instance (E2B/Modal/Vercel)
   sandboxData: {
     sandboxId: string;
     url: string;

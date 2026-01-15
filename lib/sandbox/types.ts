@@ -7,7 +7,7 @@ export interface SandboxFile {
 export interface SandboxInfo {
   sandboxId: string;
   url: string;
-  provider: 'modal' | 'vercel';
+  provider: 'modal' | 'vercel' | 'e2b';
   createdAt: Date;
   templateTarget?: TemplateTarget;
   devPort?: number;
@@ -33,6 +33,10 @@ export interface SandboxProviderConfig {
     teamId?: string;
     projectId?: string;
     oidcToken?: string;
+  };
+  e2b?: {
+    apiKey?: string;
+    templateId?: string;
   };
 }
 

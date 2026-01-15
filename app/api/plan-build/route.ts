@@ -710,27 +710,6 @@ export async function POST(request: NextRequest) {
     const { prompt, context, uiStyle: rawUiStyle, model: rawModel } = await request.json();
     const uiStyle = normalizeUiStyle(rawUiStyle);
 
-    // #region agent log (debug)
-    fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sessionId: 'debug-session',
-        runId: 'plan-stuck-pre',
-        hypothesisId: 'H2',
-        location: 'app/api/plan-build/route.ts:POST:parsedBody',
-        message: 'plan-build request received',
-        data: {
-          promptLen: typeof prompt === 'string' ? prompt.length : null,
-          hasContext: Boolean(context),
-          hasUiStyle: Boolean(uiStyle),
-          requestedModel: typeof rawModel === 'string' ? rawModel : null,
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion agent log (debug)
-
     if (!prompt) {
       return NextResponse.json({ error: 'Prompt is required' }, { status: 400 });
     }
@@ -792,22 +771,6 @@ export async function POST(request: NextRequest) {
 
           const planningTimeoutMs = Math.max(15_000, Math.min(Number(process.env.PLAN_BUILD_TIMEOUT_MS) || 45_000, 180_000));
 
-          // #region agent log (debug)
-          fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              sessionId: 'debug-session',
-              runId: 'plan-stuck-pre',
-              hypothesisId: 'H3',
-              location: 'app/api/plan-build/route.ts:stream:start',
-              message: 'planning stream starting',
-              data: { planningModelId, timeoutMs: planningTimeoutMs },
-              timestamp: Date.now(),
-            }),
-          }).catch(() => {});
-          // #endregion agent log (debug)
-
           controller.enqueue(
             encoder.encode(
               `data: ${JSON.stringify({ type: 'planning_start', model: `openai/${planningModelId}` })}\n\n`
@@ -863,21 +826,6 @@ export async function POST(request: NextRequest) {
               break;
             } catch (e: any) {
               lastErr = e;
-              // #region agent log (debug)
-              fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  sessionId: 'debug-session',
-                  runId: 'plan-stuck-pre',
-                  hypothesisId: 'H3',
-                  location: 'app/api/plan-build/route.ts:planningAttemptFailed',
-                  message: 'planning attempt failed',
-                  data: { modelId: candidate, error: String(e?.message || e).slice(0, 300) },
-                  timestamp: Date.now(),
-                }),
-              }).catch(() => {});
-              // #endregion agent log (debug)
               controller.enqueue(
                 encoder.encode(
                   `data: ${JSON.stringify({
@@ -893,22 +841,6 @@ export async function POST(request: NextRequest) {
           if (!text) {
             throw lastErr || new Error('Planning failed');
           }
-
-          // #region agent log (debug)
-          fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              sessionId: 'debug-session',
-              runId: 'plan-stuck-pre',
-              hypothesisId: 'H3',
-              location: 'app/api/plan-build/route.ts:planningTextReceived',
-              message: 'planning text received',
-              data: { modelId: usedModelId, textLen: typeof text === 'string' ? text.length : null },
-              timestamp: Date.now(),
-            }),
-          }).catch(() => {});
-          // #endregion agent log (debug)
 
           let parsed: PlanningResponse;
           try {

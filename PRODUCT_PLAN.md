@@ -277,12 +277,22 @@ This document tracks the implementation status of the Paynto A.I. platform - an 
 FIRECRAWL_API_KEY=...              # Website scraping
 OPENAI_API_KEY=...                 # AI provider (or use AI_GATEWAY_API_KEY)
 
-# Sandbox (Vercel)
+# Sandbox (E2B) - recommended / production
+SANDBOX_PROVIDER=e2b
+E2B_API_KEY=...                    # E2B workspace API key
+E2B_TEMPLATE_ID=...                # Published E2B template ID (custom template for fast startup)
+SANDBOX_DISABLE_VERCEL=true        # Optional safety: hard-disable Vercel Sandboxes
+
+# Sandbox (Vercel) - optional fallback
 VERCEL_OIDC_TOKEN=...              # Auto-generated via `vercel env pull`
 # Or manual setup:
 # VERCEL_TOKEN=...
 # VERCEL_TEAM_ID=team_xxx
 # VERCEL_PROJECT_ID=prj_xxx
+
+# Sandbox (Modal) - optional fallback
+MODAL_TOKEN_ID=...
+MODAL_TOKEN_SECRET=...
 
 # Authentication & Database
 NEXT_PUBLIC_AUTH_ENABLED=true      # Enable auth + persistence
@@ -299,6 +309,21 @@ VERCEL_DEPLOY_TOKEN=...
 NETLIFY_AUTH_TOKEN=...
 ```
 
+## E2B custom template (recommended)
+
+- Template definition lives in `e2b.Dockerfile` (pre-installs the Vite + React + Tailwind scaffold and dependencies).
+- Build + publish (run from repo root):
+
+```bash
+npm i -g @e2b/cli
+e2b auth login
+e2b template build -n paynto-vite -d e2b.Dockerfile
+e2b template publish -y
+```
+
+- Set `E2B_TEMPLATE_ID` (from the publish output / E2B dashboard) and `E2B_API_KEY` in Vercel env.
+- Keep `SANDBOX_PROVIDER=e2b` in production so `/generation` always uses E2B.
+
 ---
 
 # PART 8: ARCHITECTURE NOTES
@@ -313,7 +338,7 @@ NETLIFY_AUTH_TOKEN=...
 7. Optional: Export to GitHub or deploy
 
 ## Sandbox System
-- Uses Vercel-based sandboxes (`lib/sandbox/providers/vercel-provider.ts`)
+- Uses sandbox providers via `lib/sandbox/` (E2B recommended; Modal/Vercel optional fallbacks)
 - Factory pattern for provider abstraction
 - Automatic cleanup on session end
 

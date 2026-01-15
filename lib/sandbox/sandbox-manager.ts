@@ -65,18 +65,21 @@ class SandboxManager {
     this.PREWARM_CONCURRENCY = envConc ?? 2;
   }
 
-  private desiredProviderId(): 'vercel' | 'modal' | null {
+  private desiredProviderId(): 'e2b' | 'vercel' | 'modal' | null {
     const pref = SandboxFactory.getPreferredProvider();
+    if (pref === 'e2b') return 'e2b';
     if (pref === 'vercel') return 'vercel';
     if (pref === 'modal') return 'modal';
 
-    // auto: prefer Modal when configured, else Vercel
+    // auto: prefer E2B when configured, else Modal, else Vercel
+    const e2bOk = Boolean(String(process.env.E2B_API_KEY || '').trim());
     const disableVercel = process.env.SANDBOX_DISABLE_VERCEL === 'true';
     const modalOk = Boolean(process.env.MODAL_TOKEN_ID && process.env.MODAL_TOKEN_SECRET);
     const vercelOk = !disableVercel && (
       Boolean(process.env.VERCEL_OIDC_TOKEN) ||
       Boolean(process.env.VERCEL_TOKEN && process.env.VERCEL_TEAM_ID && process.env.VERCEL_PROJECT_ID)
     );
+    if (e2bOk) return 'e2b';
     if (modalOk) return 'modal';
     if (vercelOk) return 'vercel';
     return null;
@@ -86,13 +89,13 @@ class SandboxManager {
     try {
       const info: any = p?.provider?.getSandboxInfo?.();
       const v = info?.provider;
-      if (v === 'vercel' || v === 'modal') return v;
+      if (v === 'e2b' || v === 'vercel' || v === 'modal') return v;
     } catch {
       // ignore
     }
     const id = String(p?.sandboxId || '');
     if (id.startsWith('modal_')) return 'modal';
-    if (id.startsWith('sbx_') || id.startsWith('vercel_')) return 'vercel';
+    if (id.startsWith('vercel_')) return 'vercel';
     return null;
   }
 

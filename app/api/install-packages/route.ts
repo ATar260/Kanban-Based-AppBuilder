@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { sandboxManager } from '@/lib/sandbox/sandbox-manager';
 
 declare global {
   var activeSandbox: any;
@@ -8,8 +9,9 @@ declare global {
 
 export async function POST(request: NextRequest) {
   try {
-    const { packages } = await request.json();
-    // sandboxId not used - using global sandbox
+    const body = await request.json().catch(() => null);
+    const packages = body?.packages;
+    const requestedSandboxId = String(body?.sandboxId || body?.sandbox || '').trim();
     
     if (!packages || !Array.isArray(packages) || packages.length === 0) {
       return NextResponse.json({ 
@@ -37,14 +39,19 @@ export async function POST(request: NextRequest) {
       console.log(`[install-packages] Cleaned:`, validPackages);
     }
     
-    // Get active sandbox provider
-    const provider = global.activeSandboxProvider;
+    // Get provider (serverless-safe flow should pass sandboxId)
+    const activeProvider = sandboxManager.getActiveProvider() || global.activeSandboxProvider;
+    const provider = requestedSandboxId
+      ? sandboxManager.getProvider(requestedSandboxId) ||
+        (activeProvider?.getSandboxInfo?.()?.sandboxId === requestedSandboxId ? activeProvider : null) ||
+        (await sandboxManager.getOrCreateProvider(requestedSandboxId).catch(() => null))
+      : activeProvider;
     
     if (!provider) {
       return NextResponse.json({ 
         success: false, 
-        error: 'No active sandbox provider available' 
-      }, { status: 400 });
+        error: requestedSandboxId ? `No sandbox provider for sandboxId: ${requestedSandboxId}` : 'No active sandbox provider available',
+      }, { status: requestedSandboxId ? 404 : 400 });
     }
     
     console.log('[install-packages] Installing packages:', validPackages);

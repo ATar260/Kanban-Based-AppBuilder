@@ -55,6 +55,7 @@ interface SandboxData {
 
 const SANDBOX_PROVIDER_CHOICES = [
   { value: 'auto', label: 'Sandbox: Auto' },
+  { value: 'e2b', label: 'Sandbox: E2B' },
   { value: 'modal', label: 'Sandbox: Modal' },
   { value: 'vercel', label: 'Sandbox: Vercel' },
 ] as const;
@@ -108,18 +109,18 @@ function AISandboxPage() {
   });
   const [sandboxProviderPreference, setSandboxProviderPreference] = useState<SandboxProviderPreference>(() => {
     const providerParam = String(searchParams.get('provider') || '').trim().toLowerCase();
-    if (providerParam === 'auto' || providerParam === 'modal' || providerParam === 'vercel') {
+    if (providerParam === 'auto' || providerParam === 'e2b' || providerParam === 'modal' || providerParam === 'vercel') {
       return providerParam as SandboxProviderPreference;
     }
 
-    if (typeof window === 'undefined') return 'auto';
+    if (typeof window === 'undefined') return 'e2b';
     try {
       const raw = String(localStorage.getItem('sandboxProviderPreference') || '').trim().toLowerCase();
-      if (raw === 'auto' || raw === 'modal' || raw === 'vercel') return raw as SandboxProviderPreference;
+      if (raw === 'auto' || raw === 'e2b' || raw === 'modal' || raw === 'vercel') return raw as SandboxProviderPreference;
     } catch {
       // ignore
     }
-    return 'auto';
+    return 'e2b';
   });
   const [urlOverlayVisible, setUrlOverlayVisible] = useState(false);
   const [urlInput, setUrlInput] = useState('');
@@ -1052,22 +1053,6 @@ Visual Features: ${uiOption.features.join(', ')}`;
         ? `/api/sandbox-status?sandboxId=${encodeURIComponent(hintedSandboxId)}`
         : '/api/sandbox-status';
 
-      // #region agent log (debug)
-      fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: 'debug-session',
-          runId: 'preview-stuck-pre',
-          hypothesisId: 'H3',
-          location: 'app/generation/page.tsx:checkSandboxStatus:start',
-          message: 'checkSandboxStatus start',
-          data: { desiredTemplate, hintedSandboxId: hintedSandboxId || null, statusUrl },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion agent log (debug)
-
       const response = await fetch(statusUrl);
       const data = await response.json();
 
@@ -1080,30 +1065,6 @@ Visual Features: ${uiOption.features.join(', ')}`;
       const shouldRecreate =
         Boolean(data?.sandboxStopped) ||
         (hasSandboxHint && (!data?.active || data?.sandboxData?.healthStatusCode === 410));
-
-      // #region agent log (debug)
-      fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: 'debug-session',
-          runId: 'preview-stuck-pre',
-          hypothesisId: 'H3',
-          location: 'app/generation/page.tsx:checkSandboxStatus:result',
-          message: 'checkSandboxStatus status response',
-          data: {
-            ok: Boolean(response.ok),
-            active: Boolean(data?.active),
-            healthy: Boolean(data?.healthy),
-            sandboxStopped: Boolean(data?.sandboxStopped),
-            healthStatusCode: typeof data?.sandboxData?.healthStatusCode === 'number' ? data.sandboxData.healthStatusCode : null,
-            healthError: typeof data?.sandboxData?.healthError === 'string' ? data.sandboxData.healthError.slice(0, 200) : null,
-            shouldRecreate,
-          },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion agent log (debug)
 
       if (shouldRecreate) {
         console.log('[checkSandboxStatus] Sandbox unavailable, clearing state and creating new one');
@@ -1148,25 +1109,6 @@ Visual Features: ${uiOption.features.join(', ')}`;
         if ((isViteLikelyDown || isViteHostBlocked) && hintedSandboxId) {
           const reason = isViteHostBlocked ? 'host blocked (HTTP 403)' : `HTTP ${healthStatusCode}`;
           updateStatus(`Sandbox unhealthy (${reason}) - restarting Vite…`, false);
-          // #region agent log (debug)
-          fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              sessionId: 'debug-session',
-              runId: 'preview-stuck-pre',
-              hypothesisId: 'VH2',
-              location: 'app/generation/page.tsx:checkSandboxStatus:restartVite',
-              message: 'Requesting restart-vite due to unhealthy sandbox',
-              data: {
-                sandboxId: hintedSandboxId,
-                healthStatusCode: typeof healthStatusCode === 'number' ? healthStatusCode : null,
-                healthError: typeof healthError === 'string' ? healthError.slice(0, 200) : null,
-              },
-              timestamp: Date.now(),
-            }),
-          }).catch(() => {});
-          // #endregion agent log (debug)
           try {
             await fetch('/api/restart-vite', {
               method: 'POST',
@@ -1278,29 +1220,6 @@ Visual Features: ${uiOption.features.join(', ')}`;
     overrideSandbox?: SandboxData,
     reason: 'manual' | 'recreate' = 'manual'
   ) => {
-    // #region agent log (debug)
-    fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sessionId: 'debug-session',
-        runId: 'preview-stuck-pre',
-        hypothesisId: 'H4',
-        location: 'app/generation/page.tsx:restoreKanbanPlanToSandbox:start',
-        message: 'restoreKanbanPlanToSandbox called',
-        data: {
-          reason,
-          restoringInFlight: Boolean(restoringSandboxRef.current),
-          overrideSandboxId: overrideSandbox?.sandboxId || null,
-          activeSandboxId: (overrideSandbox || sandboxData)?.sandboxId || null,
-          hasPlanBlueprint: Boolean(kanban.plan?.blueprint),
-          ticketsTotal: Array.isArray(kanban.tickets) ? kanban.tickets.length : null,
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion agent log (debug)
-
     if (restoringSandboxRef.current) return;
 
     const activeSandbox = overrideSandbox || sandboxData;
@@ -1326,26 +1245,6 @@ Visual Features: ${uiOption.features.join(', ')}`;
       addChatMessage('No ticket code found to restore. Use “Plan Build” to rebuild into this sandbox.', 'system');
       return;
     }
-
-    // #region agent log (debug)
-    fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sessionId: 'debug-session',
-        runId: 'preview-stuck-pre',
-        hypothesisId: 'H4',
-        location: 'app/generation/page.tsx:restoreKanbanPlanToSandbox:ready',
-        message: 'restoreKanbanPlanToSandbox starting restore',
-        data: {
-          sandboxId: activeSandbox.sandboxId,
-          restorableTickets: restorableTickets.length,
-          firstTicket: restorableTickets[0]?.title ? String(restorableTickets[0].title).slice(0, 80) : null,
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion agent log (debug)
 
     const planTemplate = (plan as any).templateTarget;
     const template: 'vite' | 'next' = planTemplate === 'next' || planTemplate === 'nextjs' ? 'next' : 'vite';
@@ -1390,28 +1289,6 @@ Visual Features: ${uiOption.features.join(', ')}`;
         const ticket = restorableTickets[i];
         if (!ticket.generatedCode) continue;
         addChatMessage(`Restoring ${i + 1}/${restorableTickets.length}: ${ticket.title}`, 'system');
-        // #region agent log (debug)
-        fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sessionId: 'debug-session',
-            runId: 'preview-flicker-pre',
-            hypothesisId: 'PF1',
-            location: 'app/generation/page.tsx:restoreKanbanPlanToSandbox:applyTicket',
-            message: 'Restoring ticket into sandbox (applyGeneratedCode)',
-            data: {
-              sandboxId: activeSandbox.sandboxId,
-              idx: i,
-              total: restorableTickets.length,
-              ticketId: ticket.id,
-              ticketTitle: typeof ticket.title === 'string' ? ticket.title.slice(0, 120) : null,
-              generatedCodeLen: typeof ticket.generatedCode === 'string' ? ticket.generatedCode.length : null,
-            },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
-        // #endregion agent log (debug)
         // Apply sequentially so later tickets can override earlier ones even if files shrink.
         await applyGeneratedCode(ticket.generatedCode, false, activeSandbox, { throwOnError: true });
       }
@@ -1471,21 +1348,6 @@ Visual Features: ${uiOption.features.join(', ')}`;
 
       // Best-effort: restart Vite after a full restore so the preview isn't stuck on a blank/old bundle.
       try {
-        // #region agent log (debug)
-        fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sessionId: 'debug-session',
-            runId: 'preview-flicker-pre',
-            hypothesisId: 'PF2',
-            location: 'app/generation/page.tsx:restoreKanbanPlanToSandbox:restartVite',
-            message: 'Calling restart-vite after restore',
-            data: { sandboxId: activeSandbox.sandboxId },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
-        // #endregion agent log (debug)
         await fetch('/api/restart-vite', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1498,21 +1360,6 @@ Visual Features: ${uiOption.features.join(', ')}`;
 
       addChatMessage('✅ Restore complete. Reloading preview…', 'system');
       if (iframeRef.current && activeSandbox.url) {
-        // #region agent log (debug)
-        fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sessionId: 'debug-session',
-            runId: 'preview-flicker-pre',
-            hypothesisId: 'PF3',
-            location: 'app/generation/page.tsx:restoreKanbanPlanToSandbox:reloadIframe',
-            message: 'Reloading iframe after restore',
-            data: { sandboxId: activeSandbox.sandboxId, url: String(activeSandbox.url || '').slice(0, 200) },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
-        // #endregion agent log (debug)
         iframeRef.current.src = `${activeSandbox.url}?t=${Date.now()}&restored=true`;
       }
     } catch (e: any) {
@@ -1734,29 +1581,6 @@ Apply these design specifications consistently across all components.`;
     // For demo speed + reliability, use a fast, stable planner model even if codegen uses GPT-5.
     const planningModel = demoSpeedMode ? 'openai/gpt-4o' : aiModel;
 
-    // #region agent log (debug)
-    fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sessionId: 'debug-session',
-        runId: 'plan-stuck-pre',
-        hypothesisId: 'H1',
-        location: 'app/generation/page.tsx:planBuild:start',
-        message: 'planBuild called',
-        data: {
-          promptLen: typeof prompt === 'string' ? prompt.length : null,
-          hasContext: Boolean(context),
-          demoSpeedMode,
-          aiModel,
-          planningModel,
-          uiStyleName: uiStyle?.name || null,
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion agent log (debug)
-
     setIsPlanning(true);
     kanban.setTickets([]);
 
@@ -1778,22 +1602,6 @@ Apply these design specifications consistently across all components.`;
           } : undefined,
         }),
       });
-
-      // #region agent log (debug)
-      fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: 'debug-session',
-          runId: 'plan-stuck-pre',
-          hypothesisId: 'H2',
-          location: 'app/generation/page.tsx:planBuild:response',
-          message: 'plan-build response headers received',
-          data: { ok: response.ok, status: response.status, hasBody: Boolean(response.body) },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion agent log (debug)
 
       if (!response.ok || !response.body) {
         throw new Error('Failed to create build plan');
@@ -1828,29 +1636,6 @@ Apply these design specifications consistently across all components.`;
 
           try {
             const data = JSON.parse(payload);
-
-            // #region agent log (debug)
-            if (data && typeof data === 'object' && (data.type === 'planning_start' || data.type === 'planning_status' || data.type === 'plan_complete' || data.type === 'error')) {
-              fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  sessionId: 'debug-session',
-                  runId: 'plan-stuck-pre',
-                  hypothesisId: 'H4',
-                  location: 'app/generation/page.tsx:planBuild:event',
-                  message: 'plan-build SSE event received',
-                  data: {
-                    type: data.type,
-                    model: typeof data.model === 'string' ? data.model : null,
-                    message: typeof data.message === 'string' ? data.message.slice(0, 200) : null,
-                    ticketsCount: Array.isArray(data?.plan?.tickets) ? data.plan.tickets.length : null,
-                  },
-                  timestamp: Date.now(),
-                }),
-              }).catch(() => {});
-            }
-            // #endregion agent log (debug)
 
             if (data.type === 'planning_start') {
               if (data.model) {
@@ -1921,21 +1706,6 @@ Apply these design specifications consistently across all components.`;
       addChatMessage(`Failed to create build plan: ${error.message}`, 'system');
     } finally {
       setIsPlanning(false);
-      // #region agent log (debug)
-      fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: 'debug-session',
-          runId: 'plan-stuck-pre',
-          hypothesisId: 'H1',
-          location: 'app/generation/page.tsx:planBuild:finally',
-          message: 'planBuild finished (finally)',
-          data: {},
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion agent log (debug)
     }
   };
 
@@ -2380,30 +2150,6 @@ Requirements:
 
     setGenerationProgress(prev => ({ ...prev, isGenerating: true, status: 'Starting build…', streamedCode: '' }));
 
-    // #region agent log (debug)
-    fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sessionId: 'debug-session',
-        runId: 'start-build-pre',
-        hypothesisId: 'SB2',
-        location: 'app/generation/page.tsx:startServerBuildRun:before_fetch',
-        message: 'Starting server build run request',
-        data: {
-          sandboxId,
-          onlyTicketId: onlyTicketId || null,
-          model: aiModel,
-          ticketsCount: Array.isArray(kanban.tickets) ? kanban.tickets.length : null,
-          skipPrReview: demoSpeedMode,
-          skipIntegrationGate: demoSpeedMode,
-          maxConcurrency,
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion agent log (debug)
-
     const res = await fetch('/api/build-runs/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2422,28 +2168,6 @@ Requirements:
     });
 
     const data = await res.json().catch(() => null);
-
-    // #region agent log (debug)
-    fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sessionId: 'debug-session',
-        runId: 'start-build-pre',
-        hypothesisId: 'SB3',
-        location: 'app/generation/page.tsx:startServerBuildRun:after_fetch',
-        message: 'Server build run start response received',
-        data: {
-          httpStatus: res.status,
-          ok: res.ok,
-          success: Boolean((data as any)?.success),
-          runId: typeof (data as any)?.runId === 'string' ? (data as any).runId : null,
-          error: typeof (data as any)?.error === 'string' ? String((data as any).error).slice(0, 200) : null,
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion agent log (debug)
 
     if (!res.ok || !data?.success || !data?.runId) {
       const msg = data?.error || `Failed to start build run (HTTP ${res.status})`;
@@ -2485,31 +2209,6 @@ Requirements:
   const handleStartKanbanBuild = async (opts?: { onlyTicketId?: string }) => {
     const backlogTickets = kanban.tickets.filter(t => t.status === 'backlog');
     const awaitingInputTickets = kanban.tickets.filter(t => t.status === 'awaiting_input');
-
-    // #region agent log (debug)
-    fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sessionId: 'debug-session',
-        runId: 'start-build-pre',
-        hypothesisId: 'SB1',
-        location: 'app/generation/page.tsx:handleStartKanbanBuild:entry',
-        message: 'Start Build clicked',
-        data: {
-          onlyTicketId: opts?.onlyTicketId || null,
-          backlogCount: backlogTickets.length,
-          awaitingInputCount: awaitingInputTickets.length,
-          sandboxProviderPreference,
-          clientSandboxId: sandboxData?.sandboxId || null,
-          clientTemplateTarget: (sandboxData as any)?.templateTarget || null,
-          model: aiModel,
-          demoSpeedMode,
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion agent log (debug)
 
     if (backlogTickets.length === 0 && awaitingInputTickets.length === 0) return;
 
@@ -2579,33 +2278,6 @@ Requirements:
         Boolean(statusData?.sandboxStopped) ||
         statusSandbox?.healthStatusCode === 410;
 
-      // #region agent log (debug)
-      fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: 'debug-session',
-          runId: 'start-build-pre',
-          hypothesisId: 'SB4',
-          location: 'app/generation/page.tsx:handleStartKanbanBuild:sandbox_preflight',
-          message: 'Sandbox status preflight completed',
-          data: {
-            httpStatus: statusRes.status,
-            ok: statusRes.ok,
-            active: Boolean(statusData?.active),
-            healthy: Boolean(statusData?.healthy),
-            sandboxStopped: Boolean(statusData?.sandboxStopped),
-            sandboxUnavailable,
-            serverSandboxId: statusSandbox?.sandboxId || null,
-            healthStatusCode: statusSandbox?.healthStatusCode ?? null,
-            healthError:
-              typeof statusSandbox?.healthError === 'string' ? String(statusSandbox.healthError).slice(0, 200) : null,
-          },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion agent log (debug)
-
       if (sandboxUnavailable) {
         if (activeSandbox) {
           addChatMessage('Sandbox is no longer available. Creating a new sandbox before continuing...', 'system');
@@ -2625,27 +2297,6 @@ Requirements:
       const newSandbox = await createSandbox(true, 0, effectiveTemplate);
       activeSandbox = newSandbox || activeSandbox;
 
-      // #region agent log (debug)
-      fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: 'debug-session',
-          runId: 'start-build-pre',
-          hypothesisId: 'SB5',
-          location: 'app/generation/page.tsx:handleStartKanbanBuild:after_createSandbox',
-          message: 'createSandbox returned',
-          data: {
-            effectiveTemplate,
-            createReturnedSandboxId: (newSandbox as any)?.sandboxId || null,
-            activeSandboxIdAfter: (activeSandbox as any)?.sandboxId || null,
-            elapsedMs: Date.now() - sandboxCreateStartedAt,
-          },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion agent log (debug)
-
       if (newSandbox && typeof newSandbox?.sandboxId === 'string') {
         const sandboxCreateMs = Date.now() - sandboxCreateStartedAt;
         addChatMessage(
@@ -2659,22 +2310,6 @@ Requirements:
       if (!activeSandbox) {
         const started = Date.now();
         const maxWaitMs = 30000;
-
-        // #region agent log (debug)
-        fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sessionId: 'debug-session',
-            runId: 'start-build-pre',
-            hypothesisId: 'SB6',
-            location: 'app/generation/page.tsx:handleStartKanbanBuild:wait_for_sandbox:enter',
-            message: 'Waiting for server active sandbox to become healthy',
-            data: { maxWaitMs },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
-        // #endregion agent log (debug)
 
         while (Date.now() - started < maxWaitMs) {
           await new Promise(r => setTimeout(r, 1000));
@@ -2702,25 +2337,6 @@ Requirements:
             // ignore and keep waiting
           }
         }
-
-        // #region agent log (debug)
-        fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sessionId: 'debug-session',
-            runId: 'start-build-pre',
-            hypothesisId: 'SB7',
-            location: 'app/generation/page.tsx:handleStartKanbanBuild:wait_for_sandbox:exit',
-            message: 'Finished waiting for sandbox health',
-            data: {
-              elapsedMs: Date.now() - started,
-              activeSandboxIdAfterWait: (activeSandbox as any)?.sandboxId || null,
-            },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
-        // #endregion agent log (debug)
       }
       if (!activeSandbox) {
         setKanbanBuildActive(false);
@@ -3961,25 +3577,6 @@ Tip: I automatically detect and install npm packages from your code imports (lik
 
                 // Method 1: Change src with timestamp
                 const urlWithTimestamp = `${currentSandboxData.url}?t=${Date.now()}&applied=true`;
-              // #region agent log (debug)
-              fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  sessionId: 'debug-session',
-                  runId: 'preview-flicker-pre',
-                  hypothesisId: 'PF4',
-                  location: 'app/generation/page.tsx:applyGeneratedCode:iframeRefresh:applied',
-                  message: 'applyGeneratedCode setting iframe src (applied)',
-                  data: {
-                    throwOnError,
-                    packagesInstalled: Boolean(results?.packagesInstalled?.length > 0),
-                    url: String(currentSandboxData.url || '').slice(0, 200),
-                  },
-                  timestamp: Date.now(),
-                }),
-              }).catch(() => {});
-              // #endregion agent log (debug)
                 iframeRef.current.src = urlWithTimestamp;
 
                 // Method 2: Force reload after a short delay
@@ -4010,26 +3607,6 @@ Tip: I automatically detect and install npm packages from your code imports (lik
             console.log(`[applyGeneratedCode] Packages installed: ${packagesInstalled}, refresh delay: ${refreshDelay}ms`);
 
             setIsPreviewRefreshing(true);
-            // #region agent log (debug)
-            fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                sessionId: 'debug-session',
-                runId: 'preview-flicker-pre',
-                hypothesisId: 'PF5',
-                location: 'app/generation/page.tsx:applyGeneratedCode:iframeRefresh:force',
-                message: 'applyGeneratedCode starting preview refresh sequence',
-                data: {
-                  throwOnError,
-                  packagesInstalled,
-                  refreshDelay,
-                  url: String(currentSandboxData.url || '').slice(0, 200),
-                },
-                timestamp: Date.now(),
-              }),
-            }).catch(() => {});
-            // #endregion agent log (debug)
             // Never force tab switches during apply. If the user opts in, auto-open preview; otherwise show an indicator.
             if (autoOpenPreviewOnApply) {
               setActiveTab('preview');
@@ -4800,26 +4377,6 @@ Tip: I automatically detect and install npm packages from your code imports (lik
                 disabled={isRestoringSandbox}
                 onClick={async () => {
                   if (!sandboxData?.sandboxId) return;
-                  // #region agent log (debug)
-                  fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      sessionId: 'debug-session',
-                      runId: 'preview-stuck-pre',
-                      hypothesisId: 'H1',
-                      location: 'app/generation/page.tsx:preview:manualRefresh:click',
-                      message: 'Manual refresh clicked',
-                      data: {
-                        sandboxId: sandboxData.sandboxId,
-                        url: sandboxData.url || null,
-                        isRestoringSandbox,
-                        hasIframe: Boolean(iframeRef.current),
-                      },
-                      timestamp: Date.now(),
-                    }),
-                  }).catch(() => {});
-                  // #endregion agent log (debug)
 
                   // If the sandbox expired while idle, recreate it instead of just reloading the iframe.
                   try {
@@ -4828,45 +4385,9 @@ Tip: I automatically detect and install npm packages from your code imports (lik
                     const data = await res.json().catch(() => null);
                     const code = data?.sandboxData?.healthStatusCode;
                     const healthError = data?.sandboxData?.healthError;
-                    // #region agent log (debug)
-                    fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        sessionId: 'debug-session',
-                        runId: 'preview-stuck-pre',
-                        hypothesisId: 'H2',
-                        location: 'app/generation/page.tsx:preview:manualRefresh:status',
-                        message: 'Manual refresh status result',
-                        data: {
-                          ok: Boolean(res.ok),
-                          active: Boolean(data?.active),
-                          sandboxStopped: Boolean(data?.sandboxStopped),
-                          healthStatusCode: typeof code === 'number' ? code : null,
-                          healthError: typeof healthError === 'string' ? healthError.slice(0, 200) : null,
-                        },
-                        timestamp: Date.now(),
-                      }),
-                    }).catch(() => {});
-                    // #endregion agent log (debug)
                     const isViteLikelyDown = typeof code === 'number' && (code === 404 || code >= 500);
                     if (data?.sandboxStopped || !data?.active || code === 410 || isViteLikelyDown) {
                       console.log('[Manual Refresh] Sandbox unhealthy - recovering...');
-                      // #region agent log (debug)
-                      fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          sessionId: 'debug-session',
-                          runId: 'preview-stuck-pre',
-                          hypothesisId: 'H3',
-                          location: 'app/generation/page.tsx:preview:manualRefresh:recover',
-                          message: 'Manual refresh invoking checkSandboxStatus (recover)',
-                          data: { template: (sandboxData as any)?.templateTarget || 'vite' },
-                          timestamp: Date.now(),
-                        }),
-                      }).catch(() => {});
-                      // #endregion agent log (debug)
                       await checkSandboxStatus((sandboxData as any)?.templateTarget || 'vite');
                       return;
                     }
@@ -4878,21 +4399,6 @@ Tip: I automatically detect and install npm packages from your code imports (lik
                     console.log('[Manual Refresh] Forcing iframe reload...');
                     const newSrc = `${sandboxData.url}?t=${Date.now()}&manual=true`;
                     iframeRef.current.src = newSrc;
-                    // #region agent log (debug)
-                    fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        sessionId: 'debug-session',
-                        runId: 'preview-stuck-pre',
-                        hypothesisId: 'H2',
-                        location: 'app/generation/page.tsx:preview:manualRefresh:iframe',
-                        message: 'Manual refresh reloaded iframe src',
-                        data: { newSrc: newSrc.slice(0, 200) },
-                        timestamp: Date.now(),
-                      }),
-                    }).catch(() => {});
-                    // #endregion agent log (debug)
                   }
                 }}
                 className={`bg-white/90 hover:bg-white text-gray-700 p-2 rounded-lg shadow-lg transition-all duration-200 hover:scale-105 ${
@@ -6957,7 +6463,7 @@ Focus on the key sections and content, making it clean and modern.`;
               value={sandboxProviderPreference}
               onChange={(e) => {
                 const nextPref = String(e.target.value || '').trim().toLowerCase();
-                if (nextPref !== 'auto' && nextPref !== 'modal' && nextPref !== 'vercel') return;
+                if (nextPref !== 'auto' && nextPref !== 'e2b' && nextPref !== 'modal' && nextPref !== 'vercel') return;
                 setSandboxProviderPreference(nextPref as SandboxProviderPreference);
 
                 const params = new URLSearchParams(searchParams);

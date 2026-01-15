@@ -9,7 +9,9 @@ declare global {
 
 export async function POST(request: NextRequest) {
   try {
-    const { command } = await request.json();
+    const body = await request.json().catch(() => null);
+    const command = String(body?.command || '').trim();
+    const requestedSandboxId = String(body?.sandboxId || body?.sandbox || '').trim();
     
     if (!command) {
       return NextResponse.json({ 
@@ -19,13 +21,18 @@ export async function POST(request: NextRequest) {
     }
     
     // Get provider from sandbox manager or global state
-    const provider = sandboxManager.getActiveProvider() || global.activeSandboxProvider;
+    const activeProvider = sandboxManager.getActiveProvider() || global.activeSandboxProvider;
+    const provider = requestedSandboxId
+      ? sandboxManager.getProvider(requestedSandboxId) ||
+        (activeProvider?.getSandboxInfo?.()?.sandboxId === requestedSandboxId ? activeProvider : null) ||
+        (await sandboxManager.getOrCreateProvider(requestedSandboxId).catch(() => null))
+      : activeProvider;
     
     if (!provider) {
       return NextResponse.json({ 
         success: false, 
-        error: 'No active sandbox' 
-      }, { status: 400 });
+        error: requestedSandboxId ? `No sandbox provider for sandboxId: ${requestedSandboxId}` : 'No active sandbox',
+      }, { status: requestedSandboxId ? 404 : 400 });
     }
     
     console.log(`[run-command-v2] Executing: ${command}`);

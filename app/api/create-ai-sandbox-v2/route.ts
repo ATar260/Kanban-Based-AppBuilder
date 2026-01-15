@@ -6,6 +6,7 @@ import { sandboxManager } from '@/lib/sandbox/sandbox-manager';
 import { sandboxCreationLimiter } from '@/lib/rateLimit';
 import { getUsageActor } from '@/lib/usage/identity';
 import { getUsageSnapshotForActor, startSandboxSessionForActor } from '@/lib/usage/persistence';
+import { E2BProvider } from '@/lib/sandbox/providers/e2b-provider';
 import { ModalProvider } from '@/lib/sandbox/providers/modal-provider';
 import { VercelProvider } from '@/lib/sandbox/providers/vercel-provider';
 
@@ -28,7 +29,7 @@ export async function POST(request: NextRequest) {
         {
           success: false,
           error:
-            'Sandbox provider not configured. Set MODAL_TOKEN_ID/MODAL_TOKEN_SECRET (Modal) or VERCEL_OIDC_TOKEN (or VERCEL_TOKEN + VERCEL_TEAM_ID + VERCEL_PROJECT_ID).',
+            'Sandbox provider not configured. Set E2B_API_KEY (E2B), MODAL_TOKEN_ID/MODAL_TOKEN_SECRET (Modal), or VERCEL_OIDC_TOKEN (or VERCEL_TOKEN + VERCEL_TEAM_ID + VERCEL_PROJECT_ID).',
           code: 'SANDBOX_PROVIDER_NOT_CONFIGURED',
         },
         { status: 503 }
@@ -68,14 +69,35 @@ export async function POST(request: NextRequest) {
     if (body?.template === 'next') templateTarget = 'next';
     if (body?.template === 'vite') templateTarget = 'vite';
 
-    const requestedProvider: 'auto' | 'modal' | 'vercel' = (() => {
+    let requestedProvider: 'auto' | 'e2b' | 'modal' | 'vercel' = (() => {
       const raw = String(body?.provider ?? body?.sandboxProvider ?? '').trim().toLowerCase();
+      if (raw === 'e2b') return 'e2b';
       if (raw === 'modal') return 'modal';
       if (raw === 'vercel') return 'vercel';
       return 'auto';
     })();
 
+    // Force E2B in production if configured via SANDBOX_PROVIDER=e2b
+    if (process.env.NODE_ENV === 'production' && SandboxFactory.getPreferredProvider() === 'e2b') {
+      if (requestedProvider !== 'e2b') {
+        console.log(
+          `[create-ai-sandbox-v2] Forcing E2B in production (ignoring requested provider: ${requestedProvider})`
+        );
+      }
+      requestedProvider = 'e2b';
+    }
+
     // If the UI explicitly requests a provider, fail fast if it isn't configured.
+    if (requestedProvider === 'e2b' && !SandboxFactory.isE2BAvailable()) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'E2B sandbox provider not configured. Set E2B_API_KEY (and optionally E2B_TEMPLATE_ID).',
+          code: 'SANDBOX_PROVIDER_NOT_CONFIGURED',
+        },
+        { status: 503 }
+      );
+    }
     if (requestedProvider === 'modal' && !SandboxFactory.isModalAvailable()) {
       return NextResponse.json(
         {
@@ -98,10 +120,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Modal sandboxes currently support the Vite template only.
+    // Sandboxes currently support the Vite template only.
     if (templateTarget === 'next') {
       console.warn(
-        '[create-ai-sandbox-v2] Next template requested, but current sandbox provider only supports Vite. Falling back to Vite.'
+        '[create-ai-sandbox-v2] Next template requested, but sandboxes currently support Vite only. Falling back to Vite.'
       );
       templateTarget = 'vite';
     }
@@ -139,7 +161,10 @@ export async function POST(request: NextRequest) {
     if (provider && sandboxInfo?.sandboxId) {
       console.log(`[create-ai-sandbox-v2] Reused pooled sandbox ${sandboxInfo.sandboxId}`);
     } else {
-      if (requestedProvider === 'modal') {
+      if (requestedProvider === 'e2b') {
+        console.log('[create-ai-sandbox-v2] Creating E2B sandbox (UI override)');
+        provider = new E2BProvider({});
+      } else if (requestedProvider === 'modal') {
         console.log('[create-ai-sandbox-v2] Creating Modal sandbox (UI override)');
         provider = new ModalProvider({});
       } else if (requestedProvider === 'vercel') {

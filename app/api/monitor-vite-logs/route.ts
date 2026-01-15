@@ -1,16 +1,36 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import { sandboxManager } from '@/lib/sandbox/sandbox-manager';
 
 declare global {
-  var activeSandbox: any;
+  var activeSandboxProvider: any;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    if (!global.activeSandbox) {
-      return NextResponse.json({ 
-        success: false, 
-        error: 'No active sandbox' 
-      }, { status: 400 });
+    const requestedSandboxId = (() => {
+      try {
+        const url = new URL(request.url);
+        return String(url.searchParams.get('sandboxId') || '').trim();
+      } catch {
+        return '';
+      }
+    })();
+
+    const activeProvider = sandboxManager.getActiveProvider() || global.activeSandboxProvider;
+    const provider = requestedSandboxId
+      ? sandboxManager.getProvider(requestedSandboxId) ||
+        (activeProvider?.getSandboxInfo?.()?.sandboxId === requestedSandboxId ? activeProvider : null) ||
+        (await sandboxManager.getOrCreateProvider(requestedSandboxId).catch(() => null))
+      : activeProvider;
+
+    if (!provider) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: requestedSandboxId ? `No sandbox provider for sandboxId: ${requestedSandboxId}` : 'No active sandbox',
+        },
+        { status: requestedSandboxId ? 404 : 400 }
+      );
     }
     
     console.log('[monitor-vite-logs] Checking Vite process logs...');
@@ -19,13 +39,9 @@ export async function GET() {
     
     // Check if there's an error file from previous runs
     try {
-      const catResult = await global.activeSandbox.runCommand({
-        cmd: 'cat',
-        args: ['/tmp/vite-errors.json']
-      });
-      
+      const catResult = await provider.runCommand('cat /tmp/vite-errors.json');
       if (catResult.exitCode === 0) {
-        const errorFileContent = await catResult.stdout();
+        const errorFileContent = String(catResult.stdout || '');
         const data = JSON.parse(errorFileContent);
         errors.push(...(data.errors || []));
       }
@@ -35,23 +51,18 @@ export async function GET() {
     
     // Look for any Vite-related log files that might contain errors
     try {
-      const findResult = await global.activeSandbox.runCommand({
-        cmd: 'find',
-        args: ['/tmp', '-name', '*vite*', '-type', 'f']
-      });
-      
+      const findResult = await provider.runCommand('find /tmp -name "*vite*" -type f');
       if (findResult.exitCode === 0) {
-        const logFiles = (await findResult.stdout()).split('\n').filter((f: string) => f.trim());
+        const logFiles = String(findResult.stdout || '').split('\n').filter((f: string) => f.trim());
         
         for (const logFile of logFiles.slice(0, 3)) {
           try {
-            const grepResult = await global.activeSandbox.runCommand({
-              cmd: 'grep',
-              args: ['-i', 'failed to resolve import', logFile]
-            });
+            const grepResult = await provider.runCommand(
+              `grep -i "failed to resolve import" ${JSON.stringify(logFile)}`
+            );
             
             if (grepResult.exitCode === 0) {
-              const errorLines = (await grepResult.stdout()).split('\n').filter((line: string) => line.trim());
+              const errorLines = String(grepResult.stdout || '').split('\n').filter((line: string) => line.trim());
               
               for (const line of errorLines) {
                 // Extract package name from error line

@@ -122,21 +122,6 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => null);
     const requestedSandboxId = typeof body?.sandboxId === 'string' ? body.sandboxId.trim() : '';
-    // #region agent log (debug)
-    fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sessionId: 'debug-session',
-        runId: 'preview-stuck-pre',
-        hypothesisId: 'H3',
-        location: 'app/api/restart-vite/route.ts:POST:start',
-        message: 'restart-vite called',
-        data: { requestedSandboxId: requestedSandboxId || null },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion agent log (debug)
 
     const activeProvider =
       sandboxManager.getActiveProvider() || global.activeSandbox || global.activeSandboxProvider;
@@ -187,38 +172,9 @@ export async function POST(request: NextRequest) {
 
     // Patch Vite config to allow tunnel hosts (avoids "Blocked request" on modal/vercel domains).
     try {
-      const patchResult = await ensureViteHostAllowed(provider);
-      // #region agent log (debug)
-      fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: 'debug-session',
-          runId: 'preview-stuck-pre',
-          hypothesisId: 'VH1',
-          location: 'app/api/restart-vite/route.ts:POST:ensureViteHostAllowed',
-          message: 'ensureViteHostAllowed completed',
-          data: patchResult,
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion agent log (debug)
+      await ensureViteHostAllowed(provider);
     } catch (e: any) {
-      // #region agent log (debug)
-      fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: 'debug-session',
-          runId: 'preview-stuck-pre',
-          hypothesisId: 'VH1',
-          location: 'app/api/restart-vite/route.ts:POST:ensureViteHostAllowed:error',
-          message: 'ensureViteHostAllowed failed',
-          data: { error: String(e?.message || e).slice(0, 200) },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion agent log (debug)
+      console.warn('[restart-vite] Failed to patch Vite allowedHosts (non-fatal):', e);
     }
 
     // Use the provider's restartViteServer method if available
@@ -258,22 +214,6 @@ export async function POST(request: NextRequest) {
     // Update global state
     global.lastViteRestartTimeBySandbox[sandboxKey] = Date.now();
     global.viteRestartInProgressBySandbox[sandboxKey] = false;
-
-    // #region agent log (debug)
-    fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sessionId: 'debug-session',
-        runId: 'preview-stuck-pre',
-        hypothesisId: 'H3',
-        location: 'app/api/restart-vite/route.ts:POST:success',
-        message: 'restart-vite succeeded',
-        data: { sandboxKey },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion agent log (debug)
 
     return NextResponse.json({
       success: true,

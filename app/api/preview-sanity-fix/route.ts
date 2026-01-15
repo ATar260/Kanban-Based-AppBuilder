@@ -85,29 +85,6 @@ export async function POST(request: NextRequest) {
 
     const shouldFix = Boolean(mainHasRouter && appHasRouter && main && hasRouterWrapperInMain(main.content));
 
-    // #region agent log (debug)
-    fetch('http://127.0.0.1:7244/ingest/c9f29500-2419-465e-93c8-b96754dedc28', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sessionId: 'debug-session',
-        runId: 'preview-stuck-pre',
-        hypothesisId: 'H4',
-        location: 'app/api/preview-sanity-fix/route.ts:POST',
-        message: 'preview sanity fix evaluated',
-        data: {
-          sandboxId,
-          mainPath: main?.path || null,
-          appPath: app?.path || null,
-          mainHasRouter,
-          appHasRouter,
-          shouldFix,
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion agent log (debug)
-
     if (shouldFix) {
       const newMain = stripMainRouterWrapper(main!.content);
       await provider.writeFile(main!.path, newMain);

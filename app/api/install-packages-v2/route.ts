@@ -8,7 +8,9 @@ declare global {
 
 export async function POST(request: NextRequest) {
   try {
-    const { packages } = await request.json();
+    const body = await request.json().catch(() => null);
+    const packages = body?.packages;
+    const requestedSandboxId = String(body?.sandboxId || body?.sandbox || '').trim();
     
     if (!packages || !Array.isArray(packages) || packages.length === 0) {
       return NextResponse.json({ 
@@ -18,13 +20,18 @@ export async function POST(request: NextRequest) {
     }
     
     // Get provider from sandbox manager or global state
-    const provider = sandboxManager.getActiveProvider() || global.activeSandboxProvider;
+    const activeProvider = sandboxManager.getActiveProvider() || global.activeSandboxProvider;
+    const provider = requestedSandboxId
+      ? sandboxManager.getProvider(requestedSandboxId) ||
+        (activeProvider?.getSandboxInfo?.()?.sandboxId === requestedSandboxId ? activeProvider : null) ||
+        (await sandboxManager.getOrCreateProvider(requestedSandboxId).catch(() => null))
+      : activeProvider;
     
     if (!provider) {
       return NextResponse.json({ 
         success: false, 
-        error: 'No active sandbox' 
-      }, { status: 400 });
+        error: requestedSandboxId ? `No sandbox provider for sandboxId: ${requestedSandboxId}` : 'No active sandbox',
+      }, { status: requestedSandboxId ? 404 : 400 });
     }
     
     console.log(`[install-packages-v2] Installing: ${packages.join(', ')}`);
