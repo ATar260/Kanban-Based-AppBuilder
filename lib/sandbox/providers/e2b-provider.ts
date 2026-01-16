@@ -38,6 +38,21 @@ export class E2BProvider extends SandboxProvider {
     return '/app';
   }
 
+  private async ensureViteListening(maxWaitMs: number = 30_000): Promise<{ ok: boolean; logTail?: string }> {
+    if (!this.sandboxInstance) return { ok: false };
+    const deadline = Date.now() + Math.max(5_000, maxWaitMs);
+
+    // Use curl (installed in our template). If curl is missing, this will just fail and we’ll fall back to log tail.
+    while (Date.now() < deadline) {
+      const res = await this.runCommand('curl -sSf --max-time 1 http://127.0.0.1:5173/ >/dev/null 2>&1 && echo OK');
+      if (res.success && /\bOK\b/.test(res.stdout)) return { ok: true };
+      await new Promise(r => setTimeout(r, 1000));
+    }
+
+    const tail = await this.runCommand('tail -n 120 /tmp/vite.log 2>/dev/null || true');
+    return { ok: false, logTail: (tail.stdout || '').slice(0, 8000) };
+  }
+
   async createSandbox(): Promise<SandboxInfo> {
     try {
       if (this.sandboxInstance) {
@@ -252,7 +267,7 @@ export class E2BProvider extends SandboxProvider {
       await this.sandboxInstance.files.write(pkgPath, JSON.stringify(packageJson, null, 2));
 
       const viteConfigPath = `${root}/vite.config.js`;
-      const viteConfig = `import { defineConfig } from 'vite'\nimport react from '@vitejs/plugin-react'\n\nexport default defineConfig({\n  plugins: [react()],\n  server: {\n    host: '0.0.0.0',\n    port: 5173,\n    strictPort: true,\n    // Allow sandbox preview domains to load the preview without host blocking.\n    allowedHosts: [\n      '.e2b.dev',\n      '.modal.host',\n      '.vercel.run',\n      'localhost',\n    ],\n    hmr: {\n      clientPort: 443,\n      protocol: 'wss'\n    }\n  }\n})`;
+      const viteConfig = `import { defineConfig } from 'vite'\nimport react from '@vitejs/plugin-react'\n\nexport default defineConfig({\n  plugins: [react()],\n  server: {\n    host: '0.0.0.0',\n    port: 5173,\n    strictPort: true,\n    // E2B preview domains are ephemeral; disable host check for reliability.\n    allowedHosts: true,\n    hmr: {\n      clientPort: 443,\n      protocol: 'wss'\n    }\n  }\n})`;
       await this.sandboxInstance.files.write(viteConfigPath, viteConfig);
 
       const tailwindConfigPath = `${root}/tailwind.config.js`;
@@ -311,17 +326,38 @@ export class E2BProvider extends SandboxProvider {
 
     const root = this.resolveSandboxRoot();
 
-    // Kill existing Vite processes (best-effort)
+    // Kill existing Vite processes (best-effort) and clear old logs
     await this.runCommand('pkill -f vite || true');
+    await this.runCommand('rm -f /tmp/vite.log || true');
 
-    // Start Vite in background
-    await this.sandboxInstance.commands.run(
-      `sh -c ${JSON.stringify('npm run dev -- --host 0.0.0.0 --port 5173 --strictPort')}`,
-      { cwd: root, background: true }
-    );
+    // Start Vite (nohup + background) so the command returns immediately
+    // Use a dedicated cache dir to avoid permission issues under /app/node_modules/.vite.
+    const startCmd =
+      'nohup npm run dev -- --host 0.0.0.0 --port 5173 --strictPort --cacheDir /tmp/vite-cache > /tmp/vite.log 2>&1 &';
+    await this.runCommand(startCmd);
 
-    // Best-effort small wait to reduce immediate preview errors (no hard dependency).
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    const check = await this.ensureViteListening(35_000);
+    if (!check.ok) {
+      // One more attempt: reinstall deps (in case node_modules missing) and retry.
+      const hasNodeModules = await this.sandboxInstance.files.exists(`${root}/node_modules`).catch(() => false);
+      if (!hasNodeModules) {
+        const timeoutMs = Math.max(10 * 60_000, Number(process.env.SANDBOX_NPM_INSTALL_TIMEOUT_MS) || 0);
+        await this.sandboxInstance.commands.run(`sh -c ${JSON.stringify('npm install')}`, { cwd: root, timeoutMs });
+      }
+
+      await this.runCommand('pkill -f vite || true');
+      await this.runCommand('rm -f /tmp/vite.log || true');
+      await this.runCommand(startCmd);
+
+      const check2 = await this.ensureViteListening(35_000);
+      if (!check2.ok) {
+        const tail = check2.logTail || check.logTail || '';
+        throw new Error(
+          `Vite failed to start on port 5173 in E2B sandbox.\n` +
+            (tail ? `\n--- /tmp/vite.log (tail) ---\n${tail}` : '')
+        );
+      }
+    }
 
     // Refresh preview URL (host is derived from sandboxId + domain).
     if (this.sandboxInfo) {

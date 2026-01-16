@@ -113,13 +113,6 @@ function AISandboxPage() {
       return providerParam as SandboxProviderPreference;
     }
 
-    if (typeof window === 'undefined') return 'e2b';
-    try {
-      const raw = String(localStorage.getItem('sandboxProviderPreference') || '').trim().toLowerCase();
-      if (raw === 'auto' || raw === 'e2b' || raw === 'modal' || raw === 'vercel') return raw as SandboxProviderPreference;
-    } catch {
-      // ignore
-    }
     return 'e2b';
   });
   const [urlOverlayVisible, setUrlOverlayVisible] = useState(false);
