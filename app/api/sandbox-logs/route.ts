@@ -2,6 +2,53 @@ import { NextRequest, NextResponse } from 'next/server';
 import type { SandboxState } from '@/types/sandbox';
 import { sandboxManager } from '@/lib/sandbox/sandbox-manager';
 
+function extractMissingPackages(text: string): string[] {
+  const out = new Set<string>();
+  const lines = String(text || '').split('\n');
+
+  for (const line of lines) {
+    const l = String(line || '');
+
+    // Vite / Rollup
+    let m = l.match(/Failed to resolve import\s+"([^"]+)"/i);
+    if (m?.[1]) {
+      const imp = m[1];
+      if (!imp.startsWith('.') && !imp.startsWith('/')) out.add(imp);
+      continue;
+    }
+
+    // Node ESM
+    m = l.match(/Cannot find package\s+'([^']+)'/i);
+    if (m?.[1]) {
+      const pkg = m[1];
+      if (!pkg.startsWith('.') && !pkg.startsWith('/')) out.add(pkg);
+      continue;
+    }
+
+    // CommonJS
+    m = l.match(/Cannot find module\s+'([^']+)'/i);
+    if (m?.[1]) {
+      const pkg = m[1];
+      if (!pkg.startsWith('.') && !pkg.startsWith('/')) out.add(pkg);
+      continue;
+    }
+  }
+
+  const normalized: string[] = [];
+  for (const raw of out) {
+    const s = String(raw || '').trim();
+    if (!s) continue;
+    if (s.startsWith('@')) {
+      const parts = s.split('/');
+      normalized.push(parts.length >= 2 ? parts.slice(0, 2).join('/') : s);
+    } else {
+      normalized.push(s.split('/')[0]);
+    }
+  }
+
+  return Array.from(new Set(normalized)).filter(Boolean).slice(0, 10);
+}
+
 declare global {
   var activeSandbox: any;
   var activeSandboxProvider: any;
@@ -122,12 +169,35 @@ export async function GET(request: NextRequest) {
     } catch {
       // No log files found, that's OK
     }
+
+    // Auto-fix: if logs show missing packages, install them (E2B only) and restart Vite.
+    // This is best-effort and capped to avoid runaway installs.
+    const providerInfo = provider?.getSandboxInfo?.();
+    const canAutoFix = providerInfo?.provider === 'e2b' && typeof provider?.installPackages === 'function';
+    const logsJoined = logContent.join('\n');
+    const missingPkgs = extractMissingPackages(logsJoined);
+
+    if (canAutoFix && missingPkgs.length > 0) {
+      try {
+        const installRes = await provider.installPackages(missingPkgs);
+        logContent.push(`Auto-installed missing packages: ${missingPkgs.join(', ')}`);
+        if (!installRes?.success) {
+          logContent.push(`Auto-install stderr: ${String(installRes?.stderr || '').slice(0, 800)}`);
+        } else if (typeof provider.restartViteServer === 'function') {
+          await provider.restartViteServer();
+          logContent.push('Restarted Vite after auto-install.');
+        }
+      } catch (e: any) {
+        logContent.push(`Auto-install failed: ${String(e?.message || e).slice(0, 400)}`);
+      }
+    }
     
     return NextResponse.json({
       success: true,
       hasErrors: false,
       logs: logContent,
-      status: viteRunning ? 'running' : 'stopped'
+      status: viteRunning ? 'running' : 'stopped',
+      missingPackages: missingPkgs
     });
     
   } catch (error) {

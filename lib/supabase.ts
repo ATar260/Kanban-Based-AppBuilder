@@ -196,6 +196,36 @@ export type Database = {
           updated_at?: string;
         };
       };
+      e2b_template_bake_queue: {
+        Row: {
+          package_name: string;
+          dep_type: string; // dependency | devDependency
+          first_seen_at: string;
+          last_seen_at: string;
+          seen_count: number;
+          status: string; // pending | baked | failed | ignored
+          last_error: string | null;
+          baked_at: string | null;
+        };
+        Insert: {
+          package_name: string;
+          dep_type?: string;
+          first_seen_at?: string;
+          last_seen_at?: string;
+          seen_count?: number;
+          status?: string;
+          last_error?: string | null;
+          baked_at?: string | null;
+        };
+        Update: {
+          dep_type?: string;
+          last_seen_at?: string;
+          seen_count?: number;
+          status?: string;
+          last_error?: string | null;
+          baked_at?: string | null;
+        };
+      };
       organizations: {
         Row: {
           id: string;

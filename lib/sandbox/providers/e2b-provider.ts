@@ -1,5 +1,6 @@
 import { Sandbox as E2BSandbox } from 'e2b';
 import { SandboxProvider, SandboxInfo, CommandResult } from '../types';
+import { queueE2BTemplateBakeCandidates } from '@/lib/e2b/template-bake-queue';
 
 export class E2BProvider extends SandboxProvider {
   private sandboxInstance: E2BSandbox | null = null;
@@ -213,6 +214,16 @@ export class E2BProvider extends SandboxProvider {
         success: exitCode === 0,
       };
 
+      if (out.success) {
+        // Best-effort: queue these deps for template baking (server-side).
+        // Never block the user flow on queue persistence.
+        void queueE2BTemplateBakeCandidates({
+          packages: pkgs,
+          source: 'e2b.installPackages',
+          status: 'pending',
+        }).catch(() => {});
+      }
+
       if (out.success && process.env.AUTO_RESTART_VITE === 'true') {
         await this.restartViteServer();
       }
@@ -330,13 +341,41 @@ export class E2BProvider extends SandboxProvider {
     await this.runCommand('pkill -f vite || true');
     await this.runCommand('rm -f /tmp/vite.log || true');
 
+    // Workaround: in some E2B sandboxes `/app` can be non-writable for the Vite process.
+    // Vite bundles the config to `vite.config.*.timestamp-*.mjs` in the same directory as the config file,
+    // so we place a runtime config under `/tmp` (writable) and start Vite with `--config`.
+    await this.runCommand('mkdir -p /tmp/vite-cache || true');
+    const tmpConfigPath = '/tmp/vite.runtime.config.mjs';
+    // Avoid `@vitejs/plugin-react` here because E2B sandboxes can have module-resolution quirks
+    // when Vite bundles config under `/tmp`, leading to missing `react-refresh`.
+    // Vite can compile JSX via esbuild without the React plugin (no fast refresh, but reliable).
+    const tmpViteConfig = `export default {
+  cacheDir: '/tmp/vite-cache',
+  esbuild: {
+    jsx: 'automatic',
+    jsxImportSource: 'react'
+  },
+  server: {
+    host: '0.0.0.0',
+    port: 5173,
+    strictPort: true,
+    // E2B preview domains are ephemeral; disable host check for reliability.
+    allowedHosts: true,
+    hmr: {
+      clientPort: 443,
+      protocol: 'wss'
+    }
+  }
+}
+`;
+    await this.sandboxInstance.files.write(tmpConfigPath, tmpViteConfig).catch(() => {});
+
     // Start Vite (nohup + background) so the command returns immediately
-    // Use a dedicated cache dir to avoid permission issues under /app/node_modules/.vite.
-    const startCmd =
-      'nohup npm run dev -- --host 0.0.0.0 --port 5173 --strictPort --cacheDir /tmp/vite-cache > /tmp/vite.log 2>&1 &';
+    const startCmd = `nohup ./node_modules/.bin/vite --config ${tmpConfigPath} > /tmp/vite.log 2>&1 &`;
     await this.runCommand(startCmd);
 
     const check = await this.ensureViteListening(35_000);
+
     if (!check.ok) {
       // One more attempt: reinstall deps (in case node_modules missing) and retry.
       const hasNodeModules = await this.sandboxInstance.files.exists(`${root}/node_modules`).catch(() => false);

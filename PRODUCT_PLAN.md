@@ -312,6 +312,7 @@ NETLIFY_AUTH_TOKEN=...
 ## E2B custom template (recommended)
 
 - Template definition lives in `e2b.Dockerfile` (pre-installs the Vite + React + Tailwind scaffold and dependencies).
+- Template sources live in `e2b/template/` (used by `e2b.Dockerfile` via `COPY`).
 - Build + publish (run from repo root):
 
 ```bash
@@ -323,6 +324,21 @@ e2b template publish -y
 
 - Set `E2B_TEMPLATE_ID` (from the publish output / E2B dashboard) and `E2B_API_KEY` in Vercel env.
 - Keep `SANDBOX_PROVIDER=e2b` in production so `/generation` always uses E2B.
+
+## E2B template auto-bake (scheduled)
+
+This repo can automatically:
+- **install missing packages in the current sandbox** (so Preview recovers), and
+- **queue those packages to be baked into the E2B template** so future sandboxes start with them preinstalled.
+
+It uses:
+- Supabase table `e2b_template_bake_queue` (server-only; requires `SUPABASE_SERVICE_ROLE_KEY`)
+- GitHub Actions workflow `.github/workflows/e2b-autobake-template.yml` (runs twice daily)
+
+GitHub Actions secrets required:
+- `E2B_ACCESS_TOKEN` (for `e2b template build/publish` in CI)
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
 
 ---
 

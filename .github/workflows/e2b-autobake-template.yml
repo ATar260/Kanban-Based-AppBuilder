@@ -1,0 +1,37 @@
+name: E2B template autobake
+
+on:
+  schedule:
+    # Twice daily (UTC)
+    - cron: "0 0,12 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  autobake:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install E2B CLI
+        run: npm i -g @e2b/cli
+
+      - name: Autobake and publish template
+        env:
+          # Required for E2B template management
+          E2B_ACCESS_TOKEN: ${{ secrets.E2B_ACCESS_TOKEN }}
+          # Supabase admin access for bake queue
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # Safety cap
+          E2B_AUTOBAKE_MAX_NEW: "25"
+        run: node scripts/e2b/autobake-template.mjs
+
