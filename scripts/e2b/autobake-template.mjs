@@ -79,16 +79,20 @@ async function main() {
   mustEnv();
 
   const rows = await getQueueRows();
-  const pending = rows.filter(r => r.status === 'pending');
-  if (pending.length === 0) {
+  const bakedRows = rows.filter(r => r.status === 'baked');
+  const pendingRows = rows.filter(r => r.status === 'pending');
+  if (pendingRows.length === 0) {
     console.log('[autobake] No pending packages. Exiting.');
     return;
   }
 
   const maxNew = Number(process.env.E2B_AUTOBAKE_MAX_NEW || 25);
-  const toBake = pending.slice(0, Number.isFinite(maxNew) && maxNew > 0 ? Math.floor(maxNew) : 25);
+  const toBake = pendingRows.slice(0, Number.isFinite(maxNew) && maxNew > 0 ? Math.floor(maxNew) : 25);
+  const includeRows = bakedRows.concat(toBake);
 
-  console.log(`[autobake] Pending=${pending.length}, bakingNow=${toBake.length}`);
+  console.log(
+    `[autobake] bakedExisting=${bakedRows.length}, pending=${pendingRows.length}, bakingNow=${toBake.length}, includeTotal=${includeRows.length}`
+  );
 
   const pkgJson = JSON.parse(await fs.readFile(TEMPLATE_PKG_PATH, 'utf8'));
   pkgJson.dependencies = pkgJson.dependencies || {};
@@ -98,10 +102,13 @@ async function main() {
   const failed = [];
   const nowIso = new Date().toISOString();
 
-  for (const row of toBake) {
+  // Ensure the build is cumulative: always include previously baked deps plus the newest pending ones.
+  // Use a dist-tag ("latest") to avoid needing to persist versions in Supabase.
+  for (const row of includeRows) {
     const name = String(row.package_name || '').trim();
     if (!name || !isValidNpmName(name)) {
-      failed.push({ name, reason: 'invalid_name' });
+      // Only mark failures for newly-pending packages (avoid flipping already-baked rows).
+      if (row.status === 'pending') failed.push({ name, reason: 'invalid_name' });
       continue;
     }
 
@@ -111,13 +118,7 @@ async function main() {
       continue;
     }
 
-    const ver = npmLatestVersion(name);
-    if (!ver) {
-      failed.push({ name, reason: 'npm_view_failed' });
-      continue;
-    }
-
-    pkgJson[depType][name] = `^${ver}`;
+    pkgJson[depType][name] = 'latest';
     newlyResolved.push(name);
   }
 
@@ -134,7 +135,10 @@ async function main() {
   const bakedNames = newlyResolved.filter(Boolean);
   const failedNames = failed.map(f => f.name).filter(Boolean);
 
-  await markStatus(bakedNames, 'baked', { baked_at: nowIso, last_error: null });
+  // Only mark the just-processed pending packages as baked (don’t touch previously baked rows).
+  const toBakeNames = new Set(toBake.map(r => String(r.package_name || '').trim()).filter(Boolean));
+  const bakedNow = bakedNames.filter(n => toBakeNames.has(n));
+  await markStatus(bakedNow, 'baked', { baked_at: nowIso, last_error: null });
 
   if (failedNames.length > 0) {
     const errMsg = `autobake_failed:${failed.slice(0, 5).map(f => `${f.name}:${f.reason}`).join(',')}`.slice(0, 180);
