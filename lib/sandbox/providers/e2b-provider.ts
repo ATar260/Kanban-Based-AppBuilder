@@ -198,7 +198,9 @@ export class E2BProvider extends SandboxProvider {
 
     const root = this.resolveSandboxRoot();
     const flags = String(process.env.NPM_FLAGS || '').trim();
-    const cmd = `npm install ${flags ? `${flags} ` : ''}${pkgs.join(' ')}`.trim();
+    const cacheDir = '/tmp/npm-cache';
+    // Avoid EACCES by forcing a writable cache + HOME (some sandboxes run commands as non-root).
+    const cmd = `mkdir -p ${cacheDir} && HOME=/tmp NPM_CONFIG_CACHE=${cacheDir} npm_config_cache=${cacheDir} npm install ${flags ? `${flags} ` : ''}${pkgs.join(' ')}`.trim();
 
     try {
       const result: any = await this.sandboxInstance.commands.run(`sh -c ${JSON.stringify(cmd)}`, {
@@ -311,10 +313,14 @@ export class E2BProvider extends SandboxProvider {
     const hasNodeModules = await this.sandboxInstance.files.exists(`${root}/node_modules`).catch(() => false);
     if (!hasNodeModules) {
       const timeoutMs = Math.max(10 * 60_000, Number(process.env.SANDBOX_NPM_INSTALL_TIMEOUT_MS) || 0);
-      await this.sandboxInstance.commands.run(`sh -c ${JSON.stringify('npm install')}`, {
+      const cacheDir = '/tmp/npm-cache';
+      await this.sandboxInstance.commands.run(
+        `sh -c ${JSON.stringify(`mkdir -p ${cacheDir} && HOME=/tmp NPM_CONFIG_CACHE=${cacheDir} npm_config_cache=${cacheDir} npm install`)}`,
+        {
         cwd: root,
         timeoutMs,
-      });
+        }
+      );
     }
 
     // Start/Restart Vite (idempotent).
@@ -383,7 +389,11 @@ export class E2BProvider extends SandboxProvider {
       const hasNodeModules = await this.sandboxInstance.files.exists(`${root}/node_modules`).catch(() => false);
       if (!hasNodeModules) {
         const timeoutMs = Math.max(10 * 60_000, Number(process.env.SANDBOX_NPM_INSTALL_TIMEOUT_MS) || 0);
-        await this.sandboxInstance.commands.run(`sh -c ${JSON.stringify('npm install')}`, { cwd: root, timeoutMs });
+        const cacheDir = '/tmp/npm-cache';
+        await this.sandboxInstance.commands.run(
+          `sh -c ${JSON.stringify(`mkdir -p ${cacheDir} && HOME=/tmp NPM_CONFIG_CACHE=${cacheDir} npm_config_cache=${cacheDir} npm install`)}`,
+          { cwd: root, timeoutMs }
+        );
       }
 
       await this.runCommand('pkill -f vite || true');
