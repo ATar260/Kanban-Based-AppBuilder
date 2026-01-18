@@ -24,10 +24,25 @@ jobs:
       - name: Install E2B CLI
         run: npm i -g @e2b/cli
 
+      - name: Normalize E2B access token
+        env:
+          E2B_ACCESS_TOKEN: ${{ secrets.E2B_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          token="$(printf %s "${E2B_ACCESS_TOKEN:-}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          token="${token#\"}"
+          token="${token%\"}"
+          if [ -z "$token" ]; then
+            echo "E2B_ACCESS_TOKEN is empty after normalization. Check repo secret E2B_ACCESS_TOKEN." >&2
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          echo "E2B_ACCESS_TOKEN=$token" >> "$GITHUB_ENV"
+
       - name: Autobake and publish template
         env:
           # Required for E2B template management
-          E2B_ACCESS_TOKEN: ${{ secrets.E2B_ACCESS_TOKEN }}
+          E2B_ACCESS_TOKEN: ${{ env.E2B_ACCESS_TOKEN }}
           # Supabase admin access for bake queue
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

@@ -26,9 +26,25 @@ jobs:
       - name: Install E2B CLI
         run: npm i -g @e2b/cli
 
-      - name: Build and publish template
+      - name: Normalize E2B access token
         env:
           E2B_ACCESS_TOKEN: ${{ secrets.E2B_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          token="$(printf %s "${E2B_ACCESS_TOKEN:-}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          # If the secret was pasted with quotes, strip them.
+          token="${token#\"}"
+          token="${token%\"}"
+          if [ -z "$token" ]; then
+            echo "E2B_ACCESS_TOKEN is empty after normalization. Check repo secret E2B_ACCESS_TOKEN." >&2
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          echo "E2B_ACCESS_TOKEN=$token" >> "$GITHUB_ENV"
+
+      - name: Build and publish template
+        env:
+          E2B_ACCESS_TOKEN: ${{ env.E2B_ACCESS_TOKEN }}
         run: |
           e2b template build -n paynto-vite -d e2b.Dockerfile
           e2b template publish -y
