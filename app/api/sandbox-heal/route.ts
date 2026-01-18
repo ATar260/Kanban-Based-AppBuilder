@@ -112,6 +112,35 @@ export async function POST(request: NextRequest) {
 
       if (blockedUntil && now < blockedUntil) {
         const retryAfterMs = blockedUntil - now;
+
+        // If permissions were fixed since the last EACCES (e.g. template was republished and sandbox recreated),
+        // automatically clear the block and proceed instead of forcing a long cooldown.
+        let nodeModulesWritable: boolean | null = null;
+        try {
+          const diag = await provider.runCommand(
+            `id -a 2>/dev/null || true; ` +
+              `ls -ld /app /app/node_modules 2>/dev/null || true; ` +
+              `(test -w /app && echo APP_WRITABLE || echo APP_NOT_WRITABLE) 2>/dev/null || true; ` +
+              `(test -w /app/node_modules && echo NODE_MODULES_WRITABLE || echo NODE_MODULES_NOT_WRITABLE) 2>/dev/null || true`
+          );
+          const out = String(diag?.stdout || '');
+          nodeModulesWritable = out.includes('NODE_MODULES_WRITABLE');
+
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/c77dad7d-5856-4f46-a321-cf824026609f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'run1',hypothesisId:'H2',location:'app/api/sandbox-heal/route.ts:POST:blocked-perms-probe',message:'sandbox-heal blocked perms probe',data:{sandboxKey,blockedUntil,now,retryAfterMs,nodeModulesWritable,diagStdout:String(diag?.stdout||'').slice(0,800),diagStderr:String(diag?.stderr||'').slice(0,200)},timestamp:Date.now()})}).catch(()=>{});
+          // #endregion
+        } catch (e: any) {
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/c77dad7d-5856-4f46-a321-cf824026609f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'run1',hypothesisId:'H2',location:'app/api/sandbox-heal/route.ts:POST:blocked-perms-probe-error',message:'sandbox-heal blocked perms probe error',data:{sandboxKey,blockedUntil,now,retryAfterMs,error:String(e?.message||e).slice(0,200)},timestamp:Date.now()})}).catch(()=>{});
+          // #endregion
+          nodeModulesWritable = null;
+        }
+
+        if (nodeModulesWritable === true) {
+          global.sandboxHealBlockedUntilBySandbox[sandboxKey] = 0;
+          global.sandboxHealBlockReasonBySandbox[sandboxKey] = '';
+          // proceed (do not return)
+        } else {
         await send({
           type: 'complete',
           healthy: false,
@@ -121,6 +150,7 @@ export async function POST(request: NextRequest) {
         });
         console.warn('[sandbox-heal] Blocked', { sandboxKey, retryAfterMs });
         return;
+        }
       }
 
       if (global.sandboxHealInProgressBySandbox[sandboxKey]) {
