@@ -10,6 +10,7 @@ export default defineConfig({
     // E2B/Modal/Vercel preview domains are ephemeral; disable host check for reliability.
     allowedHosts: true,
     hmr: {
+      overlay: false,
       clientPort: 443,
       protocol: 'wss'
     }

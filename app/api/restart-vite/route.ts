@@ -58,6 +58,55 @@ function patchViteConfigAllowAllHosts(contents: string): { patched: string; chan
   return { patched: contents, changed: false };
 }
 
+function patchViteConfigDisableOverlay(contents: string): { patched: string; changed: boolean } {
+  if (!contents) return { patched: contents, changed: false };
+
+  // Prefer disabling Vite's HMR error overlay so users never see raw build errors in the iframe.
+  // If overlay is already configured anywhere in the config, normalize it to false.
+  if (/\boverlay\s*:/.test(contents)) {
+    const replaced = contents.replace(/\boverlay\s*:\s*[^,\n}]+/g, 'overlay: false');
+    return { patched: replaced, changed: replaced !== contents };
+  }
+
+  // If there's an existing hmr block, inject overlay inside it.
+  const hmrBlock = /(hmr\s*:\s*\{\s*)/m;
+  if (hmrBlock.test(contents)) {
+    return {
+      patched: contents.replace(hmrBlock, `$1overlay: false, `),
+      changed: true,
+    };
+  }
+
+  // If there's an existing server block, inject a minimal hmr block.
+  const serverBlock = /(server\s*:\s*\{\s*)/m;
+  if (serverBlock.test(contents)) {
+    return {
+      patched: contents.replace(serverBlock, `$1hmr: { overlay: false }, `),
+      changed: true,
+    };
+  }
+
+  // If using defineConfig({ ... }), inject a server block at the top-level.
+  const defineConfigBlock = /(defineConfig\s*\(\s*\{\s*)/m;
+  if (defineConfigBlock.test(contents)) {
+    return {
+      patched: contents.replace(defineConfigBlock, `$1\n  server: { hmr: { overlay: false } },\n  `),
+      changed: true,
+    };
+  }
+
+  // If exporting a plain object, inject server at the top-level.
+  const exportDefaultObject = /(export\s+default\s+\{\s*)/m;
+  if (exportDefaultObject.test(contents)) {
+    return {
+      patched: contents.replace(exportDefaultObject, `$1\n  server: { hmr: { overlay: false } },\n  `),
+      changed: true,
+    };
+  }
+
+  return { patched: contents, changed: false };
+}
+
 async function ensureViteHostAllowed(provider: any): Promise<{
   createdConfigPath: string | null;
   patchedConfigPaths: string[];
@@ -92,7 +141,10 @@ async function ensureViteHostAllowed(provider: any): Promise<{
     attempted.push(p);
     try {
       const raw = await provider.readFile(p);
-      const { patched: next, changed } = patchViteConfigAllowAllHosts(raw);
+      const allow = patchViteConfigAllowAllHosts(raw);
+      const overlay = patchViteConfigDisableOverlay(allow.patched);
+      const next = overlay.patched;
+      const changed = allow.changed || overlay.changed;
       if (changed) {
         await provider.writeFile(p, next);
         patched.push(p);
@@ -105,7 +157,7 @@ async function ensureViteHostAllowed(provider: any): Promise<{
   if (patched.length === 0) {
     // If we couldn't find/patch any config file, create a minimal config so Vite will pick it up.
     const createdConfigPath = 'vite.config.ts';
-    const content = `import { defineConfig } from 'vite';\n\nexport default defineConfig({\n  server: {\n    allowedHosts: true,\n  },\n});\n`;
+    const content = `import { defineConfig } from 'vite';\n\nexport default defineConfig({\n  server: {\n    allowedHosts: true,\n    hmr: { overlay: false },\n  },\n});\n`;
     try {
       await provider.writeFile(createdConfigPath, content);
       return { createdConfigPath, patchedConfigPaths: [], attemptedConfigPaths: attempted };

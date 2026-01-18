@@ -279,7 +279,7 @@ export class E2BProvider extends SandboxProvider {
       await this.sandboxInstance.files.write(pkgPath, JSON.stringify(packageJson, null, 2));
 
       const viteConfigPath = `${root}/vite.config.js`;
-      const viteConfig = `import { defineConfig } from 'vite'\nimport react from '@vitejs/plugin-react'\n\nexport default defineConfig({\n  plugins: [react()],\n  server: {\n    host: '0.0.0.0',\n    port: 5173,\n    strictPort: true,\n    // E2B preview domains are ephemeral; disable host check for reliability.\n    allowedHosts: true,\n    hmr: {\n      clientPort: 443,\n      protocol: 'wss'\n    }\n  }\n})`;
+      const viteConfig = `import { defineConfig } from 'vite'\nimport react from '@vitejs/plugin-react'\n\nexport default defineConfig({\n  plugins: [react()],\n  server: {\n    host: '0.0.0.0',\n    port: 5173,\n    strictPort: true,\n    // E2B preview domains are ephemeral; disable host check for reliability.\n    allowedHosts: true,\n    hmr: {\n      overlay: false,\n      clientPort: 443,\n      protocol: 'wss'\n    }\n  }\n})`;
       await this.sandboxInstance.files.write(viteConfigPath, viteConfig);
 
       const tailwindConfigPath = `${root}/tailwind.config.js`;
@@ -363,6 +363,7 @@ export class E2BProvider extends SandboxProvider {
     // E2B preview domains are ephemeral; disable host check for reliability.
     allowedHosts: true,
     hmr: {
+      overlay: false,
       clientPort: 443,
       protocol: 'wss'
     }
