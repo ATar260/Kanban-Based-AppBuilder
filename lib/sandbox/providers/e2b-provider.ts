@@ -227,15 +227,74 @@ export class E2BProvider extends SandboxProvider {
         } catch {
           // ignore
         }
-        return {
-          stdout: String(check.stdout || ''),
-          stderr:
-            'npm EACCES: /app/node_modules is not writable by the sandbox runtime user. ' +
-            'This usually means /app (or node_modules) was created/installed under a different user during template build. ' +
-            'Publish the updated template (e2b.Dockerfile fixes /app permissions) and recreate the sandbox.',
-          exitCode: 13,
-          success: false,
-        };
+        // Self-heal: in some E2B templates the sandbox runtime user is `user` (uid 1001),
+        // while `/app` is owned by the `node` user from the base image (uid 1000).
+        // We can still install dependencies by running npm as `node`.
+
+        const nodeUser = 'node';
+        const nodeCmd =
+          `mkdir -p ${cacheDir} && ` +
+          `HOME=/tmp NPM_CONFIG_CACHE=${cacheDir} npm_config_cache=${cacheDir} ` +
+          `npm install ${flags ? `${flags} ` : ''}${pkgs.join(' ')}`.trim();
+
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/c77dad7d-5856-4f46-a321-cf824026609f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'run1',hypothesisId:'H2',location:'lib/sandbox/providers/e2b-provider.ts:installPackages:fallback-node-start',message:'e2b installPackages fallback to run npm as node user',data:{sandboxId:String(this.sandboxInfo?.sandboxId||''),root,pkgs:pkgs.slice(0,10),user:nodeUser},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion
+
+        try {
+          const result: any = await this.sandboxInstance.commands.run(`sh -c ${JSON.stringify(nodeCmd)}`, {
+            cwd: root,
+            timeoutMs: Math.max(10 * 60_000, Number(process.env.SANDBOX_NPM_INSTALL_TIMEOUT_MS) || 0),
+            user: nodeUser as any,
+          });
+
+          const exitCode = Number(result?.exitCode ?? 0);
+          const out: CommandResult = {
+            stdout: String(result?.stdout || ''),
+            stderr: String(result?.stderr || ''),
+            exitCode,
+            success: exitCode === 0,
+          };
+
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/c77dad7d-5856-4f46-a321-cf824026609f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'run1',hypothesisId:'H2',location:'lib/sandbox/providers/e2b-provider.ts:installPackages:fallback-node-result',message:'e2b installPackages fallback npm result',data:{sandboxId:String(this.sandboxInfo?.sandboxId||''),success:Boolean(out.success),exitCode:Number(out.exitCode||0),stdoutSnippet:String(out.stdout||'').slice(0,300),stderrSnippet:String(out.stderr||'').slice(0,300)},timestamp:Date.now()})}).catch(()=>{});
+          // #endregion
+
+          if (out.success) {
+            void queueE2BTemplateBakeCandidates({
+              packages: pkgs,
+              source: 'e2b.installPackages(node_fallback)',
+              status: 'pending',
+            }).catch(() => {});
+          }
+
+          if (out.success && process.env.AUTO_RESTART_VITE === 'true') {
+            await this.restartViteServer();
+          }
+
+          return out;
+        } catch (error: any) {
+          const exitCode = Number(error?.exitCode ?? 1);
+          const out: CommandResult = {
+            stdout: String(error?.stdout || ''),
+            stderr: String(error?.stderr || error?.message || 'npm install failed'),
+            exitCode,
+            success: exitCode === 0,
+          };
+
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/c77dad7d-5856-4f46-a321-cf824026609f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'run1',hypothesisId:'H2',location:'lib/sandbox/providers/e2b-provider.ts:installPackages:fallback-node-error',message:'e2b installPackages fallback npm threw',data:{sandboxId:String(this.sandboxInfo?.sandboxId||''),exitCode:Number(out.exitCode||0),stderrSnippet:String(out.stderr||'').slice(0,300)},timestamp:Date.now()})}).catch(()=>{});
+          // #endregion
+
+          return {
+            stdout: String(check.stdout || ''),
+            stderr:
+              'npm EACCES: /app/node_modules is not writable by the sandbox runtime user, and the node-user fallback install also failed. ' +
+              'Publish the updated template (e2b.Dockerfile fixes /app permissions) and recreate the sandbox.',
+            exitCode: 13,
+            success: false,
+          };
+        }
       }
     } catch {
       // If we can't check, proceed and let npm report the underlying error.
