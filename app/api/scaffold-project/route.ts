@@ -2129,6 +2129,20 @@ export async function POST(request: NextRequest) {
 
     const filesWritten = await writeFilesToSandbox({ provider, files });
 
+    // If we installed new deps, restart the dev server so Vite/Next picks them up reliably.
+    // (Vite often needs an explicit restart after adding dependencies.)
+    if (packagesInstalled.length > 0) {
+      try {
+        if (template === 'next' && typeof (provider as any).restartNextServer === 'function') {
+          await (provider as any).restartNextServer();
+        } else if (typeof (provider as any).restartViteServer === 'function') {
+          await (provider as any).restartViteServer();
+        }
+      } catch (e) {
+        console.warn('[scaffold-project] Failed to restart dev server after package install (non-fatal):', e);
+      }
+    }
+
     // Persist templateTarget on the server-side sandbox state for later steps.
     if (global.sandboxState?.fileCache) {
       global.sandboxState.fileCache.templateTarget = template;
