@@ -315,6 +315,24 @@ function AISandboxPage() {
   const codeDisplayRef = useRef<HTMLDivElement>(null);
   const restoringSandboxRef = useRef(false);
 
+  type PreviewGuardOverlayState = {
+    visible: boolean;
+    phase: 'checking' | 'healing' | 'blocked';
+    message: string;
+    packages?: string[];
+  };
+
+  const [previewGuardOverlay, setPreviewGuardOverlay] = useState<PreviewGuardOverlayState>({
+    visible: false,
+    phase: 'checking',
+    message: '',
+    packages: [],
+  });
+  const [previewHealthSnapshot, setPreviewHealthSnapshot] = useState<any | null>(null);
+  const previewHealInFlightRef = useRef(false);
+  const previewGuardPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastPreviewReloadAtRef = useRef(0);
+
   const [codeApplicationState, setCodeApplicationState] = useState<CodeApplicationState>({
     stage: null
   });
@@ -356,6 +374,225 @@ function AISandboxPage() {
     hasInitialSubmission,
     generationProgress,
   });
+
+  // PreviewGuard: keep users from ever seeing raw Vite overlays by polling server-side health and
+  // auto-healing (install missing deps + restart Vite) when configured.
+  useEffect(() => {
+    const sid = String(sandboxData?.sandboxId || '').trim();
+    const url = String(sandboxData?.url || '').trim();
+    const previewVisible = activeTab === 'preview' || activeTab === 'split' || isFullscreenPreview;
+
+    const shouldRun =
+      Boolean(sid) &&
+      Boolean(url) &&
+      previewVisible &&
+      !sandboxExpired &&
+      !isRestoringSandbox;
+
+    // Always stop polling when we shouldn't run.
+    if (!shouldRun) {
+      if (previewGuardPollRef.current) {
+        clearInterval(previewGuardPollRef.current);
+        previewGuardPollRef.current = null;
+      }
+      previewHealInFlightRef.current = false;
+      setPreviewGuardOverlay(prev => (prev.visible ? { ...prev, visible: false } : prev));
+      return;
+    }
+
+    let cancelled = false;
+
+    const runHeal = async (missingPkgs: string[]) => {
+      if (previewHealInFlightRef.current) return;
+
+      // Avoid healing while we are already installing/applying via the code application flow.
+      if (codeApplicationState.stage && codeApplicationState.stage !== 'complete') return;
+      if (isPreviewRefreshing) return;
+
+      previewHealInFlightRef.current = true;
+      setPreviewGuardOverlay({
+        visible: true,
+        phase: 'healing',
+        message: missingPkgs.length > 0 ? 'Installing missing packages…' : 'Restarting preview…',
+        packages: missingPkgs,
+      });
+
+      try {
+        const res = await fetch('/api/sandbox-heal', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sandboxId: sid, packages: missingPkgs }),
+        });
+
+        if (!res.ok || !res.body) {
+          throw new Error(`Failed to heal sandbox (HTTP ${res.status})`);
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          const parts = buffer.split('\n\n');
+          buffer = parts.pop() || '';
+
+          for (const part of parts) {
+            const line = part.trim();
+            if (!line.startsWith('data:')) continue;
+            const json = line.slice(5).trim();
+            if (!json) continue;
+            let evt: any = null;
+            try {
+              evt = JSON.parse(json);
+            } catch {
+              evt = null;
+            }
+
+            if (!evt) continue;
+            if (cancelled) return;
+
+            if (evt.type === 'step' || evt.type === 'info' || evt.type === 'start') {
+              setPreviewGuardOverlay(prev => ({
+                visible: true,
+                phase: 'healing',
+                message: String(evt.message || prev.message || 'Fixing preview…'),
+                packages: Array.isArray(evt.packages) ? evt.packages : prev.packages,
+              }));
+            }
+
+            if (evt.type === 'success') {
+              setPreviewGuardOverlay(prev => ({
+                visible: true,
+                phase: 'healing',
+                message: String(evt.message || 'Applied fix…'),
+                packages: prev.packages,
+              }));
+            }
+
+            if (evt.type === 'error') {
+              setPreviewGuardOverlay(prev => ({
+                visible: true,
+                phase: 'blocked',
+                message: String(evt.message || 'Preview heal failed'),
+                packages: prev.packages,
+              }));
+            }
+
+            if (evt.type === 'complete') {
+              const healthy = Boolean(evt.healthy);
+              setPreviewGuardOverlay(prev => ({
+                visible: !healthy, // hide immediately when healthy
+                phase: healthy ? prev.phase : 'blocked',
+                message: String(evt.message || (healthy ? 'Preview ready' : 'Preview still unhealthy')),
+                packages: prev.packages,
+              }));
+
+              // Force-reload the iframe when we recover to clear any stale error overlay.
+              if (healthy && iframeRef.current && sandboxData?.url) {
+                const now = Date.now();
+                if (now - lastPreviewReloadAtRef.current > 1500) {
+                  lastPreviewReloadAtRef.current = now;
+                  iframeRef.current.src = `${sandboxData.url}?t=${now}&healed=true`;
+                }
+              }
+            }
+          }
+        }
+      } catch (e: any) {
+        console.warn('[PreviewGuard] Heal failed:', e);
+        if (!cancelled) {
+          setPreviewGuardOverlay({
+            visible: true,
+            phase: 'blocked',
+            message: e?.message || 'Preview heal failed',
+            packages: missingPkgs,
+          });
+        }
+      } finally {
+        previewHealInFlightRef.current = false;
+      }
+    };
+
+    const poll = async () => {
+      if (cancelled) return;
+      if (!sid) return;
+
+      // Avoid fighting with in-flight apply/install flows.
+      if (codeApplicationState.stage && codeApplicationState.stage !== 'complete') return;
+      if (isPreviewRefreshing) return;
+
+      try {
+        // Optimistically show a short “Checking…” overlay; this prevents users from ever seeing Vite’s raw overlay.
+        setPreviewGuardOverlay(prev => {
+          if (prev.visible) return prev;
+          return { visible: true, phase: 'checking', message: 'Checking preview…', packages: [] };
+        });
+
+        const res = await fetch(`/api/sandbox-health?sandboxId=${encodeURIComponent(sid)}`, { cache: 'no-store' });
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !data?.success) return;
+
+        setPreviewHealthSnapshot(data?.snapshot || null);
+
+        const enabledHide = Boolean(data?.enabled?.hideViteOverlay);
+        const enabledHeal = Boolean(data?.enabled?.autoHeal);
+        const healthy = Boolean(data?.healthy);
+        const missingPkgs = Array.isArray(data?.snapshot?.missingPackages) ? data.snapshot.missingPackages : [];
+
+        // If we aren't configured to hide Vite overlays, don't keep our overlay up unless we're actively healing.
+        if (!enabledHide && !previewHealInFlightRef.current) {
+          setPreviewGuardOverlay(prev => (prev.visible ? { ...prev, visible: false } : prev));
+        } else {
+          // Hide overlay when healthy and not healing.
+          if (healthy && !previewHealInFlightRef.current) {
+            setPreviewGuardOverlay(prev => (prev.visible ? { ...prev, visible: false } : prev));
+          } else {
+            setPreviewGuardOverlay(prev => ({
+              visible: true,
+              phase: previewHealInFlightRef.current ? 'healing' : 'checking',
+              message:
+                missingPkgs.length > 0
+                  ? `Missing dependencies detected (${missingPkgs.length})…`
+                  : (prev.message || 'Fixing preview…'),
+              packages: missingPkgs.length > 0 ? missingPkgs : prev.packages,
+            }));
+          }
+        }
+
+        if (!healthy && enabledHeal) {
+          // Heal immediately for missing packages; otherwise still attempt a restart-based heal.
+          void runHeal(missingPkgs);
+        }
+      } catch (e) {
+        // Ignore transient failures; keep the overlay if configured to hide Vite overlays.
+      }
+    };
+
+    void poll();
+    if (previewGuardPollRef.current) clearInterval(previewGuardPollRef.current);
+    previewGuardPollRef.current = setInterval(poll, 2000);
+
+    return () => {
+      cancelled = true;
+      if (previewGuardPollRef.current) {
+        clearInterval(previewGuardPollRef.current);
+        previewGuardPollRef.current = null;
+      }
+    };
+  }, [
+    sandboxData?.sandboxId,
+    sandboxData?.url,
+    activeTab,
+    isFullscreenPreview,
+    sandboxExpired,
+    isRestoringSandbox,
+    isPreviewRefreshing,
+    codeApplicationState.stage,
+  ]);
 
   // Clear old conversation data on component mount and create/restore sandbox
   useEffect(() => {
@@ -4256,6 +4493,38 @@ Tip: I automatically detect and install npm packages from your code imports (lik
               </div>
             )}
 
+            {/* PreviewGuard overlay - prevents users from ever seeing raw Vite overlays */}
+            {previewGuardOverlay.visible &&
+              !sandboxExpired &&
+              !isPreviewRefreshing &&
+              !(codeApplicationState.stage && codeApplicationState.stage !== 'complete') && (
+                <div className="absolute inset-0 bg-white/95 backdrop-blur-sm flex items-center justify-center z-25">
+                  <div className="text-center max-w-md px-6">
+                    <div className="w-10 h-10 mx-auto mb-3 border-3 border-orange-500 border-t-transparent rounded-full animate-spin" />
+                    <p className="text-sm font-medium text-gray-800">
+                      {previewGuardOverlay.phase === 'blocked' ? 'Preview needs attention' : 'Preparing preview…'}
+                    </p>
+                    <p className="text-xs text-gray-600 mt-2">
+                      {previewGuardOverlay.message || 'Checking sandbox health…'}
+                    </p>
+                    {Array.isArray(previewGuardOverlay.packages) && previewGuardOverlay.packages.length > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-2 justify-center">
+                        {previewGuardOverlay.packages.slice(0, 10).map((p) => (
+                          <span key={p} className="px-2 py-1 text-[11px] rounded-full bg-gray-100 text-gray-700">
+                            {p}
+                          </span>
+                        ))}
+                        {previewGuardOverlay.packages.length > 10 && (
+                          <span className="px-2 py-1 text-[11px] rounded-full bg-gray-100 text-gray-700">
+                            +{previewGuardOverlay.packages.length - 10}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
             {/* Package installation overlay - shows when installing packages or applying code */}
             {codeApplicationState.stage && codeApplicationState.stage !== 'complete' && (
               <div className="absolute inset-0 bg-white/95 backdrop-blur-sm flex items-center justify-center z-10">
@@ -4537,6 +4806,22 @@ Tip: I automatically detect and install npm packages from your code imports (lik
                   sandbox="allow-scripts allow-same-origin allow-popups allow-forms allow-modals"
                   title="Split Preview"
                 />
+                {previewGuardOverlay.visible &&
+                  !sandboxExpired &&
+                  !isPreviewRefreshing &&
+                  !(codeApplicationState.stage && codeApplicationState.stage !== 'complete') && (
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-20">
+                      <div className="text-center max-w-md px-6">
+                        <div className="w-10 h-10 mx-auto mb-3 border-3 border-orange-400 border-t-transparent rounded-full animate-spin" />
+                        <p className="text-sm font-medium text-white">
+                          {previewGuardOverlay.phase === 'blocked' ? 'Preview needs attention' : 'Preparing preview…'}
+                        </p>
+                        <p className="text-xs text-white/70 mt-2">
+                          {previewGuardOverlay.message || 'Checking sandbox health…'}
+                        </p>
+                      </div>
+                    </div>
+                  )}
                 {isPreviewRefreshing && (
                   <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
                     <div className="flex items-center gap-2 text-white bg-zinc-800 px-4 py-2 rounded-lg">
@@ -7537,7 +7822,7 @@ Focus on the key sections and content, making it clean and modern.`;
             </div>
             <div className="w-full h-full flex items-center justify-center p-8">
               <div
-                className={`h-full transition-all duration-300 ${previewDevice !== 'desktop' ? 'rounded-xl overflow-hidden shadow-2xl' : 'w-full'}`}
+                className={`relative h-full transition-all duration-300 ${previewDevice !== 'desktop' ? 'rounded-xl overflow-hidden shadow-2xl' : 'w-full'}`}
                 style={previewDevice === 'desktop' ? {} : previewDevice === 'tablet' ? { width: '768px' } : { width: '375px' }}
               >
                 <iframe
@@ -7545,6 +7830,21 @@ Focus on the key sections and content, making it clean and modern.`;
                   className="w-full h-full border-none bg-white rounded-lg"
                   title="Fullscreen Preview"
                 />
+                {previewGuardOverlay.visible &&
+                  !sandboxExpired &&
+                  !(codeApplicationState.stage && codeApplicationState.stage !== 'complete') && (
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-20">
+                      <div className="text-center max-w-md px-6">
+                        <div className="w-10 h-10 mx-auto mb-3 border-3 border-orange-400 border-t-transparent rounded-full animate-spin" />
+                        <p className="text-sm font-medium text-white">
+                          {previewGuardOverlay.phase === 'blocked' ? 'Preview needs attention' : 'Preparing preview…'}
+                        </p>
+                        <p className="text-xs text-white/70 mt-2">
+                          {previewGuardOverlay.message || 'Checking sandbox health…'}
+                        </p>
+                      </div>
+                    </div>
+                  )}
               </div>
             </div>
           </div>
