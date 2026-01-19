@@ -368,7 +368,8 @@ export class E2BProvider extends SandboxProvider {
         dependencies: {
           react: "^18.2.0",
           "react-dom": "^18.2.0",
-          "react-router-dom": "^6.22.3"
+          "react-router-dom": "^6.22.3",
+          "@supabase/supabase-js": "^2.45.0"
         },
         devDependencies: {
           "@vitejs/plugin-react": "^4.0.0",

@@ -333,6 +333,7 @@ function AISandboxPage() {
   const previewGuardPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastPreviewReloadAtRef = useRef(0);
   const previewGuardInjectOnceRef = useRef<Record<string, boolean>>({});
+  const previewHealFnRef = useRef<null | ((missingPkgs: string[]) => Promise<void>)>(null);
   const previewClientAutoFixRef = useRef<{
     inFlight: boolean;
     lastAttemptAt: number;
@@ -365,6 +366,43 @@ function AISandboxPage() {
         // #region agent log
         fetch('http://127.0.0.1:7242/ingest/c77dad7d-5856-4f46-a321-cf824026609f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'run1',hypothesisId:'H8',location:'app/generation/page.tsx:window.message',message:'sandbox client message',data:{sandboxId:sid,origin,eventType:type,hasMessage:typeof payload?.message==='string',message:String(payload?.message||'').slice(0,200)},timestamp:Date.now()})}).catch(()=>{});
         // #endregion
+
+        if (type === 'PAYNTO_SANDBOX_VITE_OVERLAY') {
+          const msg = String(payload?.message || '').trim();
+          const missingImport = String(payload?.missingImport || '').trim();
+
+          const normalizeToPkg = (raw: string): string => {
+            const s = String(raw || '').trim();
+            if (!s) return '';
+            if (s.startsWith('.') || s.startsWith('/')) return '';
+            if (s.startsWith('@')) {
+              const parts = s.split('/');
+              if (parts.length >= 2) return `${parts[0]}/${parts[1]}`;
+              return s;
+            }
+            return s.split('/')[0] || '';
+          };
+
+          const pkg = normalizeToPkg(missingImport);
+
+          if (pkg) {
+            setPreviewGuardOverlay(prev => ({
+              visible: true,
+              phase: 'healing',
+              message: `Installing missing dependency: ${pkg}`,
+              packages: [pkg],
+            }));
+            void previewHealFnRef.current?.([pkg]);
+          } else if (msg) {
+            setPreviewGuardOverlay(prev => ({
+              visible: true,
+              phase: 'blocked',
+              message: `Preview error: ${msg}`,
+              packages: prev.packages,
+            }));
+          }
+          return;
+        }
 
         if (type === 'PAYNTO_SANDBOX_CLIENT_ERROR' || type === 'PAYNTO_SANDBOX_CLIENT_REJECTION') {
           const msg = String(payload?.message || 'Sandbox app crashed').trim();
@@ -408,6 +446,9 @@ function AISandboxPage() {
             const file =
               rawPath ? (rawPath.startsWith('/') ? rawPath.slice(1) : rawPath) : undefined;
 
+            const exportMismatch = msg.match(/does not provide an export named ['"]([^'"]+)['"]/i);
+            const missingExportName = exportMismatch?.[1] ? String(exportMismatch[1]).trim() : '';
+
             // #region agent log
             fetch('http://127.0.0.1:7242/ingest/c77dad7d-5856-4f46-a321-cf824026609f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'run1',hypothesisId:'H12',location:'app/generation/page.tsx:client-auto-fix:start',message:'triggering client error auto-fix',data:{sandboxId:sid,signature:signature.slice(0,80),attempt:attempts+1,errorType,file:typeof file==='string'?file.slice(0,160):''},timestamp:Date.now()})}).catch(()=>{});
             // #endregion
@@ -420,6 +461,61 @@ function AISandboxPage() {
             }));
 
             try {
+                // Missing dependency fast-path: install instead of asking the LLM to rewrite code.
+                const missingImportMatch =
+                  msg.match(/Failed to resolve import\s+['"]([^'"]+)['"]/i) ||
+                  msg.match(/Cannot find module\s+['"]([^'"]+)['"]/i) ||
+                  msg.match(/Cannot find package\s+['"]([^'"]+)['"]/i);
+                const rawMissingImport = missingImportMatch?.[1] ? String(missingImportMatch[1]).trim() : '';
+                const normalizeToPkg = (raw: string): string => {
+                  const s = String(raw || '').trim();
+                  if (!s) return '';
+                  if (s.startsWith('.') || s.startsWith('/')) return '';
+                  if (s.startsWith('@')) {
+                    const parts = s.split('/');
+                    if (parts.length >= 2) return `${parts[0]}/${parts[1]}`;
+                    return s;
+                  }
+                  return s.split('/')[0] || '';
+                };
+                const pkg = normalizeToPkg(rawMissingImport);
+                if (pkg) {
+                  setPreviewGuardOverlay(prev => ({
+                    visible: true,
+                    phase: 'healing',
+                    message: `Installing missing dependency: ${pkg}`,
+                    packages: [pkg],
+                  }));
+                  void previewHealFnRef.current?.([pkg]);
+                  return;
+                }
+
+              // Deterministic fast-path for export mismatch (avoids LLM non-determinism).
+              if (missingExportName && file) {
+                const detRes = await fetch('/api/sandbox-fix-exports', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ sandboxId: sid, modulePath: file, missingExportName }),
+                });
+                const detJson = await detRes.json().catch(() => null);
+                if (detRes.ok && detJson?.success && detJson?.applied) {
+                  setPreviewGuardOverlay(prev => ({
+                    visible: true,
+                    phase: 'checking',
+                    message: 'Applied export fix. Refreshing preview…',
+                    packages: prev.packages,
+                  }));
+                  if (iframeRef.current && sandboxData?.url) {
+                    const t = Date.now();
+                    if (t - lastPreviewReloadAtRef.current > 1500) {
+                      lastPreviewReloadAtRef.current = t;
+                      iframeRef.current.src = `${sandboxData.url}?t=${t}&exportfix=true`;
+                    }
+                  }
+                  return;
+                }
+              }
+
               const fixRes = await fetch('/api/auto-fix-error', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -706,6 +802,9 @@ function AISandboxPage() {
         previewHealInFlightRef.current = false;
       }
     };
+
+    // Allow other listeners (e.g. sandbox Vite overlay detector) to trigger the same heal flow.
+    previewHealFnRef.current = runHeal;
 
     const poll = async () => {
       if (cancelled) return;

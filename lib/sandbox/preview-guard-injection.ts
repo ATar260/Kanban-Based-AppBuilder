@@ -76,6 +76,75 @@ function buildInjectionScript(): string {
       show(msg);
     });
 
+    // Vite's HMR overlay is a shadow-dom element and doesn't always trigger window.onerror.
+    // Detect it via MutationObserver so we can auto-heal missing deps reliably.
+    let __payntoLastViteOverlay = '';
+    const __payntoReadViteOverlay = () => {
+      try {
+        const el = document.querySelector('vite-error-overlay');
+        if (!el) return null;
+        const sr = el.shadowRoot;
+        if (!sr) return null;
+        const body = sr.querySelector('.message-body');
+        const fileEl = sr.querySelector('.file');
+        const frame = sr.querySelector('.frame');
+        const msg = body && body.textContent ? String(body.textContent).trim() : '';
+        const file = fileEl && fileEl.textContent ? String(fileEl.textContent).trim() : '';
+        const stack = frame && frame.textContent ? String(frame.textContent).trim() : '';
+        const full = [msg, file].filter(Boolean).join('\\n').trim();
+        return { el, message: full || msg, file, stack };
+      } catch {
+        return null;
+      }
+    };
+
+    const __payntoExtractMissingImport = (text) => {
+      try {
+        const t = String(text || '');
+        let m = t.match(/Failed to resolve import\\s+['"]([^'"]+)['"]/i);
+        if (m && m[1]) return String(m[1]).trim();
+        m = t.match(/Cannot find module\\s+['"]([^'"]+)['"]/i);
+        if (m && m[1]) return String(m[1]).trim();
+        m = t.match(/Cannot find package\\s+['"]([^'"]+)['"]/i);
+        if (m && m[1]) return String(m[1]).trim();
+      } catch {}
+      return '';
+    };
+
+    const __payntoReportViteOverlay = () => {
+      try {
+        const parsed = __payntoReadViteOverlay();
+        if (!parsed || !parsed.message) return;
+        const full = String(parsed.message || '').slice(0, 2400);
+        if (!full) return;
+        if (full === __payntoLastViteOverlay) return;
+        __payntoLastViteOverlay = full;
+
+        const missingImport = __payntoExtractMissingImport(full);
+        post('PAYNTO_SANDBOX_VITE_OVERLAY', {
+          message: full,
+          file: parsed.file ? String(parsed.file).slice(0, 400) : '',
+          stack: parsed.stack ? String(parsed.stack).slice(0, 1200) : '',
+          missingImport: missingImport ? String(missingImport).slice(0, 200) : ''
+        });
+
+        // Hide Vite's overlay so users only see the clean Paynto overlay.
+        try {
+          parsed.el.style.display = 'none';
+          parsed.el.style.visibility = 'hidden';
+          parsed.el.style.pointerEvents = 'none';
+        } catch {}
+
+        show(full);
+      } catch {}
+    };
+
+    try { __payntoReportViteOverlay(); } catch {}
+    try {
+      const mo = new MutationObserver(() => { __payntoReportViteOverlay(); });
+      mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+    } catch {}
+
     // Useful for detecting "blank but no error": tells the parent when #root gets content.
     const observeRoot = () => {
       try {

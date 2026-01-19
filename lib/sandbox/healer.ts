@@ -279,7 +279,9 @@ export async function getSandboxHealthSnapshot(provider: SandboxProvider): Promi
   for (const e of notableErrors) issues.push({ kind: 'vite_error', detail: e });
 
   // For preview UX: only block rendering when we know it's broken.
-  const healthyForPreview = missingPackages.length === 0 && viteRunning !== false;
+  const htmlOk = previewHtmlProbe ? previewHtmlProbe.ok !== false : true;
+  const hasEntry = previewHtmlProbe ? previewHtmlProbe.hasMainModule !== false : true;
+  const healthyForPreview = missingPackages.length === 0 && viteRunning !== false && htmlOk && hasEntry;
 
   return {
     sandboxId,
