@@ -187,7 +187,6 @@ async function getAffectedFileContent(error: ErrorDetails, sandboxId?: string): 
   }
   
   const fileCache = global.sandboxState?.fileCache?.files;
-  const cacheAvailable = Boolean(fileCache);
   
   const possiblePaths = [
     normalizedPath,
@@ -196,7 +195,7 @@ async function getAffectedFileContent(error: ErrorDetails, sandboxId?: string): 
     normalizedPath.replace('.jsx', '.tsx').replace('.js', '.ts')
   ];
   
-  if (cacheAvailable) {
+  if (fileCache) {
     for (const path of possiblePaths) {
       if (fileCache[path]) {
         // #region agent log
@@ -211,7 +210,7 @@ async function getAffectedFileContent(error: ErrorDetails, sandboxId?: string): 
   }
   
   const fileName = normalizedPath.split('/').pop()?.toLowerCase();
-  if (cacheAvailable && fileName) {
+  if (fileCache && fileName) {
     for (const [path, data] of Object.entries(fileCache)) {
       if (path.toLowerCase().endsWith(fileName)) {
         // #region agent log
