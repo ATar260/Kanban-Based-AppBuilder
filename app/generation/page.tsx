@@ -332,6 +332,52 @@ function AISandboxPage() {
   const previewHealInFlightRef = useRef(false);
   const previewGuardPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastPreviewReloadAtRef = useRef(0);
+  const previewGuardInjectOnceRef = useRef<Record<string, boolean>>({});
+
+  // Listen for sandbox client-side errors (blank white page often = runtime crash with overlays disabled).
+  useEffect(() => {
+    const sid = String(sandboxData?.sandboxId || '').trim();
+    const url = String(sandboxData?.url || '').trim();
+    if (!sid || !url) return;
+
+    let origin = '';
+    try {
+      origin = new URL(url).origin;
+    } catch {
+      origin = '';
+    }
+
+    const onMessage = (event: MessageEvent) => {
+      try {
+        if (!origin || event.origin !== origin) return;
+        const data: any = (event as any).data;
+        if (!data || typeof data !== 'object') return;
+        if (!data.__paynto) return;
+
+        const type = String(data.type || '').trim();
+        const payload = data.data || {};
+
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/c77dad7d-5856-4f46-a321-cf824026609f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'run1',hypothesisId:'H8',location:'app/generation/page.tsx:window.message',message:'sandbox client message',data:{sandboxId:sid,origin,eventType:type,hasMessage:typeof payload?.message==='string',message:String(payload?.message||'').slice(0,200)},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion
+
+        if (type === 'PAYNTO_SANDBOX_CLIENT_ERROR' || type === 'PAYNTO_SANDBOX_CLIENT_REJECTION') {
+          const msg = String(payload?.message || 'Sandbox app crashed').trim();
+          setPreviewGuardOverlay(prev => ({
+            visible: true,
+            phase: 'blocked',
+            message: msg ? `Preview crashed: ${msg}` : 'Preview crashed (client error)',
+            packages: prev.packages,
+          }));
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [sandboxData?.sandboxId, sandboxData?.url]);
 
   const [codeApplicationState, setCodeApplicationState] = useState<CodeApplicationState>({
     stage: null
@@ -398,6 +444,16 @@ function AISandboxPage() {
       previewHealInFlightRef.current = false;
       setPreviewGuardOverlay(prev => (prev.visible ? { ...prev, visible: false } : prev));
       return;
+    }
+
+    // Ensure the sandbox index.html has a tiny error reporter so "blank white page" becomes diagnosable.
+    if (!previewGuardInjectOnceRef.current[sid]) {
+      previewGuardInjectOnceRef.current[sid] = true;
+      fetch('/api/sandbox-inject-preview-guard', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sandboxId: sid }),
+      }).catch(() => {});
     }
 
     let cancelled = false;
