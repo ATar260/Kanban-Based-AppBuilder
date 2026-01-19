@@ -23,6 +23,8 @@ export interface SandboxHealthSnapshot {
     hasRootDiv?: boolean;
     hasViteClient?: boolean;
     hasMainModule?: boolean;
+    moduleScriptSrcs?: string[];
+    entryScriptSrcs?: string[];
     error?: string;
   };
 }
@@ -206,15 +208,30 @@ async function probeViteHtml(provider: SandboxProvider): Promise<SandboxHealthSn
     const hasHtmlTag = head.includes('<html') || head.includes('<!DOCTYPE html');
     const hasRootDiv = head.includes('id="root"') || head.includes("id='root'");
     const hasViteClient = head.includes('/@vite/client');
+    const moduleScriptSrcs: string[] = [];
+    try {
+      const re = /<script\b[^>]*\btype=(?:"|')module(?:"|')[^>]*\bsrc=(?:"|')([^"']+)(?:"|')[^>]*>/gi;
+      let m: RegExpExecArray | null = null;
+      while ((m = re.exec(head)) !== null) {
+        const src = String(m[1] || '').trim();
+        if (src) moduleScriptSrcs.push(src);
+        if (moduleScriptSrcs.length >= 8) break;
+      }
+    } catch {
+      // ignore
+    }
+
+    const entryScriptSrcs = moduleScriptSrcs.filter(
+      s => !s.includes('/@vite/client') && !s.includes('/@vite/env') && !s.includes('@vite/client')
+    );
+
     const hasMainModule =
-      head.includes('src="/src/main.jsx"') ||
-      head.includes("src='/src/main.jsx'") ||
-      head.includes('src="/src/main.tsx"') ||
-      head.includes("src='/src/main.tsx'") ||
-      head.includes('src="/src/main.js"') ||
-      head.includes("src='/src/main.js'") ||
-      head.includes('src="/src/main.ts"') ||
-      head.includes("src='/src/main.ts'");
+      entryScriptSrcs.some(s => /(\/|^)src\/main\.(jsx|tsx|js|ts)(\?|#|$)/.test(s)) ||
+      entryScriptSrcs.some(s => /(\.|\/)main\.(jsx|tsx|js|ts)(\?|#|$)/.test(s)) ||
+      head.includes('src="src/main.jsx"') ||
+      head.includes("src='src/main.jsx'") ||
+      head.includes('src="./src/main.jsx"') ||
+      head.includes("src='./src/main.jsx'");
 
     const ok =
       Boolean(status && status >= 200 && status < 400) &&
@@ -229,6 +246,8 @@ async function probeViteHtml(provider: SandboxProvider): Promise<SandboxHealthSn
       hasRootDiv,
       hasViteClient,
       hasMainModule,
+      moduleScriptSrcs,
+      entryScriptSrcs,
       error,
     };
   } catch (e: any) {
