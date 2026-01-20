@@ -48,7 +48,7 @@ export default function IdleStateHero({
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <motion.div
           className="absolute top-20 left-[10%] w-72 h-72 rounded-full opacity-30"
-          style={{ background: "radial-gradient(circle, #fa5d19 0%, transparent 70%)" }}
+          style={{ background: "radial-gradient(circle, #10b981 0%, transparent 70%)" }}
           animate={{
             scale: [1, 1.2, 1],
             opacity: [0.2, 0.3, 0.2],
@@ -61,7 +61,7 @@ export default function IdleStateHero({
         />
         <motion.div
           className="absolute bottom-40 right-[15%] w-96 h-96 rounded-full opacity-20"
-          style={{ background: "radial-gradient(circle, #ff7a3d 0%, transparent 70%)" }}
+          style={{ background: "radial-gradient(circle, #059669 0%, transparent 70%)" }}
           animate={{
             scale: [1.2, 1, 1.2],
             opacity: [0.15, 0.25, 0.15],
@@ -85,12 +85,12 @@ export default function IdleStateHero({
         >
           <div className="relative">
             <motion.div
-              className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#fa5d19] to-[#ff7a3d] flex items-center justify-center shadow-lg shadow-[#fa5d19]/30"
+              className="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center shadow-lg shadow-emerald-500/30"
               animate={{
                 boxShadow: [
-                  "0 10px 30px -10px rgba(250, 93, 25, 0.3)",
-                  "0 15px 40px -10px rgba(250, 93, 25, 0.5)",
-                  "0 10px 30px -10px rgba(250, 93, 25, 0.3)",
+                  "0 10px 30px -10px rgb(16 185 129 / 0.3)",
+                  "0 15px 40px -10px rgb(16 185 129 / 0.5)",
+                  "0 10px 30px -10px rgb(16 185 129 / 0.3)",
                 ],
               }}
               transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
@@ -223,7 +223,7 @@ function CloneUrlInput({ value, onChange, onSubmit, disabled }: CloneUrlInputPro
         className={cn(
           "relative flex items-center rounded-2xl border-2 bg-white transition-all duration-200",
           isFocused
-            ? "border-[#fa5d19] shadow-[0_0_0_4px_rgba(250,93,25,0.1)]"
+            ? "border-emerald-500 shadow-[0_0_0_4px_rgb(16_185_129_/_0.1)]"
             : "border-gray-200 hover:border-gray-300",
           disabled && "opacity-60 cursor-not-allowed"
         )}
@@ -257,7 +257,7 @@ function CloneUrlInput({ value, onChange, onSubmit, disabled }: CloneUrlInputPro
             className={cn(
               "flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-sm transition-all",
               hasValue && !disabled
-                ? "bg-gradient-to-r from-[#fa5d19] to-[#ff7a3d] text-white shadow-lg shadow-[#fa5d19]/25 hover:shadow-xl hover:shadow-[#fa5d19]/30"
+                ? "bg-gradient-to-r from-emerald-500 to-emerald-600 text-white shadow-lg shadow-emerald-500/25 hover:shadow-xl hover:shadow-emerald-500/30"
                 : "bg-gray-100 text-gray-400 cursor-not-allowed"
             )}
           >

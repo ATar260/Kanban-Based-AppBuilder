@@ -71,7 +71,7 @@ export default function EnhancedPromptInput({
         className={cn(
           "relative rounded-2xl border-2 bg-white transition-all duration-200",
           isFocused
-            ? "border-[#fa5d19] shadow-[0_0_0_4px_rgba(250,93,25,0.1)]"
+            ? "border-emerald-500 shadow-[0_0_0_4px_rgb(16_185_129_/_0.1)]"
             : "border-gray-200 hover:border-gray-300",
           disabled && "opacity-60 cursor-not-allowed"
         )}
@@ -105,7 +105,7 @@ export default function EnhancedPromptInput({
             className={cn(
               "flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-sm transition-all",
               hasValue && !disabled
-                ? "bg-gradient-to-r from-[#fa5d19] to-[#ff7a3d] text-white shadow-lg shadow-[#fa5d19]/25 hover:shadow-xl hover:shadow-[#fa5d19]/30"
+                ? "bg-gradient-to-r from-emerald-500 to-emerald-600 text-white shadow-lg shadow-emerald-500/25 hover:shadow-xl hover:shadow-emerald-500/30"
                 : "bg-gray-100 text-gray-400 cursor-not-allowed"
             )}
           >
@@ -137,8 +137,8 @@ export default function EnhancedPromptInput({
               whileTap={{ scale: 0.95 }}
               className={cn(
                 "px-3 py-1.5 text-xs font-medium rounded-full",
-                "bg-gray-100 text-gray-600 hover:bg-[#fa5d19]/10 hover:text-[#fa5d19]",
-                "border border-transparent hover:border-[#fa5d19]/20",
+                "bg-gray-100 text-gray-600 hover:bg-emerald-500/10 hover:text-emerald-500",
+                "border border-transparent hover:border-emerald-500/20",
                 "transition-all duration-200",
                 disabled && "opacity-50 cursor-not-allowed hover:bg-gray-100 hover:text-gray-600"
               )}

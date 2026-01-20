@@ -62,7 +62,7 @@ export default function AnalyzingStateView({
         <motion.div
           className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] rounded-full"
           style={{
-            background: "radial-gradient(circle, rgba(250,93,25,0.15) 0%, transparent 70%)",
+            background: "radial-gradient(circle, rgba(16,185,129,0.15) 0%, transparent 70%)",
           }}
           animate={{
             scale: [1, 1.3, 1],
@@ -90,12 +90,12 @@ export default function AnalyzingStateView({
           }}
         >
           <motion.div
-            className="w-20 h-20 rounded-2xl bg-gradient-to-br from-[#fa5d19] to-[#ff7a3d] flex items-center justify-center"
+            className="w-20 h-20 rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center"
             animate={{
               boxShadow: [
-                "0 0 30px 10px rgba(250, 93, 25, 0.2)",
-                "0 0 50px 20px rgba(250, 93, 25, 0.4)",
-                "0 0 30px 10px rgba(250, 93, 25, 0.2)",
+                "0 0 30px 10px rgb(16 185 129 / 0.2)",
+                "0 0 50px 20px rgb(16 185 129 / 0.4)",
+                "0 0 30px 10px rgb(16 185 129 / 0.2)",
               ],
             }}
             transition={{
@@ -116,7 +116,7 @@ export default function AnalyzingStateView({
           {[...Array(6)].map((_, i) => (
             <motion.div
               key={i}
-              className="absolute w-2 h-2 rounded-full bg-[#fa5d19]"
+              className="absolute w-2 h-2 rounded-full bg-emerald-500"
               style={{
                 left: "50%",
                 top: "50%",
@@ -175,7 +175,7 @@ export default function AnalyzingStateView({
                   className={cn(
                     "flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all",
                     isActive
-                      ? "bg-[#fa5d19]/10 text-[#fa5d19] border border-[#fa5d19]/20"
+                      ? "bg-emerald-500/10 text-emerald-500 border border-emerald-500/20"
                       : isPast
                         ? "bg-green-50 text-green-600 border border-green-200"
                         : "bg-gray-100 text-gray-400 border border-transparent"

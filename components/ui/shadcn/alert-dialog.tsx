@@ -129,7 +129,7 @@ const AlertDialogAction = React.forwardRef<
     ref={ref}
     className={cn(
       // Primary button styling aligned with design system
-      "inline-flex items-center justify-center rounded-8 px-12 py-8 text-label-medium bg-heat-100 text-accent-white transition-colors hover:opacity-95 disabled:opacity-50 disabled:cursor-not-allowed",
+      "inline-flex items-center justify-center rounded-8 px-12 py-8 text-label-medium bg-emerald-600 text-accent-white transition-colors hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed",
       className,
     )}
     {...props}
