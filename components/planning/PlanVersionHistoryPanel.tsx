@@ -113,7 +113,7 @@ export function PlanVersionHistoryPanel({
           {onCreateSnapshot && (
             <button
               onClick={onCreateSnapshot}
-              className="text-xs px-2 py-1 rounded bg-orange-600 hover:bg-orange-500 text-white transition-colors"
+              className="text-xs px-2 py-1 rounded bg-comfort-sage-600 hover:bg-comfort-sage-500 text-white transition-colors"
               title="Create snapshot"
             >
               Snapshot
@@ -130,7 +130,7 @@ export function PlanVersionHistoryPanel({
 
       {isLoading ? (
         <div className="flex-1 flex items-center justify-center p-8 text-gray-400">
-          <div className="w-5 h-5 border-2 border-orange-500 border-t-transparent rounded-full animate-spin mr-2" />
+          <div className="w-5 h-5 border-2 border-comfort-sage-500 border-t-transparent rounded-full animate-spin mr-2" />
           Loading…
         </div>
       ) : versions.length === 0 ? (
@@ -156,7 +156,7 @@ export function PlanVersionHistoryPanel({
                   key={v.id}
                   onClick={() => setSelectedId(v.id)}
                   className={`w-full text-left px-4 py-3 border-b border-gray-800 hover:bg-gray-800/50 transition-colors ${
-                    isSelected ? 'bg-blue-500/10 border-l-2 border-l-blue-500' : ''
+                    isSelected ? 'bg-comfort-sage-500/10 border-l-2 border-l-comfort-sage-500' : ''
                   }`}
                 >
                   <div className="flex items-start gap-3">
@@ -198,7 +198,7 @@ export function PlanVersionHistoryPanel({
                 className={`text-xs px-3 py-1.5 rounded transition-colors ${
                   !selected || restoreDisabled
                     ? 'bg-gray-800 text-gray-500 cursor-not-allowed'
-                    : 'bg-blue-600 hover:bg-blue-500 text-white'
+                    : 'bg-comfort-sage-600 hover:bg-comfort-sage-500 text-white'
                 }`}
                 title={restoreDisabled ? 'Disabled while build is running' : 'Restore this snapshot'}
               >

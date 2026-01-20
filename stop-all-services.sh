@@ -4,7 +4,7 @@
 
 set -e
 
-PORT=3002
+PORTS=(3000 3002)
 
 echo ""
 echo "========================================"
@@ -12,7 +12,7 @@ echo "  Paynto AI - Stopping Services"
 echo "========================================"
 echo ""
 
-echo "[*] Looking for processes on port ${PORT}..."
+echo "[*] Looking for dev server processes..."
 
 if ! command -v lsof >/dev/null 2>&1; then
   echo "[!] 'lsof' not found; can't reliably stop by port."
@@ -20,11 +20,14 @@ if ! command -v lsof >/dev/null 2>&1; then
   exit 1
 fi
 
-pids="$(lsof -nP -iTCP:${PORT} -sTCP:LISTEN -t 2>/dev/null | sort -u || true)"
-
 stopped=0
 
-if [ -n "${pids}" ]; then
+for PORT in ${PORTS[@]}; do
+  pids="$(lsof -nP -iTCP:${PORT} -sTCP:LISTEN -t 2>/dev/null | sort -u || true)"
+  if [ -z "${pids}" ]; then
+    continue
+  fi
+
   for pid in ${(f)pids}; do
     if [ -z "${pid}" ]; then
       continue
@@ -39,7 +42,7 @@ if [ -n "${pids}" ]; then
 
     stopped=$((stopped + 1))
   done
-fi
+done
 
 echo ""
 if [ "${stopped}" -gt 0 ]; then

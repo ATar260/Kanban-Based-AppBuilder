@@ -74,7 +74,7 @@ export function VersionHistoryPanel({
                     return (
                         <div
                             key={version.id}
-                            className={`relative px-4 py-3 border-b border-gray-800 hover:bg-gray-800/50 transition-colors ${isCurrent ? 'bg-blue-500/10 border-l-2 border-l-blue-500' : ''
+                            className={`relative px-4 py-3 border-b border-gray-800 hover:bg-gray-800/50 transition-colors ${isCurrent ? 'bg-comfort-sage-500/10 border-l-2 border-l-comfort-sage-500' : ''
                                 }`}
                         >
                             {/* Timeline connector */}
@@ -98,7 +98,7 @@ export function VersionHistoryPanel({
                                             {version.name}
                                         </span>
                                         {isCurrent && (
-                                            <span className="text-xs px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded">
+                                            <span className="text-xs px-1.5 py-0.5 bg-comfort-sage-500/20 text-comfort-sage-300 rounded">
                                                 Current
                                             </span>
                                         )}
@@ -120,7 +120,7 @@ export function VersionHistoryPanel({
                                                 href={getCommitUrl(repoFullName, version.gitCommitSha)}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
-                                                className="text-xs text-blue-400 hover:underline"
+                                                className="text-xs text-comfort-sage-300 hover:underline"
                                             >
                                                 {version.gitCommitSha.substring(0, 7)}
                                             </a>

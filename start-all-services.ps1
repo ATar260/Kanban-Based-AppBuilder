@@ -14,7 +14,31 @@ Set-Location $PSScriptRoot
 
 $port = 3002
 $devUrl = "http://localhost:$port"
-$devCmd = "npx next dev --turbopack --port $port"
+# Turbopack can hit file descriptor limits on larger repos; use Webpack by default.
+$devCmd = "npx next dev --webpack --port $port"
+
+# Reduce watcher FD usage (helps on macOS).
+$env:WATCHPACK_POLLING = "true"
+
+# Warn if macOS file table is close to full.
+if ($IsMacOS) {
+    try {
+        $numFiles = [int](& sysctl -n kern.num_files 2>$null)
+        $maxFiles = [int](& sysctl -n kern.maxfiles 2>$null)
+        Write-Host "[*] macOS open files: $numFiles/$maxFiles" -ForegroundColor Yellow
+        if ($numFiles -gt ($maxFiles - 500)) {
+            Write-Host "[!] System file table is nearly full. Next.js may fail with ENFILE." -ForegroundColor Red
+            Write-Host "    Close other watch processes, or increase limits temporarily:" -ForegroundColor Yellow
+            Write-Host "      sudo launchctl limit maxfiles 65536 200000" -ForegroundColor DarkGray
+            Write-Host "      sudo sysctl -w kern.maxfiles=200000" -ForegroundColor DarkGray
+            Write-Host "      sudo sysctl -w kern.maxfilesperproc=65536" -ForegroundColor DarkGray
+            Write-Host ""
+            exit 1
+        }
+    } catch {
+        # Ignore sysctl failures
+    }
+}
 
 # Check if node_modules exists
 if (-not (Test-Path "node_modules")) {
@@ -48,7 +72,7 @@ if ($IsWindows) {
     Start-Process $psExe -ArgumentList "-NoExit", "-Command", @"
 `$Host.UI.RawUI.WindowTitle = 'Paynto AI - Dev Server'
 Set-Location '$scriptPath'
-Write-Host 'Starting Next.js dev server with Turbopack on port $port...' -ForegroundColor Green
+Write-Host 'Starting Next.js dev server with Webpack on port $port...' -ForegroundColor Green
 Write-Host 'Press Ctrl+C to stop the server' -ForegroundColor DarkGray
 Write-Host ''
 $devCmd
@@ -70,7 +94,7 @@ elseif ($IsMacOS) {
     $scriptPath = $PSScriptRoot
     $scriptPathForShell = $scriptPath.Replace("'", "'\''")
 
-    $terminalCmd = "cd '$scriptPathForShell' && echo 'Starting Next.js dev server with Turbopack on port $port...' && echo 'Press Ctrl+C to stop the server' && $devCmd"
+    $terminalCmd = "cd '$scriptPathForShell' && echo 'Starting Next.js dev server with Webpack on port $port...' && echo 'Press Ctrl+C to stop the server' && WATCHPACK_POLLING=true $devCmd"
     $terminalCmdForAppleScript = $terminalCmd.Replace('\', '\\').Replace('"', '\"')
 
     $appleScript = @"
@@ -96,7 +120,7 @@ end tell
         Write-Host "[!] osascript not found. Starting dev server in this terminal instead..." -ForegroundColor Yellow
         Write-Host "    $devCmd" -ForegroundColor DarkGray
         Write-Host ""
-        & npx next dev --turbopack --port $port
+        & npx next dev --webpack --port $port
     }
 }
 else {
@@ -104,5 +128,5 @@ else {
     Write-Host "[*] Starting Next.js dev server in this terminal (no GUI terminal automation configured)..." -ForegroundColor Green
     Write-Host "Press Ctrl+C to stop the server" -ForegroundColor DarkGray
     Write-Host ""
-    & npx next dev --turbopack --port $port
+    & npx next dev --webpack --port $port
 }

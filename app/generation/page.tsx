@@ -28,13 +28,12 @@ import { KanbanBoard, useKanbanBoard, BuildPlan, TicketStatus } from '@/componen
 import type { KanbanTicket as KanbanTicketType } from '@/components/kanban/types';
 import { Switch } from '@/components/ui/shadcn/switch';
 import { useVersioning } from '@/hooks/useVersioning';
-import { GitHubConnectButton, VersionHistoryPanel, SaveStatusIndicator, GitSyncToggle } from '@/components/versioning';
+import { GitHubConnectButton, VersionHistoryPanel, SaveStatusIndicator } from '@/components/versioning';
 import { saveGitHubConnection } from '@/lib/versioning/github';
 import { DeployPanel } from '@/components/deploy';
 import { useBuildTracker } from '@/hooks/useBuildTracker';
 import { useGitSync } from '@/hooks/useGitSync';
 import { UserMenu, LoginButton } from '@/components/auth';
-import { UsagePill } from '@/components/usage/UsagePill';
 import UIOptionsSelector, { UIOption } from '@/components/ui-options/UIOptionsSelector';
 import { useBugbot, ReviewResult } from '@/hooks/useBugbot';
 import { CodeReviewPanel, RegressionWarningModal } from '@/components/kanban';
@@ -46,6 +45,11 @@ import { PlanVersionHistoryPanel } from '@/components/planning';
 import { useGenerationState } from '@/hooks/useGenerationState';
 import IdleStateHero from '@/components/app/generation/IdleStateHero';
 import AnalyzingStateView from '@/components/app/generation/AnalyzingStateView';
+import { ModelSelector } from '@/components/app/generation/ModelSelector';
+import { SandboxSelector } from '@/components/app/generation/SandboxSelector';
+import { BuildButton } from '@/components/app/generation/BuildButton';
+import { ToolbarButton } from '@/components/app/generation/ToolbarButton';
+import { ProjectSwitcherDropdown } from '@/components/app/generation/ProjectSwitcherDropdown';
 
 interface SandboxData {
   sandboxId: string;
@@ -7185,23 +7189,19 @@ Focus on the key sections and content, making it clean and modern.`;
           <div className="flex items-center gap-3">
             <HeaderBrandKit />
             <div className="h-5 w-px bg-gray-200" />
-            <button
-              onClick={handleStartNewProject}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-700 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-lg transition-colors"
-              title="Start a new project from scratch"
-            >
-              <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              New Project
-            </button>
+            <ProjectSwitcherDropdown
+              projectName={conversationContext.currentProject}
+              projectId={projectId}
+              onResetProject={handleStartNewProject}
+              onOpenProjects={() => router.push('/dashboard')}
+              projectUrlToCopy={typeof window !== 'undefined' ? window.location.href : undefined}
+            />
           </div>
           <div className="flex items-center gap-2">
-            {/* Sandbox Provider Selector */}
-            <select
+            {/* Sandbox Provider Selector - Enhanced */}
+            <SandboxSelector
               value={sandboxProviderPreference}
-              onChange={(e) => {
-                const nextPref = String(e.target.value || '').trim().toLowerCase();
+              onChange={(nextPref) => {
                 if (nextPref !== 'auto' && nextPref !== 'e2b' && nextPref !== 'modal' && nextPref !== 'vercel') return;
                 setSandboxProviderPreference(nextPref as SandboxProviderPreference);
 
@@ -7213,20 +7213,15 @@ Focus on the key sections and content, making it clean and modern.`;
                 }
                 router.push(`/generation?${params.toString()}`);
               }}
-              className="px-3 py-1.5 text-sm text-gray-900 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:border-gray-300 transition-colors"
-              title="Sandbox provider (Auto uses server default)"
-            >
-              {SANDBOX_PROVIDER_CHOICES.map((p) => (
-                <option key={p.value} value={p.value}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
-            {/* Model Selector - Left side */}
-            <select
+              sandboxData={sandboxData ? {
+                healthStatusCode: (sandboxData as any)?.healthStatusCode,
+                healthError: (sandboxData as any)?.healthError,
+              } : null}
+            />
+            {/* Model Selector - Enhanced */}
+            <ModelSelector
               value={aiModel}
-              onChange={(e) => {
-                const newModel = e.target.value;
+              onChange={(newModel) => {
                 setAiModel(newModel);
                 const params = new URLSearchParams(searchParams);
                 params.set('model', newModel);
@@ -7235,76 +7230,58 @@ Focus on the key sections and content, making it clean and modern.`;
                 }
                 router.push(`/generation?${params.toString()}`);
               }}
-              className="px-3 py-1.5 text-sm text-gray-900 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:border-gray-300 transition-colors"
-            >
-              {appConfig.ai.availableModels.map(model => (
-                <option key={model} value={model}>
-                  {appConfig.ai.modelDisplayNames?.[model] || model}
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={() => createSandbox()}
-              className="p-2 rounded-lg transition-colors bg-gray-50 border border-gray-200 text-gray-700 hover:bg-gray-100"
-              title="Create new sandbox"
-            >
-              <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-            </button>
-            <button
-              onClick={reapplyLastGeneration}
-              className="p-2 rounded-lg transition-colors bg-gray-50 border border-gray-200 text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Re-apply last generation"
-              disabled={!conversationContext.lastGeneratedCode || !sandboxData}
-            >
-              <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-            </button>
-            <button
+            />
+            <ToolbarButton
+              label="Download"
               onClick={downloadZip}
               disabled={!sandboxData}
-              className="p-2 rounded-lg transition-colors bg-gray-50 border border-gray-200 text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
               title="Download your Vite app as ZIP"
-            >
-              <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
-              </svg>
-            </button>
-            <button
-              onClick={() => setShowDeployModal(true)}
-              className="p-2 rounded-lg transition-colors bg-gray-50 border border-gray-200 text-gray-700 hover:bg-gray-100"
-              title="Deploy (Vercel/Netlify)"
-            >
-              <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
-              </svg>
-            </button>
-            <button
-              onClick={() => setShowVersionHistory(!showVersionHistory)}
-              className={`p-2 rounded-lg transition-colors border ${showVersionHistory ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100'}`}
-              title="Version History"
-            >
-              <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            </button>
-            <div className="border-l border-gray-200 h-6 mx-1" />
-            <GitHubConnectButton className="text-sm" />
-            <GitSyncToggle
-              isEnabled={gitSync.isEnabled}
-              isSyncing={gitSync.isSyncing}
-              lastCommitSha={gitSync.lastCommitSha}
-              lastCommitUrl={gitSync.lastCommitUrl}
-              error={gitSync.error}
-              onEnable={gitSync.enableSync}
-              onDisable={gitSync.disableSync}
-              className="mr-2"
+              icon={
+                <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10"
+                  />
+                </svg>
+              }
             />
+            <ToolbarButton
+              label="Deploy"
+              onClick={() => setShowDeployModal(true)}
+              title="Deploy (Vercel/Netlify)"
+              icon={
+                <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M5 10l7-7m0 0l7 7m-7-7v18"
+                  />
+                </svg>
+              }
+            />
+            <ToolbarButton
+              label="Versions"
+              onClick={() => setShowVersionHistory(!showVersionHistory)}
+              active={showVersionHistory}
+              title="Version History"
+              icon={
+                <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                  />
+                </svg>
+              }
+            />
+            <div className="border-l border-gray-200 h-6 mx-1" />
+            <GitHubConnectButton mode="toolbar" />
             <LoginButton className="text-sm" />
             <UserMenu />
-            <UsagePill className="mr-1" />
             {versioning.saveStatus.local !== 'idle' && (
               <SaveStatusIndicator status={versioning.saveStatus} />
             )}
@@ -7328,55 +7305,24 @@ Focus on the key sections and content, making it clean and modern.`;
                       </span>
                     </div>
                     <div className="flex items-center gap-2">
+                      {/* Build Button - Enhanced stateful control */}
                       {!isPlanning && kanban.tickets.length > 0 && (
-                        <div
-                          className={`flex items-center gap-2 px-2 py-1 rounded border ${demoSpeedMode ? 'bg-comfort-sage-50 border-comfort-sage-200' : 'bg-white border-gray-200'
-                            }`}
-                          title="Demo speed mode: skips PR review + integration gate (testing/healing) for faster builds"
-                        >
-                          <span className="text-[10px] font-medium text-gray-700">Demo speed</span>
-                          <Switch
-                            size="sm"
-                            checked={demoSpeedMode}
-                            onCheckedChange={(v) => setDemoSpeedMode(Boolean(v))}
-                            disabled={kanbanBuildActive}
-                          />
-                        </div>
-                      )}
-                      {!isPlanning && kanban.tickets.length > 0 && lastImportedRepo && sandboxData && (
-                        <button
-                          onClick={handleLoadImportedRepoIntoSandbox}
-                          disabled={isLoadingRepoIntoSandbox || kanbanBuildActive}
-                          className={`px-2 py-1 text-[10px] font-medium rounded transition-colors ${isLoadingRepoIntoSandbox || kanbanBuildActive
-                              ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                              : 'bg-blue-600 text-white hover:bg-blue-700'
-                            }`}
-                          title="Replace sandbox files with the imported repo and restart dev server"
-                        >
-                          {isLoadingRepoIntoSandbox ? 'Loading…' : 'Load to sandbox'}
-                        </button>
-                      )}
-
-                      {!isPlanning && kanban.tickets.length > 0 && !kanbanBuildActive && (
-                        <button
-                          onClick={() => handleStartKanbanBuild()}
-                          className="px-2 py-1 text-[10px] font-medium rounded bg-comfort-sage-500 text-white hover:bg-comfort-sage-600 transition-colors"
-                        >
-                          Start Build
-                        </button>
+                        <BuildButton
+                          ticketCount={kanban.tickets.length}
+                          completedCount={kanban.tickets.filter(t => t.status === 'done').length}
+                          isBuilding={kanbanBuildActive}
+                          isPaused={false}
+                          onStart={() => handleStartKanbanBuild()}
+                          onPause={() => {
+                            setKanbanBuildActive(false);
+                          }}
+                          onStop={() => {
+                            setKanbanBuildActive(false);
+                          }}
+                        />
                       )}
                     </div>
                   </div>
-                  {kanban.tickets.length > 0 && (
-                    <div className="mt-2">
-                      <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-gradient-to-r from-comfort-sage-400 to-comfort-sage-600 transition-all duration-500"
-                          style={{ width: `${kanban.tickets.length > 0 ? (kanban.tickets.filter(t => t.status === 'done').length / kanban.tickets.length) * 100 : 0}%` }}
-                        />
-                      </div>
-                    </div>
-                  )}
                 </div>
                 <div className="p-2 space-y-1.5">
                   {kanban.tickets.map((ticket, idx) => (
@@ -7997,55 +7943,13 @@ Focus on the key sections and content, making it clean and modern.`;
                   </div>
                 )}
 
-                {/* Preview auto-open setting */}
-                <label
-                  className="hidden md:inline-flex items-center gap-2 px-2 py-1 rounded-md border border-gray-200 bg-white text-xs text-gray-600"
-                  title="When enabled, applying code will automatically switch to the View tab. When disabled, you'll see a small dot on View instead."
-                >
-                  <input
-                    type="checkbox"
-                    checked={autoOpenPreviewOnApply}
-                    onChange={(e) => setAutoOpenPreviewOnApply(e.target.checked)}
-                    className="h-3 w-3 accent-orange-500"
-                  />
-                  <span className="select-none">Auto-open View</span>
-                </label>
-
-                {/* Parallel worker pool size */}
-                <div
-                  className="hidden md:inline-flex items-center gap-2 px-2 py-1 rounded-md border border-gray-200 bg-white text-xs text-gray-600"
-                  title="Hard-coded worker pool size."
-                >
-                  <span className="select-none">Workers</span>
-                  <span className="font-mono text-gray-800">{maxConcurrency}</span>
-                </div>
-
                 {/* Live Code Generation Status */}
                 {activeTab === 'generation' && generationProgress.isGenerating && (
-                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-gray-100 border border-gray-200 rounded-md text-xs font-medium text-gray-700">
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-gray-100 border border-gray-200 rounded-xl text-xs font-medium text-gray-700">
                     <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
                     {generationProgress.isEdit ? 'Editing code' : 'Live generation'}
                   </div>
                 )}
-
-                {/* Sandbox Status Indicator */}
-                {sandboxData && (() => {
-                  const code = (sandboxData as any)?.healthStatusCode as number | null | undefined;
-                  const err = (sandboxData as any)?.healthError as string | undefined;
-                  const isOk = typeof code === 'number' ? code >= 200 && code < 300 : true;
-                  const label = typeof code === 'number' ? (isOk ? 'Sandbox healthy' : `Sandbox HTTP ${code}`) : 'Sandbox active';
-                  const dot = isOk ? 'bg-green-500' : 'bg-red-500';
-                  const title = err ? `${label}\n${err}` : label;
-                  return (
-                    <div
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-gray-100 border border-gray-200 rounded-md text-xs font-medium text-gray-700"
-                      title={title}
-                    >
-                      <div className={`w-1.5 h-1.5 ${dot} rounded-full`} />
-                      {label}
-                    </div>
-                  );
-                })()}
 
                 {/* Copy URL button */}
                 {sandboxData && (
@@ -8110,7 +8014,7 @@ Focus on the key sections and content, making it clean and modern.`;
                 <button
                   onClick={() => setVersionHistoryTab('plan')}
                   className={`flex-1 text-xs px-2 py-1.5 rounded transition-colors ${versionHistoryTab === 'plan'
-                      ? 'bg-orange-600 text-white'
+                      ? 'bg-comfort-sage-600 text-white'
                       : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
                     }`}
                 >
@@ -8119,7 +8023,7 @@ Focus on the key sections and content, making it clean and modern.`;
                 <button
                   onClick={() => setVersionHistoryTab('code')}
                   className={`flex-1 text-xs px-2 py-1.5 rounded transition-colors ${versionHistoryTab === 'code'
-                      ? 'bg-blue-600 text-white'
+                      ? 'bg-comfort-sage-600 text-white'
                       : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
                     }`}
                 >

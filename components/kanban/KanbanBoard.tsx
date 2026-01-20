@@ -128,77 +128,7 @@ export default function KanbanBoard({
 
   return (
     <div className="flex flex-col h-full bg-gray-50">
-      {/* Top Header - Responsive */}
-      <header className="min-h-[48px] border-b border-gray-200 bg-white flex flex-wrap items-center justify-between px-3 py-2 gap-2 shrink-0">
-        <div className="flex items-center gap-2 sm:gap-3">
-          <h2 className="text-xs sm:text-sm font-semibold text-gray-800">Build</h2>
-          {tickets.length > 0 && (
-            <div className="flex items-center gap-1.5 sm:gap-2">
-              <div className="w-16 sm:w-32 h-1.5 sm:h-2 bg-gray-200 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-gradient-to-r from-comfort-sage-500 to-comfort-sage-600 transition-all duration-500"
-                  style={{ width: `${totalProgress}%` }}
-                />
-              </div>
-              <span className="text-[10px] sm:text-xs text-gray-500 font-medium">{totalProgress}%</span>
-            </div>
-          )}
-
-          {blueprintResult && (
-            <div className="hidden md:flex items-center gap-2 px-2 py-1 rounded-md border border-gray-200 bg-gray-50">
-              <span className="text-[11px] text-gray-700 font-medium">
-                Routes {routesWithNav}/{routesTotal}
-              </span>
-              <span className="text-[11px] text-gray-500">Flows {flowsTotal}</span>
-              {templateTarget ? (
-                <span className="text-[11px] text-gray-500">Template {String(templateTarget)}</span>
-              ) : null}
-              {!blueprintResult.ok ? (
-                <span className="text-[11px] text-red-600 font-medium">Blueprint issues</span>
-              ) : (
-                <span className="text-[11px] text-comfort-sage-700 font-medium">Blueprint OK</span>
-              )}
-            </div>
-          )}
-        </div>
-
-        <div className="flex items-center gap-1.5 sm:gap-2">
-          {isPlanning && (
-            <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-comfort-sage-100 text-comfort-sage-700">
-              <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 border-2 border-comfort-sage-600 border-t-transparent rounded-full animate-spin" />
-              <span className="text-[10px] sm:text-xs font-medium hidden sm:inline">Planning...</span>
-            </div>
-          )}
-
-          {isBuilding && !isPaused && (
-            <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-comfort-sage-100 text-comfort-sage-700">
-              <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 border-2 border-comfort-sage-600 border-t-transparent rounded-full animate-spin" />
-              <span className="text-[10px] sm:text-xs font-medium hidden sm:inline">Building...</span>
-            </div>
-          )}
-
-          <div className="flex items-center gap-1 px-1.5 sm:px-2 py-1 rounded-md bg-gray-100 text-gray-600">
-            <span className="text-[10px] sm:text-xs font-medium">{tickets.length}</span>
-            <span className="text-[10px] sm:text-xs font-medium hidden sm:inline">Tasks</span>
-          </div>
-
-          {analytics.completed > 0 && (
-            <div className="hidden sm:flex items-center gap-1.5 px-2 py-1 rounded-md bg-comfort-sage-100 text-comfort-sage-700">
-              <span className="text-xs font-medium">{analytics.completed} Done</span>
-            </div>
-          )}
-
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="p-1 sm:p-1.5 rounded-md text-gray-500 hover:text-gray-700 hover:bg-gray-100 transition-all"
-            title="Add task"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="sm:w-4 sm:h-4">
-              <path d="M12 5v14M5 12h14" />
-            </svg>
-          </button>
-        </div>
-      </header>
+      {/* Header removed - stats are redundant with Kanban tab badge showing done/total */}
 
       {/* Mobile Column Selector */}
       <div className="sm:hidden px-3 py-2 border-b border-gray-200 bg-white shrink-0 overflow-x-auto">

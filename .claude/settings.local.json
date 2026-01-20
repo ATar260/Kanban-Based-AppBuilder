@@ -4,7 +4,9 @@
       "Bash(cat:*)",
       "Bash(npm install:*)",
       "Bash(npm run build:*)",
-      "Bash(timeout:*)"
+      "Bash(timeout:*)",
+      "Bash(git add:*)",
+      "Bash(git stash:*)"
     ]
   }
 }
