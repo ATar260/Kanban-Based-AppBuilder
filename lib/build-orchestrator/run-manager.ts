@@ -57,6 +57,29 @@ function looksLikeE2BTemplateApp(appSource: string): boolean {
   return s.includes('e2b sandbox ready') || s.includes('start building your react app with vite');
 }
 
+function clampInt(n: unknown, min: number, max: number): number | null {
+  const v = typeof n === 'number' && Number.isFinite(n) ? Math.floor(n) : Number.NaN;
+  if (!Number.isFinite(v)) return null;
+  return Math.max(min, Math.min(v, max));
+}
+
+function getTimeoutMs(envValue: unknown, fallbackMs: number, bounds: { min: number; max: number }): number {
+  const parsed = clampInt(Number(envValue), bounds.min, bounds.max);
+  if (typeof parsed === 'number') return parsed;
+  return Math.max(bounds.min, Math.min(fallbackMs, bounds.max));
+}
+
+async function readResponseTextSafe(res: Response, maxChars: number = 4000): Promise<string> {
+  try {
+    const text = await res.text();
+    const t = String(text || '');
+    if (t.length <= maxChars) return t;
+    return t.slice(0, maxChars) + '\n... (truncated)';
+  } catch {
+    return '';
+  }
+}
+
 function fingerprintFailure(text: string): string {
   const t = String(text || '')
     .replace(/\r\n/g, '\n')
@@ -304,6 +327,27 @@ export class BuildRunManager {
     if (!run) return;
     run.updatedAt = now();
     run.events.push(event);
+
+    // Production diagnostics: also log a compact, safe summary to server logs.
+    // Avoid logging large blobs (e.g., generatedCode contents) to keep logs readable and low-risk.
+    try {
+      const base: any = {
+        type: (event as any)?.type,
+        runId,
+        at: (event as any)?.at,
+      };
+      if ((event as any)?.ticketId) base.ticketId = (event as any).ticketId;
+      if ((event as any)?.status) base.status = (event as any).status;
+      if ((event as any)?.level) base.level = (event as any).level;
+      if ((event as any)?.message) base.message = String((event as any).message).slice(0, 500);
+      if ((event as any)?.error) base.error = String((event as any).error).slice(0, 500);
+      if ((event as any)?.generatedCode) base.generatedCodeChars = String((event as any).generatedCode).length;
+      if (Array.isArray((event as any)?.appliedFiles)) base.appliedFilesCount = (event as any).appliedFiles.length;
+      console.log('[build-run]', JSON.stringify(base));
+    } catch {
+      // ignore
+    }
+
     const subs = this.subscribers.get(runId);
     if (subs) {
       for (const cb of subs) {
@@ -585,6 +629,19 @@ export class BuildRunManager {
 
         // If any tickets are now impossible due to failed deps, mark them as blocked so the run can finish cleanly.
         this.propagateBlockedTickets(runId);
+
+        // If the merge loop crashed (or never started) but work is queued, restart it.
+        // Without this, tickets can remain in merge_queued indefinitely in production.
+        if (internal.mergeQueue.length > 0 && !this.mergePromises.has(runId)) {
+          this.emit(runId, {
+            type: 'log',
+            runId,
+            at: now(),
+            level: 'warning',
+            message: `Merge queue has ${internal.mergeQueue.length} item(s) but merge loop is not running. Restarting merge loop...`,
+          });
+          this.startMergeLoopIfNeeded(runId);
+        }
 
         // Detect snapshot progress (merge acceptance) to control adaptive buffering.
         if (internal.snapshotVersion !== lastSnapshotVersion) {
@@ -1599,33 +1656,67 @@ export class BuildRunManager {
     sandboxId: string,
     buildProfile: string = 'implement_ticket'
   ): Promise<string> {
-    const res = await fetch(`${baseUrl}/api/generate-ai-code-stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        prompt,
-        model,
-        context: { sandboxId },
-        isEdit: true,
-        buildProfile,
-      }),
+    const timeoutMs = getTimeoutMs(process.env.BUILD_TICKET_GENERATION_TIMEOUT_MS, 180_000, {
+      min: 15_000,
+      max: 10 * 60_000,
     });
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    let res: Response;
+    try {
+      res = await fetch(`${baseUrl}/api/generate-ai-code-stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt,
+          model,
+          context: { sandboxId },
+          isEdit: true,
+          buildProfile,
+        }),
+        signal: controller.signal,
+      });
+    } catch (e: any) {
+      clearTimeout(timeoutId);
+      const msg = String(e?.name || '') === 'AbortError'
+        ? `AI generation timed out after ${(timeoutMs / 1000).toFixed(0)}s`
+        : (e?.message || 'AI generation request failed');
+      throw new Error(msg);
+    }
+
     if (!res.ok) {
-      throw new Error(`AI generation failed (HTTP ${res.status})`);
+      clearTimeout(timeoutId);
+      const bodyText = await readResponseTextSafe(res, 4000);
+      const details = bodyText ? `\n${bodyText}` : '';
+      throw new Error(`AI generation failed (HTTP ${res.status})${details}`);
     }
 
     let generatedCode = '';
-    await readSseJson<any>(res, (data) => {
-      if (data?.type === 'stream' && data.raw) {
-        generatedCode += data.text || '';
-      }
-      if (data?.type === 'complete') {
-        if (typeof data.generatedCode === 'string' && data.generatedCode.trim()) {
-          generatedCode = data.generatedCode;
+    try {
+      await readSseJson<any>(res, (data) => {
+        if (data?.type === 'stream' && data.raw) {
+          generatedCode += data.text || '';
         }
-      }
-    });
+        if (data?.type === 'complete') {
+          if (typeof data.generatedCode === 'string' && data.generatedCode.trim()) {
+            generatedCode = data.generatedCode;
+          }
+        }
+        if (data?.type === 'error') {
+          const msg = data?.message || data?.error || 'AI generation stream error';
+          throw new Error(String(msg));
+        }
+      });
+    } catch (e: any) {
+      const msg = String(e?.name || '') === 'AbortError'
+        ? `AI generation timed out after ${(timeoutMs / 1000).toFixed(0)}s`
+        : (e?.message || 'AI generation failed');
+      throw new Error(msg);
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     return generatedCode;
   }
@@ -1637,27 +1728,57 @@ export class BuildRunManager {
     isEdit: boolean
   ): Promise<{ appliedFiles: string[]; durationMs?: number }> {
     const startedAt = now();
-    const res = await fetch(`${baseUrl}/api/apply-ai-code-stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        response: code,
-        isEdit,
-        sandboxId,
-      }),
+    const timeoutMs = getTimeoutMs(process.env.BUILD_TICKET_APPLY_TIMEOUT_MS, 120_000, {
+      min: 15_000,
+      max: 10 * 60_000,
     });
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    let res: Response;
+    try {
+      res = await fetch(`${baseUrl}/api/apply-ai-code-stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          response: code,
+          isEdit,
+          sandboxId,
+        }),
+        signal: controller.signal,
+      });
+    } catch (e: any) {
+      clearTimeout(timeoutId);
+      const msg = String(e?.name || '') === 'AbortError'
+        ? `Apply timed out after ${(timeoutMs / 1000).toFixed(0)}s`
+        : (e?.message || 'Apply request failed');
+      throw new Error(msg);
+    }
+
     if (!res.ok) {
-      throw new Error(`Apply failed (HTTP ${res.status})`);
+      clearTimeout(timeoutId);
+      const bodyText = await readResponseTextSafe(res, 4000);
+      const details = bodyText ? `\n${bodyText}` : '';
+      throw new Error(`Apply failed (HTTP ${res.status})${details}`);
     }
 
     let final: any = null;
-    await readSseJson<any>(res, (data) => {
-      if (data?.type === 'complete') final = data;
-      if (data?.type === 'error') {
-        throw new Error(data?.message || data?.error || 'Apply failed');
-      }
-    });
+    try {
+      await readSseJson<any>(res, (data) => {
+        if (data?.type === 'complete') final = data;
+        if (data?.type === 'error') {
+          throw new Error(data?.message || data?.error || 'Apply failed');
+        }
+      });
+    } catch (e: any) {
+      const msg = String(e?.name || '') === 'AbortError'
+        ? `Apply timed out after ${(timeoutMs / 1000).toFixed(0)}s`
+        : (e?.message || 'Apply failed');
+      throw new Error(msg);
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     const results = final?.results || {};
     const appliedFiles = Array.from(
@@ -1923,9 +2044,14 @@ export class BuildRunManager {
   private startMergeLoopIfNeeded(runId: string) {
     if (this.mergePromises.has(runId)) return;
 
-    const promise = this.runMergeLoop(runId).finally(() => {
-      this.mergePromises.delete(runId);
-    });
+    const promise = this.runMergeLoop(runId)
+      .catch((e: any) => {
+        const msg = String(e?.message || 'Merge loop crashed').slice(0, 800);
+        this.emit(runId, { type: 'log', runId, at: now(), level: 'error', message: `Merge loop crashed: ${msg}` });
+      })
+      .finally(() => {
+        this.mergePromises.delete(runId);
+      });
 
     this.mergePromises.set(runId, promise);
   }
@@ -2338,6 +2464,14 @@ export class BuildRunManager {
         while (true) {
           gateAttempt += 1;
           try {
+            this.emit(runId, {
+              type: 'log',
+              runId,
+              at: now(),
+              level: 'info',
+              message: `Integration gate running (attempt ${gateAttempt})...`,
+              ticketId: next.ticketId,
+            });
             await this.runIntegrationGate(baseUrl, state.mainSandboxId);
             break;
           } catch (e: any) {
@@ -2508,7 +2642,25 @@ export class BuildRunManager {
       throw new Error(`No sandbox provider available for integration gate: ${sandboxId}`);
     }
 
-    const buildRes = await provider.runCommand('npm run build');
+    const buildTimeoutMs = getTimeoutMs(process.env.BUILD_INTEGRATION_BUILD_TIMEOUT_MS, 180_000, {
+      min: 15_000,
+      max: 20 * 60_000,
+    });
+
+    let buildRes: any;
+    try {
+      buildRes = await Promise.race([
+        provider.runCommand('npm run build'),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`Build timed out after ${(buildTimeoutMs / 1000).toFixed(0)}s`)),
+            buildTimeoutMs
+          )
+        ),
+      ]);
+    } catch (e: any) {
+      throw new Error(e?.message || 'Build failed');
+    }
     if (!buildRes.success) {
       const out = `${buildRes.stdout || ''}\n${buildRes.stderr || ''}`.trim();
       throw new Error(`Build failed: ${out.slice(0, 4000)}`);
@@ -2516,18 +2668,30 @@ export class BuildRunManager {
 
     // Console check (non-fatal if the API route isn't available in this environment).
     try {
-      const res = await fetch(`${baseUrl}/api/run-tests`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ testType: 'console', sandboxId }),
+      const consoleTimeoutMs = getTimeoutMs(process.env.BUILD_INTEGRATION_CONSOLE_TIMEOUT_MS, 20_000, {
+        min: 3_000,
+        max: 120_000,
       });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), consoleTimeoutMs);
 
-      if (!res.ok) return;
+      try {
+        const res = await fetch(`${baseUrl}/api/run-tests`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ testType: 'console', sandboxId }),
+          signal: controller.signal,
+        });
 
-      const json = await res.json().catch(() => null);
-      const consoleResult = json?.tests?.console;
-      if (consoleResult && consoleResult.success === false) {
-        throw new Error(`Console check failed (${consoleResult.errorCount || 0} issue(s))`);
+        if (!res.ok) return;
+
+        const json = await res.json().catch(() => null);
+        const consoleResult = json?.tests?.console;
+        if (consoleResult && consoleResult.success === false) {
+          throw new Error(`Console check failed (${consoleResult.errorCount || 0} issue(s))`);
+        }
+      } finally {
+        clearTimeout(timeoutId);
       }
     } catch {
       // ignore
