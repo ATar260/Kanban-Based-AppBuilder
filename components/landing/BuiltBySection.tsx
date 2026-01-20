@@ -1,14 +1,14 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import Image from 'next/image'
+
 
 export default function BuiltBySection() {
   const organizations = [
-    { name: 'University of Manchester', logo: '/logos/manchester.svg' },
+    { name: 'University of Manchester', logo: '/logos/university-of-manchester.png' },
     { name: 'UCL', logo: '/logos/ucl.svg' },
-    { name: "King's College London", logo: '/logos/kings.svg' },
-    { name: 'Entrepreneur First', logo: '/logos/ef.svg' },
+    { name: "King's College London", logo: '/logos/kings-college-london.png' },
+    { name: 'Entrepreneur First', logo: '/logos/Entrepreneurs_First_Logo.png' },
     { name: 'Microsoft', logo: '/logos/microsoft.png' },
   ]
 
@@ -49,15 +49,13 @@ export default function BuiltBySection() {
               {[...organizations, ...organizations, ...organizations, ...organizations].map((org, i) => (
                 <motion.div
                   key={`${org.name}-${i}`}
-                  className="flex items-center justify-center flex-shrink-0 px-8 py-5 bg-white rounded-2xl border border-comfort-sage-200/80 hover:border-comfort-sage-400 hover:shadow-lg transition-all shadow-sm"
+                  className="flex items-center justify-center flex-shrink-0 p-4 bg-white rounded-xl border border-comfort-sage-200/80 hover:border-comfort-sage-400 hover:shadow-lg transition-all shadow-sm h-32 w-[300px]"
                   whileHover={{ scale: 1.05, y: -3 }}
                 >
-                  <Image
+                  <img
                     src={org.logo}
                     alt={`${org.name} logo`}
-                    width={280}
-                    height={80}
-                    className="h-20 w-auto object-contain"
+                    className="w-full h-full object-contain"
                   />
                 </motion.div>
               ))}
