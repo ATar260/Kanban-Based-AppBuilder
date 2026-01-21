@@ -7842,8 +7842,18 @@ Focus on the key sections and content, making it clean and modern.`;
                   </button>
                   <button
                     onClick={() => {
+                      const shouldReload = Boolean(previewHasUpdate);
                       setActiveTab('preview');
                       setPreviewHasUpdate(false);
+                      if (shouldReload && iframeRef.current && sandboxData?.url) {
+                        try {
+                          setIsPreviewRefreshing(true);
+                          iframeRef.current.src = `${sandboxData.url}?t=${Date.now()}&view=1`;
+                          setTimeout(() => setIsPreviewRefreshing(false), 1200);
+                        } catch {
+                          // ignore
+                        }
+                      }
                     }}
                     className={`px-3 py-1 rounded transition-all text-xs font-medium ${activeTab === 'preview'
                       ? 'bg-white text-gray-900 shadow-sm'
@@ -7884,8 +7894,18 @@ Focus on the key sections and content, making it clean and modern.`;
                   </button>
                   <button
                     onClick={() => {
+                      const shouldReload = Boolean(previewHasUpdate);
                       setActiveTab('split');
                       setPreviewHasUpdate(false);
+                      if (shouldReload && iframeRef.current && sandboxData?.url) {
+                        try {
+                          setIsPreviewRefreshing(true);
+                          iframeRef.current.src = `${sandboxData.url}?t=${Date.now()}&split=1`;
+                          setTimeout(() => setIsPreviewRefreshing(false), 1200);
+                        } catch {
+                          // ignore
+                        }
+                      }
                     }}
                     className={`px-3 py-1 rounded transition-all text-xs font-medium ${activeTab === 'split'
                       ? 'bg-white text-gray-900 shadow-sm'
