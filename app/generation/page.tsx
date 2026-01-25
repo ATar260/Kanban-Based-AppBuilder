@@ -2716,6 +2716,26 @@ Requirements:
       } else {
         addChatMessage(message, 'system');
       }
+
+      // If the server scaffolded the integration sandbox for early preview, force-refresh the iframe.
+      // This prevents the Preview from staying stuck on the default E2B template screen.
+      try {
+        const lower = message.toLowerCase();
+        const isEarlyPreviewScaffolded =
+          lower.includes('scaffolded') && (lower.includes('early preview') || lower.includes('early-preview'));
+
+        if (isEarlyPreviewScaffolded) {
+          if ((activeTab === 'preview' || activeTab === 'split') && iframeRef.current && sandboxData?.url) {
+            setIsPreviewRefreshing(true);
+            iframeRef.current.src = `${sandboxData.url}?t=${Date.now()}&scaffolded=server`;
+            setTimeout(() => setIsPreviewRefreshing(false), 1200);
+          } else {
+            setPreviewHasUpdate(true);
+          }
+        }
+      } catch {
+        // ignore
+      }
       return;
     }
   };
